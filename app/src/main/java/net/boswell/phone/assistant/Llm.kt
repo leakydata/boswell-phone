@@ -77,6 +77,22 @@ class Llm(private val apiKey: String, private val model: String, private val bas
         }
     }
 
+    /** What OpenRouter has recorded for this key (all apps using it), or null if it can't be reached. */
+    data class KeyInfo(val daily: Double, val weekly: Double, val monthly: Double, val total: Double, val limit: Double?, val remaining: Double?)
+
+    fun keyInfo(): KeyInfo? = runCatching {
+        val conn = (URI("https://openrouter.ai/api/v1/key").toURL().openConnection() as HttpURLConnection).apply {
+            connectTimeout = 10_000; readTimeout = 15_000
+            setRequestProperty("Authorization", "Bearer $apiKey")
+        }
+        try {
+            if (conn.responseCode != 200) return null
+            val d = json.parseToJsonElement(conn.inputStream.bufferedReader().readText()).jsonObject["data"]!!.jsonObject
+            fun num(k: String) = d[k]?.let { (it as? JsonPrimitive)?.doubleOrNull }
+            KeyInfo(num("usage_daily") ?: 0.0, num("usage_weekly") ?: 0.0, num("usage_monthly") ?: 0.0, num("usage") ?: 0.0, num("limit"), num("limit_remaining"))
+        } finally { conn.disconnect() }
+    }.getOrNull()
+
     companion object {
         const val OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
         const val DEFAULT_MODEL = "z-ai/glm-5.3-flash"

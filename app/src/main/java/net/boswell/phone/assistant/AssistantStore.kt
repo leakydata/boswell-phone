@@ -50,6 +50,28 @@ class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db
         return readableDatabase.rawQuery(sql, args).use { c -> c.moveToFirst(); c.getDouble(0) }
     }
 
+    data class Usage(val calls: Int, val cost: Double, val tokens: Long, val errors: Int)
+
+    fun usage(from: Double, to: Double = Double.MAX_VALUE): Usage = readableDatabase.rawQuery(
+        "SELECT COUNT(*), COALESCE(SUM(cost),0), COALESCE(SUM(prompt_tokens + completion_tokens),0), SUM(error IS NOT NULL) FROM calls WHERE at >= ? AND at < ?",
+        arrayOf(from.toString(), to.toString())).use { c -> c.moveToFirst(); Usage(c.getInt(0), c.getDouble(1), c.getLong(2), c.getInt(3)) }
+
+    /** Cost and call count per purpose since [from], most expensive first. */
+    fun byPurpose(from: Double): List<Triple<String, Int, Double>> = readableDatabase.rawQuery(
+        "SELECT purpose, COUNT(*), COALESCE(SUM(cost),0) FROM calls WHERE at >= ? GROUP BY purpose ORDER BY SUM(cost) DESC",
+        arrayOf(from.toString())).use { c -> buildList { while (c.moveToNext()) add(Triple(c.getString(0), c.getInt(1), c.getDouble(2))) } }
+
+    /** Cost per local day for the last [days] days, oldest first, zeros included. */
+    fun perDay(days: Int): List<Pair<LocalDate, Double>> {
+        val zone = ZoneId.systemDefault()
+        val today = LocalDate.now()
+        return (days - 1 downTo 0).map { back ->
+            val d = today.minusDays(back.toLong())
+            val from = d.atStartOfDay(zone).toEpochSecond().toDouble()
+            d to usage(from, d.plusDays(1).atStartOfDay(zone).toEpochSecond().toDouble()).cost
+        }
+    }
+
     fun addExchange(source: String, question: String?, answer: String, cost: Double, error: Boolean = false): Long =
         writableDatabase.insert("exchanges", null, ContentValues().apply {
             put("at", now()); put("source", source); put("question", question); put("answer", answer); put("cost", cost); put("error", if (error) 1 else 0)

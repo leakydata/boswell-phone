@@ -77,7 +77,7 @@ class AskViewModel(app: Application) : AndroidViewModel(app) {
 }
 
 @Composable
-fun AskScreen(pad: PaddingValues, onSetup: () -> Unit) {
+fun AskScreen(pad: PaddingValues, onSetup: () -> Unit, onUsage: () -> Unit = {}) {
     val vm: AskViewModel = viewModel()
     val s by vm.state.collectAsStateWithLifecycle()
     val cap by CaptureRepository.state.collectAsStateWithLifecycle()
@@ -103,6 +103,7 @@ fun AskScreen(pad: PaddingValues, onSetup: () -> Unit) {
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     if (!s.ready) androidx.compose.material3.TextButton(onClick = onSetup) { Text("Set up the assistant") }
+                    else androidx.compose.material3.TextButton(onClick = onUsage) { Text("AI usage") }
                 }
             }
         }

@@ -87,7 +87,7 @@ private fun Section(title: String, content: @Composable () -> Unit) {
 
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: PaddingValues, onTriggers: () -> Unit, onPair: () -> Unit) {
+fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: PaddingValues, onTriggers: () -> Unit, onUsage: () -> Unit, onPair: () -> Unit) {
     val ctx = LocalContext.current
     val progress by ModelProgressRepository.state.collectAsStateWithLifecycle()
     var confirmClean by remember { mutableStateOf(false) }
@@ -225,6 +225,14 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                             net.boswell.phone.assistant.AssistantPrefs.DoubleTap.BOOKMARK -> "Bookmark the moment"
                             net.boswell.phone.assistant.AssistantPrefs.DoubleTap.SUMMARIZE -> "Summarize last 10 min"
                         }) })
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable(onClick = onUsage)) {
+                    Column(Modifier.weight(1f)) {
+                        Text("AI usage", style = MaterialTheme.typography.bodyLarge)
+                        Text("What the assistant has cost, by day and by use", style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Text("View", color = MaterialTheme.colorScheme.primary)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable(onClick = onTriggers)) {
                     Column(Modifier.weight(1f)) {

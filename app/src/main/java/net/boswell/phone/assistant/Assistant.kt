@@ -83,10 +83,10 @@ class Assistant(private val context: Context) {
                 val reply = try {
                     llm.chat(messages, tools(forCapture = fileOnly))
                 } catch (e: Exception) {
-                    store.logCall("ask", model, null, e.message)
+                    store.logCall(source, model, null, e.message)
                     throw e
                 }
-                store.logCall("ask", model, reply)
+                store.logCall(source, model, reply)
                 cost += reply.cost
                 if (reply.toolCalls.isEmpty()) {
                     val text = reply.text?.trim().orEmpty().ifEmpty { "I don't have an answer for that." }
