@@ -19,6 +19,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -108,8 +109,11 @@ class CaptureService : LifecycleService() {
             var backoffMs = BACKOFF_MIN_MS
             while (isActive) {
                 streamingSince = null
+                var drain = false
                 try {
                     session(address)
+                } catch (e: OnCharger) {
+                    drain = true
                 } catch (e: CancellationException) {
                     // Only a real stop ends the loop; anything else that looks
                     // like a cancellation (a stray timeout) is a failed attempt.
@@ -121,6 +125,11 @@ class CaptureService : LifecycleService() {
                     withContext(audioThread) { runCatching { clipper?.flush() } }
                     connection?.close()
                     connection = null
+                }
+                if (drain) {
+                    drainOnCharger(address)
+                    backoffMs = BACKOFF_MIN_MS
+                    continue
                 }
                 // A session that streamed for a while earns a fast retry; one
                 // that never got going backs off, so an absent device is not
@@ -164,6 +173,11 @@ class CaptureService : LifecycleService() {
         CaptureRepository.update { it.copy(device = info) }
         CaptureRepository.log("connected: ${info.model ?: "Omi"} fw ${info.firmware} codec $codec mtu ${conn.mtu}")
         readVolatile(conn)
+        CaptureRepository.state.value.let { st ->
+            CaptureRepository.log("battery ${st.battery?.value ?: "?"}% · " + when (st.charging?.value) { true -> "charging"; false -> "not charging"; null -> "charging unknown" })
+        }
+        syncClock(conn)
+        checkCharger()
 
         val decoder = OpusFrameDecoder(OmiUuids.SAMPLE_RATE, frameSamples)
         val run = RunTracker()
@@ -268,6 +282,7 @@ class CaptureService : LifecycleService() {
                     val ok = runCatching { readVolatile(conn, strict = true) }.isSuccess
                     failedChecks = if (ok) 0 else failedChecks + 1
                     if (failedChecks >= 2) throw IllegalStateException("device stopped answering")
+                    if (ok && question == null) checkCharger()
                 }
                 if (tick % net.boswell.phone.assistant.Watcher.EVERY_SECONDS == 0 && watching?.isActive != true) {
                     watching = lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { watcher.tick() } }
@@ -410,63 +425,112 @@ class CaptureService : LifecycleService() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
             CaptureRepository.log("no Bluetooth permission"); stopSelf(); return
         }
-        val deviceId = address.lowercase().filter { it in "0123456789abcdef" }
         captureJob = lifecycleScope.launch {
-            var result: String
-            try {
-                // Anything a previous visit spooled but did not convert.
-                withContext(audioThread) { drainSpools(deviceId) }
-                val device = getSystemService(BluetoothManager::class.java).adapter.getRemoteDevice(address)
-                CaptureRepository.update { it.copy(link = Link.SYNCING, sync = SyncStatus(0, 0, 0.0, "connecting")) }
-                CaptureRepository.log("sync: connecting to $address")
-                val conn = OmiConnection(this@CaptureService, device, onAudio = {})
-                connection = conn
-                conn.connect()
-                val info = DeviceInfo(address = address, model = readText(conn, OmiUuids.MODEL),
-                    firmware = readText(conn, OmiUuids.FIRMWARE), mtu = conn.mtu)
-                CaptureRepository.update { it.copy(device = info) }
-                readVolatile(conn)
-                CaptureRepository.state.value.deviceClockSkewSeconds?.let { skew ->
-                    if (kotlin.math.abs(skew.value) > 2) {
-                        runCatching { conn.setClock(System.currentTimeMillis() / 1000) }
-                            .onSuccess { CaptureRepository.log("set device clock (was off by ${skew.value}s)") }
-                    }
-                }
-                CaptureRepository.state.value.rssi?.let { CaptureRepository.log("sync: link ${it.value} dBm") }
-                conn.preferThroughput()
-                kotlinx.coroutines.delay(500)
-                val outcome = net.boswell.phone.sync.OmiSync(spoolDir(this@CaptureService), deviceId).visit(conn, VISIT_SECONDS,
-                    onRing = { r -> CaptureRepository.update { it.copy(ring = Reading(r, System.currentTimeMillis())) } },
-                    onProgress = { p ->
-                        CaptureRepository.update { it.copy(sync = SyncStatus(p.took, p.target, p.bytesPerSecond, "downloading")) }
-                        notify("Syncing · ${p.took * 100 / p.target.coerceAtLeast(1)}%")
-                    })
-                conn.close()
-                connection = null
-                CaptureRepository.update { it.copy(sync = SyncStatus(outcome.took, outcome.waiting, 0.0, "making clips")) }
-                val clips = withContext(audioThread) { drainSpools(deviceId) }
-                result = when {
-                    outcome.waiting == 0L -> "nothing waiting"
-                    else -> "${outcome.took} of ${outcome.waiting} packets → $clips clips" + (outcome.stoppedEarly?.let { " ($it)" } ?: "")
-                }
-                CaptureRepository.log("sync: $result")
-                if (clips > 0) net.boswell.phone.process.ProcessingWorker.enqueue(this@CaptureService)
-            } catch (e: CancellationException) {
-                if (!isActive) throw e
-                result = "could not reach the Omi (${e.message})"
-                CaptureRepository.log("sync: $result")
-            } catch (e: Exception) {
-                result = "could not reach the Omi (${e.message})"
-                CaptureRepository.log("sync: $result")
-            } finally {
-                connection?.close()
-                connection = null
-            }
-            net.boswell.phone.sync.Modes.recordSync(this@CaptureService, result)
-            CaptureRepository.update { it.copy(link = Link.IDLE, sync = null) }
+            val r = syncVisit(address)
+            net.boswell.phone.sync.Modes.recordSync(this@CaptureService, r.text)
             captureJob = null
             stopSelf()
         }
+    }
+
+    private class VisitResult(val text: String, val failed: Boolean, val emptied: Boolean)
+
+    /** One sync visit; never throws except to stop. */
+    private suspend fun syncVisit(address: String): VisitResult {
+        val deviceId = address.lowercase().filter { it in "0123456789abcdef" }
+        var r: VisitResult
+        try {
+            // Anything a previous visit spooled but did not convert.
+            withContext(audioThread) { drainSpools(deviceId) }
+            val device = getSystemService(BluetoothManager::class.java).adapter.getRemoteDevice(address)
+            CaptureRepository.update { it.copy(link = Link.SYNCING, sync = SyncStatus(0, 0, 0.0, "connecting")) }
+            CaptureRepository.log("sync: connecting to $address")
+            val conn = OmiConnection(this@CaptureService, device, onAudio = {})
+            connection = conn
+            conn.connect()
+            val info = DeviceInfo(address = address, model = readText(conn, OmiUuids.MODEL),
+                firmware = readText(conn, OmiUuids.FIRMWARE), mtu = conn.mtu)
+            CaptureRepository.update { it.copy(device = info) }
+            readVolatile(conn)
+            syncClock(conn)
+            CaptureRepository.state.value.rssi?.let { CaptureRepository.log("sync: link ${it.value} dBm") }
+            conn.preferThroughput()
+            delay(500)
+            val outcome = net.boswell.phone.sync.OmiSync(spoolDir(this@CaptureService), deviceId).visit(conn, VISIT_SECONDS,
+                onRing = { ring -> CaptureRepository.update { it.copy(ring = Reading(ring, System.currentTimeMillis())) } },
+                onProgress = { p ->
+                    CaptureRepository.update { it.copy(sync = SyncStatus(p.took, p.target, p.bytesPerSecond, "downloading")) }
+                    notify("Syncing · ${p.took * 100 / p.target.coerceAtLeast(1)}%")
+                })
+            conn.close()
+            connection = null
+            CaptureRepository.update { it.copy(sync = SyncStatus(outcome.took, outcome.waiting, 0.0, "making clips")) }
+            val clips = withContext(audioThread) { drainSpools(deviceId) }
+            val text = when {
+                outcome.waiting == 0L -> "nothing waiting"
+                else -> "${outcome.took} of ${outcome.waiting} packets → $clips clips" + (outcome.stoppedEarly?.let { " ($it)" } ?: "")
+            }
+            CaptureRepository.log("sync: $text")
+            if (clips > 0) net.boswell.phone.process.ProcessingWorker.enqueue(this@CaptureService)
+            r = VisitResult(text, failed = false, emptied = outcome.waiting == 0L || outcome.took >= outcome.waiting)
+        } catch (e: CancellationException) {
+            if (!currentCoroutineContext().isActive) throw e
+            r = VisitResult("could not reach the Omi (${e.message})", failed = true, emptied = false)
+            CaptureRepository.log("sync: ${r.text}")
+        } catch (e: Exception) {
+            r = VisitResult("could not reach the Omi (${e.message})", failed = true, emptied = false)
+            CaptureRepository.log("sync: ${r.text}")
+        } finally {
+            connection?.close()
+            connection = null
+        }
+        CaptureRepository.update { it.copy(link = Link.IDLE, sync = null) }
+        return r
+    }
+
+    /**
+     * Set the Omi's clock from the phone's, on every connection. Without a
+     * valid clock the Omi's firmware stores nothing at all (sd_card.c: no
+     * rtc_is_valid(), no write), and switching it off and on can lose it --
+     * so a Live-only user who walked out of range would lose that audio.
+     */
+    private suspend fun syncClock(conn: OmiConnection) {
+        val skew = CaptureRepository.state.value.deviceClockSkewSeconds?.value
+        if (skew != null && kotlin.math.abs(skew) <= 2) return
+        runCatching { conn.setClock(System.currentTimeMillis() / 1000) }
+            .onSuccess { CaptureRepository.log(if (skew == null || skew < -1_000_000_000) "set the Omi's clock (it had none)" else "set the Omi's clock (was off by ${skew}s)") }
+            .onFailure { CaptureRepository.log("could not set the Omi's clock: ${it.message}") }
+    }
+
+    // ------------------------------------------------------ charger drain
+
+    /**
+     * In Live mode the Omi only stores what it hears while out of range, and
+     * reading that backlog can't share a connection with the live stream. A
+     * charging Omi isn't being worn, so that's when the backlog is fetched:
+     * once each time it goes on the charger, then back to live.
+     */
+    @Volatile private var drainedThisCharge = false
+
+    private class OnCharger : Exception("on the charger")
+
+    private fun checkCharger() {
+        val charging = CaptureRepository.state.value.charging?.value ?: return
+        if (!charging) { drainedThisCharge = false; return }
+        if (!drainedThisCharge) throw OnCharger()
+    }
+
+    private suspend fun drainOnCharger(address: String) {
+        CaptureRepository.log("on the charger: collecting what the Omi stored")
+        notify("On the charger · collecting stored audio")
+        var fails = 0
+        while (currentCoroutineContext().isActive) {
+            val r = syncVisit(address)
+            if (r.failed) { if (++fails >= 2) break; delay(5_000); continue }
+            if (r.emptied) break
+        }
+        drainedThisCharge = true
+        net.boswell.phone.sync.Modes.recordSync(this, "on the charger")
     }
 
     /** Convert every spool file into clips. Returns how many clips were made. */
