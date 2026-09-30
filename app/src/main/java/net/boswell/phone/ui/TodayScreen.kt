@@ -135,10 +135,12 @@ fun TodayScreen(vm: ArchiveViewModel, pad: PaddingValues, onOpen: (Long) -> Unit
             Text(summary, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
-        if (proc.running && proc.pending > 0) item {
+        if ((proc.running && proc.pending > 0) || proc.waitingForCharger > 0) item {
             Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
-                Text("Transcribing on your phone · ${proc.pending} left", Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                    style = MaterialTheme.typography.bodyMedium)
+                Text(listOfNotNull(
+                    if (proc.running && proc.pending > 0) "Transcribing on your phone · ${proc.pending} left" else null,
+                    if (proc.waitingForCharger > 0) "${proc.waitingForCharger} downloaded clips will be transcribed when the phone is charging" else null,
+                ).joinToString("\n"), Modifier.padding(horizontal = 14.dp, vertical = 10.dp), style = MaterialTheme.typography.bodyMedium)
             }
         }
 

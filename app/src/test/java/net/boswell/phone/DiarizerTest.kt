@@ -54,4 +54,23 @@ class DiarizerTest {
             out!!.writeText(json)
         }
     }
+
+    /**
+     * The speech check on real clips, for tools/speech_check.py to compare.
+     * Local only: -Ddiar.models=tools/models/release-models-v1 -Ddiar.speechdir=<wavs> -Ddiar.out=out.json
+     */
+    @Test fun speechSecondsForComparison() {
+        val models = System.getProperty("diar.models")?.let(::File)
+        val dir = System.getProperty("diar.speechdir")?.let(::File)
+        val out = System.getProperty("diar.out")?.let(::File)
+        assumeTrue(models != null && dir != null && out != null)
+        OrtModels(File(models, "pyannote-segmentation-3.0.onnx").path, File(models, "voiceprint.onnx").path).use { m ->
+            val d = Diarizer(segment = m::segment, embed = m::voiceprint)
+            val rows = dir!!.listFiles { f -> f.extension == "wav" && f.length() > 44 }.orEmpty().sortedBy { it.name }.map { f ->
+                val (pcm, _) = Wav.readPcm(f)
+                "\"${f.name}\":${"%.4f".format(d.speechSeconds(FloatArray(pcm.size) { pcm[it] / 32768f }))}"
+            }
+            out!!.writeText(rows.joinToString(",", "{", "}"))
+        }
+    }
 }

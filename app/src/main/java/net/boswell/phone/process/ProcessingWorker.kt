@@ -27,7 +27,9 @@ import net.boswell.phone.speakers.Matching
 import net.boswell.phone.speakers.SpeakerStore
 import java.io.File
 
-data class ProcessingState(val running: Boolean = false, val pending: Int = 0, val done: Int = 0, val current: String? = null, val lastError: String? = null)
+data class ProcessingState(val running: Boolean = false, val pending: Int = 0, val done: Int = 0, val current: String? = null, val lastError: String? = null,
+                           /** Downloaded clips held back until the phone is charging. */
+                           val waitingForCharger: Int = 0)
 
 object ProcessingRepository {
     val state = MutableStateFlow(ProcessingState())
@@ -35,7 +37,10 @@ object ProcessingRepository {
 
 /**
  * Transcribes, diarizes and identifies every clip that has no transcript yet,
- * oldest first, entirely on the phone. Runs as background work so it
+ * entirely on the phone: live clips first and newest first, so the day stays
+ * current while a download fills in behind it; a big download waits for the
+ * phone's charger (see [backlogWaits]); a clip nobody speaks in is recorded as
+ * such after a quick speech check, without running the recognizer. Runs as background work so it
  * survives the app being closed; a clip interrupted half way is simply
  * redone, since nothing is written until its transcript is complete.
  */
@@ -60,13 +65,17 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
         LocalAsr(models).use { asr ->
             OrtModels(models.path(ModelCatalog.SEGMENTATION, ".onnx"), models.path(ModelCatalog.VOICEPRINT, "voiceprint.onnx")).use { ort ->
                 val diarizer = ort.diarizer()
+                var deferred = 0
                 while (!isStopped) {
                     // A question asked on the Omi goes first: the backlog waits
                     // between clips so the question's own transcription isn't
                     // competing with it for the CPU.
                     while (!isStopped && net.boswell.phone.capture.CaptureRepository.state.value.asking != null) kotlinx.coroutines.delay(250)
-                    val todo = pending(clips, out)
-                    ProcessingRepository.state.value = ProcessingState(true, todo.size, done)
+                    val all = pending(clips, out)
+                    val waitCharger = backlogWaits(applicationContext, all)
+                    val todo = if (waitCharger) all.filter { !isDownload(it) } else all
+                    deferred = all.size - todo.size
+                    ProcessingRepository.state.value = ProcessingState(true, todo.size, done, waitingForCharger = deferred)
                     val wav = todo.firstOrNull() ?: break
                     ProcessingRepository.state.value = ProcessingState(true, todo.size, done, wav.name)
                     try {
@@ -88,7 +97,10 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
         }
         store.close()
         tagger?.close()
-        ProcessingRepository.state.value = ProcessingState(false, pending(clips, out).size, done)
+        val left = pending(clips, out)
+        val waiting = if (backlogWaits(applicationContext, left)) left.count { isDownload(it) } else 0
+        ProcessingRepository.state.value = ProcessingState(false, left.size - waiting, done, waitingForCharger = waiting)
+        if (waiting > 0) ChargerKick.schedule(applicationContext)
         Result.success()
     }
 
@@ -115,6 +127,15 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
         val t0 = System.currentTimeMillis()
         val (pcm, _) = Wav.readPcm(wav)
         val audio = FloatArray(pcm.size) { pcm[it] / 32768f }
+        if (diarizer.speechSeconds(audio) <= net.boswell.phone.diarize.Diarizer.SPEECH_MIN_S) {
+            // Nobody speaking: record that without running the recognizer.
+            val tags = tagger?.tag(audio)
+            val t = Transcript(wav.name, System.currentTimeMillis() / 1000.0, emptyList(), emptyMap(), emptyMap(),
+                engine = "pyannote-seg-3.0 speech check" + (if (tags != null) " + ced-mini" else ""),
+                processMs = System.currentTimeMillis() - t0, sounds = tags, verdict = tags?.let { verdictFor(false, it) })
+            writeAtomically(File(out, wav.nameWithoutExtension + ".json"), TranscriptJson.json.encodeToString(Transcript.serializer(), t).toByteArray())
+            return
+        }
         val words = asr.transcribe(audio)
         val d = diarizer.run(audio)
         val segments = Lines.build(words, d.turns)
@@ -175,7 +196,27 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
         fun pending(clips: File, out: File): List<File> =
             clips.listFiles { f -> f.extension == "wav" }.orEmpty()
                 .filter { !File(out, it.nameWithoutExtension + ".json").exists() }
-                .sortedBy { it.name }
+                .map { it to isDownload(it) }
+                .sortedWith(compareBy<Pair<File, Boolean>> { it.second }.thenByDescending { it.first.name })
+                .map { it.first }
+
+        /** Audio the Omi stored and the phone downloaded later, as opposed to heard live. */
+        fun isDownload(wav: File): Boolean =
+            runCatching { File(wav.parentFile, wav.nameWithoutExtension + ".json").readText().contains("\"omi-card\"") }.getOrDefault(false)
+
+        /** More downloaded clips than this (about half an hour of audio) is a big download. */
+        const val BIG_DOWNLOAD = 60
+
+        /**
+         * A big download waits for the phone's charger: transcribing hours of
+         * audio keeps several cores busy for a long time. Clips heard live never wait.
+         */
+        fun backlogWaits(context: Context, pending: List<File>): Boolean {
+            if (!net.boswell.phone.sync.Modes.backlogOnCharger(context)) return false
+            val bm = context.getSystemService(android.os.BatteryManager::class.java)
+            if (bm?.isCharging == true) return false
+            return pending.count { isDownload(it) } > BIG_DOWNLOAD
+        }
 
         fun enqueue(context: Context) {
             val req = OneTimeWorkRequestBuilder<ProcessingWorker>()
@@ -183,6 +224,27 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
                 .build()
             // Appended, so a clip that lands while a run is finishing still gets a run of its own.
             WorkManager.getInstance(context).enqueueUniqueWork(WORK, ExistingWorkPolicy.APPEND_OR_REPLACE, req)
+        }
+    }
+}
+
+/**
+ * Wakes the processing worker when the phone goes on charge, for a download
+ * that was waiting. Its own work, so the charging constraint never holds up
+ * the clips heard live, which queue behind nothing.
+ */
+class ChargerKick(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
+    override suspend fun doWork(): Result {
+        ProcessingWorker.enqueue(applicationContext)
+        return Result.success()
+    }
+
+    companion object {
+        fun schedule(context: Context) {
+            val req = OneTimeWorkRequestBuilder<ChargerKick>()
+                .setConstraints(Constraints.Builder().setRequiresCharging(true).build())
+                .build()
+            WorkManager.getInstance(context).enqueueUniqueWork("process-on-charger", ExistingWorkPolicy.KEEP, req)
         }
     }
 }

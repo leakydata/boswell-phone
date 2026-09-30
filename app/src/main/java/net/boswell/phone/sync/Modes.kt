@@ -34,6 +34,10 @@ object Modes {
     fun syncOnCharger(c: Context): Boolean = prefs(c).getBoolean("sync_on_charger", true)
     fun setSyncOnCharger(c: Context, on: Boolean) = prefs(c).edit().putBoolean("sync_on_charger", on).apply()
 
+    /** A big download is transcribed only while the phone is charging. On unless turned off. */
+    fun backlogOnCharger(c: Context): Boolean = prefs(c).getBoolean("backlog_on_charger", true)
+    fun setBacklogOnCharger(c: Context, on: Boolean) = prefs(c).edit().putBoolean("backlog_on_charger", on).apply()
+
     fun lastSync(c: Context): Long = prefs(c).getLong("last_sync", 0L)
     fun lastSyncResult(c: Context): String? = prefs(c).getString("last_sync_result", null)
     fun recordSync(c: Context, result: String) =

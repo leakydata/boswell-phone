@@ -136,6 +136,27 @@ class Diarizer(
         return Diarization(speakers)
     }
 
+    /**
+     * Seconds in which anyone speaks, by segmentation alone -- about 0.2 s for
+     * a 30 s clip against ~4 s to transcribe it. Measured on 185 real clips
+     * (tools/speech_check.py): at [SPEECH_MIN_S] it set aside 49 of the 51
+     * that transcription found empty and none that had words.
+     */
+    fun speechSeconds(audio: FloatArray): Double {
+        var total = 0.0
+        var st = 0
+        do {
+            val n = min(WINDOW, audio.size - st)
+            val w = FloatArray(WINDOW)
+            audio.copyInto(w, 0, st, st + n)
+            val act = activity(segment(w))
+            val frames = min(act.size, n / RF_SHIFT + 1)
+            for (f in 0 until frames) if (act[f].any { it }) total += FRAME_S
+            st += WINDOW
+        } while (st < audio.size)
+        return total
+    }
+
     /** Powerset argmax per frame -> which of the 3 local speakers are active. */
     private fun activity(logits: Array<FloatArray>): Array<BooleanArray> = Array(logits.size) { f ->
         val row = logits[f]
@@ -218,6 +239,8 @@ class Diarizer(
         const val FRAME_S = RF_SHIFT / SR.toDouble()
 
         const val MIN_AUDIO = SR / 2
+        /** Below this much speech a clip is not worth transcribing (see [speechSeconds]). */
+        const val SPEECH_MIN_S = 0.3
         const val MIN_EMBED_S = 1.0
         const val MIN_ATTACH_S = 0.5
         const val ATTACH_AT = 0.35

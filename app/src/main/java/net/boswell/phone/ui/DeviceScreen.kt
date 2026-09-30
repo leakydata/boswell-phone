@@ -394,6 +394,19 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                         style = MaterialTheme.typography.bodyMedium)
                     OutlinedButton(onClick = { confirmClean = true }) { Text("Free up ${Fmt.bytes(u.quietBytes)}") }
                 }
+                var backlogCharging by remember { mutableStateOf(net.boswell.phone.sync.Modes.backlogOnCharger(ctx)) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Big downloads wait for the charger", style = MaterialTheme.typography.bodyLarge)
+                        Text("More than half an hour of audio from the Omi's memory is transcribed while the phone charges, to spare its battery. What's heard live is always transcribed right away.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(checked = backlogCharging, onCheckedChange = {
+                        backlogCharging = it
+                        net.boswell.phone.sync.Modes.setBacklogOnCharger(ctx, it)
+                        net.boswell.phone.process.ProcessingWorker.enqueue(ctx)
+                    })
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Clean up automatically", style = MaterialTheme.typography.bodyLarge)
