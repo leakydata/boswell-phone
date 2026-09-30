@@ -72,7 +72,11 @@ object Calendar {
     /** Returns the new event's id, or an explanation of why not. Goes into the chosen calendar only. */
     fun add(c: Context, title: String, startEpoch: Double, minutes: Int, location: String?, notes: String?): Result<Long> {
         if (!allowed(c)) return Result.failure(IllegalStateException("calendar access has not been granted (Device → Assistant → Calendar)"))
-        val cal = chosen(c)?.id ?: return Result.failure(IllegalStateException("no calendar chosen yet: the user must pick one in Device → Assistant → Calendar"))
+        val cal = chosen(c)?.id ?: run {
+            net.boswell.phone.assistant.AssistantNotify.post(c, net.boswell.phone.assistant.AssistantNotify.ANSWERS,
+                "Choose a calendar", "The assistant tried to add \"$title\" but no calendar is chosen. Open Device → Assistant → Calendar.")
+            return Result.failure(IllegalStateException("no calendar chosen yet: the user must pick one in Device → Assistant → Calendar"))
+        }
         val start = (startEpoch * 1000).toLong()
         val uri = c.contentResolver.insert(CalendarContract.Events.CONTENT_URI, ContentValues().apply {
             put(CalendarContract.Events.CALENDAR_ID, cal)

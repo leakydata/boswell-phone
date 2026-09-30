@@ -247,8 +247,14 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                     Text("Edit", color = MaterialTheme.colorScheme.primary)
                 }
                 var calendarOk by remember { mutableStateOf(net.boswell.phone.todo.Calendar.allowed(ctx2)) }
+                // Granting access leads straight to choosing where events go, so nobody
+                // ends up with the assistant adding events to a calendar they never picked.
+                var openPickerNext by remember { mutableStateOf(false) }
                 val calLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-                    androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()) { calendarOk = net.boswell.phone.todo.Calendar.allowed(ctx2) }
+                    androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()) {
+                    calendarOk = net.boswell.phone.todo.Calendar.allowed(ctx2)
+                    openPickerNext = calendarOk && net.boswell.phone.todo.Calendar.chosen(ctx2) == null
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Calendar", style = MaterialTheme.typography.bodyLarge)
@@ -260,6 +266,7 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                 if (calendarOk) {
                     var chosen by remember { mutableStateOf(net.boswell.phone.todo.Calendar.chosen(ctx2)) }
                     var picking by remember { mutableStateOf(false) }
+                    LaunchedEffect(openPickerNext) { if (openPickerNext) { picking = true; openPickerNext = false } }
                     var showEv by remember { mutableStateOf(net.boswell.phone.todo.Calendar.showEvents(ctx2)) }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
