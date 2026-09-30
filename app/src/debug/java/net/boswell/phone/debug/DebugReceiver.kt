@@ -27,7 +27,12 @@ class DebugReceiver : BroadcastReceiver() {
                 }
             }
             "net.boswell.phone.debug.SYNC" -> CaptureService.sync(context, address)
-            // am broadcast -a net.boswell.phone.debug.TRIGGER --es q "..."  (as a line said by "Me", right now)
+            // am broadcast -a net.boswell.phone.debug.TRIGGERS_ON --ez on true
+            "net.boswell.phone.debug.TRIGGERS_ON" -> {
+                net.boswell.phone.assistant.Triggers.setEnabled(context, intent.getBooleanExtra("on", true))
+                android.util.Log.i("Boswell", "voice triggers ${if (net.boswell.phone.assistant.Triggers.enabled(context)) "on" else "off"}")
+            }
+            // am broadcast -a net.boswell.phone.debug.TRIGGER --es q "..." [--ez force false]  (as a line said by "Me", right now)
             "net.boswell.phone.debug.TRIGGER" -> {
                 val q = intent.getStringExtra("q") ?: return
                 val owner = net.boswell.phone.assistant.AssistantPrefs.owner(context)
@@ -39,7 +44,7 @@ class DebugReceiver : BroadcastReceiver() {
                             segments = listOf(net.boswell.phone.process.Segment(0.0, 3.0, "SPEAKER_00", q)),
                             speakers = mapOf("SPEAKER_00" to net.boswell.phone.process.SpeakerId(null, 0.9, "matched", 0.5, emptyList(), owner, 3.0)),
                             embeddings = emptyMap(), engine = "debug", processMs = 0)
-                        net.boswell.phone.assistant.TriggerEngine(context).run(t, System.currentTimeMillis() / 1000.0 - 3, force = true)
+                        net.boswell.phone.assistant.TriggerEngine(context).run(t, System.currentTimeMillis() / 1000.0, force = intent.getBooleanExtra("force", true))
                         android.util.Log.i("Boswell", "debug trigger done")
                     } finally { pending.finish() }
                 }.start()

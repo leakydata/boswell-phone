@@ -18,21 +18,61 @@ object Calendar {
         ContextCompat.checkSelfPermission(c, Manifest.permission.WRITE_CALENDAR) == PackageManager.PERMISSION_GRANTED &&
             ContextCompat.checkSelfPermission(c, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
 
-    /** The primary writable calendar: the account's own, visible, owner-level calendar. */
-    private fun calendarId(c: Context): Long? = c.contentResolver.query(
-        CalendarContract.Calendars.CONTENT_URI,
-        arrayOf(CalendarContract.Calendars._ID, CalendarContract.Calendars.IS_PRIMARY, CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL, CalendarContract.Calendars.VISIBLE),
-        null, null, null,
-    )?.use { cur ->
-        val rows = buildList { while (cur.moveToNext()) add(listOf(cur.getLong(0), cur.getInt(1).toLong(), cur.getInt(2).toLong(), cur.getInt(3).toLong())) }
-        val writable = rows.filter { it[2] >= CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR && it[3] == 1L }
-        (writable.firstOrNull { it[1] == 1L } ?: writable.firstOrNull())?.get(0)
+    data class Cal(val id: Long, val name: String, val account: String, val color: Int, val writable: Boolean, val visible: Boolean)
+
+    /** Every calendar on the phone. A phone with several accounts has several "primary" ones, so the user chooses. */
+    fun calendars(c: Context): List<Cal> {
+        if (!allowed(c)) return emptyList()
+        return c.contentResolver.query(
+            CalendarContract.Calendars.CONTENT_URI,
+            arrayOf(CalendarContract.Calendars._ID, CalendarContract.Calendars.CALENDAR_DISPLAY_NAME, CalendarContract.Calendars.ACCOUNT_NAME,
+                CalendarContract.Calendars.CALENDAR_COLOR, CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL, CalendarContract.Calendars.VISIBLE),
+            null, null, null,
+        )?.use { cur ->
+            buildList {
+                while (cur.moveToNext()) add(Cal(cur.getLong(0), cur.getString(1) ?: "?", cur.getString(2) ?: "", cur.getInt(3),
+                    cur.getInt(4) >= CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR, cur.getInt(5) == 1))
+            }
+        } ?: emptyList()
     }
 
-    /** Returns the new event's id, or an explanation of why not. */
+    private fun prefs(c: Context) = c.getSharedPreferences("boswell", Context.MODE_PRIVATE)
+
+    /** The calendar new events go into; null until chosen. */
+    fun chosen(c: Context): Cal? = prefs(c).getLong("calendar_id", -1).takeIf { it >= 0 }?.let { id -> calendars(c).firstOrNull { it.id == id } }
+    fun choose(c: Context, id: Long?) = prefs(c).edit().putLong("calendar_id", id ?: -1).apply()
+
+    /** Show calendar events alongside to-dos in the Day/Week/Month views. */
+    fun showEvents(c: Context) = prefs(c).getBoolean("show_events", true)
+    fun setShowEvents(c: Context, on: Boolean) = prefs(c).edit().putBoolean("show_events", on).apply()
+
+    data class Event(val title: String, val begin: Long, val end: Long, val allDay: Boolean, val color: Int, val calendar: String)
+
+    /**
+     * Events from every calendar the phone shows (the ones visible in the
+     * calendar app), recurring ones expanded, between two epoch-millis.
+     */
+    fun events(c: Context, from: Long, to: Long): List<Event> {
+        if (!allowed(c) || !showEvents(c)) return emptyList()
+        val uri = CalendarContract.Instances.CONTENT_URI.buildUpon()
+        android.content.ContentUris.appendId(uri, from)
+        android.content.ContentUris.appendId(uri, to)
+        return c.contentResolver.query(uri.build(),
+            arrayOf(CalendarContract.Instances.TITLE, CalendarContract.Instances.BEGIN, CalendarContract.Instances.END,
+                CalendarContract.Instances.ALL_DAY, CalendarContract.Instances.DISPLAY_COLOR, CalendarContract.Instances.CALENDAR_DISPLAY_NAME,
+                CalendarContract.Instances.VISIBLE),
+            null, null, CalendarContract.Instances.BEGIN)?.use { cur ->
+            buildList {
+                while (cur.moveToNext()) if (cur.getInt(6) == 1) add(Event(cur.getString(0) ?: "(no title)", cur.getLong(1), cur.getLong(2),
+                    cur.getInt(3) == 1, cur.getInt(4), cur.getString(5) ?: ""))
+            }
+        } ?: emptyList()
+    }
+
+    /** Returns the new event's id, or an explanation of why not. Goes into the chosen calendar only. */
     fun add(c: Context, title: String, startEpoch: Double, minutes: Int, location: String?, notes: String?): Result<Long> {
         if (!allowed(c)) return Result.failure(IllegalStateException("calendar access has not been granted (Device → Assistant → Calendar)"))
-        val cal = calendarId(c) ?: return Result.failure(IllegalStateException("no writable calendar on this phone"))
+        val cal = chosen(c)?.id ?: return Result.failure(IllegalStateException("no calendar chosen yet: the user must pick one in Device → Assistant → Calendar"))
         val start = (startEpoch * 1000).toLong()
         val uri = c.contentResolver.insert(CalendarContract.Events.CONTENT_URI, ContentValues().apply {
             put(CalendarContract.Events.CALENDAR_ID, cal)

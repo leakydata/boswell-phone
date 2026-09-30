@@ -217,7 +217,7 @@ class Assistant(private val context: Context) {
                 val title = str("title") ?: return "missing title"
                 val start = str("start")?.let(::parseLocal) ?: return "could not read the start time; use YYYY-MM-DDTHH:MM"
                 net.boswell.phone.todo.Calendar.add(context, title, start, int("minutes") ?: 60, str("location"), str("notes")).fold(
-                    onSuccess = { "added to the calendar: $title at ${at(start)}" },
+                    onSuccess = { "added to the calendar \"${net.boswell.phone.todo.Calendar.chosen(context)?.name}\": $title at ${at(start)}" },
                     onFailure = { "not added: ${it.message}" })
             }
             else -> "unknown tool ${call.name}"

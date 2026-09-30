@@ -1,6 +1,9 @@
 package net.boswell.phone.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -253,7 +256,49 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     if (!calendarOk) TextButton(onClick = { calLauncher.launch(arrayOf(android.Manifest.permission.READ_CALENDAR, android.Manifest.permission.WRITE_CALENDAR)) }) { Text("Allow") }
-                    else Text("On", color = MaterialTheme.colorScheme.primary)
+                }
+                if (calendarOk) {
+                    var chosen by remember { mutableStateOf(net.boswell.phone.todo.Calendar.chosen(ctx2)) }
+                    var picking by remember { mutableStateOf(false) }
+                    var showEv by remember { mutableStateOf(net.boswell.phone.todo.Calendar.showEvents(ctx2)) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(if (chosen == null) "No calendar chosen: the assistant won't add events yet" else "New events go to ${chosen!!.name}",
+                                style = MaterialTheme.typography.bodyMedium, color = if (chosen == null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+                            chosen?.let { Text(it.account, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        }
+                        TextButton(onClick = { picking = true }) { Text(if (chosen == null) "Choose" else "Change") }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Show calendar events in To-do", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                        Switch(checked = showEv, onCheckedChange = { showEv = it; net.boswell.phone.todo.Calendar.setShowEvents(ctx2, it) })
+                    }
+                    if (picking) {
+                        val cals = remember { net.boswell.phone.todo.Calendar.calendars(ctx2).filter { it.writable }.sortedWith(compareBy({ !it.visible }, { it.account }, { it.name })) }
+                        androidx.compose.material3.AlertDialog(
+                            onDismissRequest = { picking = false },
+                            title = { Text("Add events to…") },
+                            text = {
+                                androidx.compose.foundation.lazy.LazyColumn {
+                                    items(cals.size) { i ->
+                                        val c = cals[i]
+                                        Row(Modifier.fillMaxWidth().clickable {
+                                            net.boswell.phone.todo.Calendar.choose(ctx2, c.id); chosen = c; picking = false
+                                        }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            androidx.compose.foundation.layout.Box(Modifier.padding(end = 12.dp).size(14.dp)
+                                                .clip(androidx.compose.foundation.shape.CircleShape).background(androidx.compose.ui.graphics.Color(c.color)))
+                                            Column(Modifier.weight(1f)) {
+                                                Text(c.name + if (!c.visible) " (hidden)" else "")
+                                                Text(c.account, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            }
+                                            if (chosen?.id == c.id) Text("✓", color = MaterialTheme.colorScheme.primary)
+                                        }
+                                    }
+                                }
+                            },
+                            confirmButton = { TextButton(onClick = { picking = false }) { Text("Close") } },
+                        )
+                    }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
