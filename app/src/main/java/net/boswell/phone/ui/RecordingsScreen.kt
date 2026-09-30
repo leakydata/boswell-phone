@@ -57,6 +57,12 @@ fun RecordingsScreen(vm: ArchiveViewModel, day: LocalDate, onBack: () -> Unit, o
     var confirm by remember { mutableStateOf(false) }
     LaunchedEffect(day) { vm.loadRecordings(day) }
     val selecting = selected.isNotEmpty()
+    // "No speech" only means something once a clip has been transcribed; one
+    // still waiting has no transcript either and must never be mistaken for silence.
+    val transcribed = remember(recs) {
+        val tdir = net.boswell.phone.process.ProcessingWorker.transcriptsDir(ctx)
+        recs.map { it.clip.name }.filter { java.io.File(tdir, it.removeSuffix(".wav") + ".json").exists() }.toSet()
+    }
 
     Scaffold(topBar = {
         TopAppBar(
@@ -71,7 +77,7 @@ fun RecordingsScreen(vm: ArchiveViewModel, day: LocalDate, onBack: () -> Unit, o
                     TextButton(onClick = { vm.retranscribe(selected.toList()); selected = emptySet() }) { Text("Redo") }
                     TextButton(onClick = { confirm = true }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
                 } else if (recs.isNotEmpty()) {
-                    TextButton(onClick = { selected = recs.filter { !it.clip.speech }.map { it.clip.name }.toSet() }) { Text("Select no-speech") }
+                    TextButton(onClick = { selected = recs.filter { !it.clip.speech && it.clip.name in transcribed }.map { it.clip.name }.toSet() }) { Text("Select no-speech") }
                 }
             },
         )
@@ -103,7 +109,7 @@ fun RecordingsScreen(vm: ArchiveViewModel, day: LocalDate, onBack: () -> Unit, o
                         Text("${Fmt.time(c.started)} · ${Fmt.duration(c.ended - c.started)}" +
                             (if (!c.audio) " · audio removed" else "") + (if (r.sounds.isNotEmpty()) " · ${r.sounds.joinToString()}" else ""),
                             style = MaterialTheme.typography.labelLarge)
-                        Text(r.text.ifEmpty { if (c.verdict == "empty") "background only" else "no speech" }, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        Text(r.text.ifEmpty { if (c.name !in transcribed) "waiting to be transcribed" else if (c.verdict == "empty") "background only" else "no speech" }, maxLines = 2, overflow = TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.bodyMedium,
                             color = if (r.text.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
                     }

@@ -47,6 +47,35 @@ class DebugReceiver : BroadcastReceiver() {
                 val st = net.boswell.phone.speakers.SpeakerStore(context)
                 try { android.util.Log.i("Boswell", "named -> ${st.name(intent.getLongExtra("id", -1), intent.getStringExtra("name") ?: return)}") } finally { st.close() }
             }
+            // am broadcast -a net.boswell.phone.debug.RECOVER
+            // Rebuild clips missing from the clips folder out of the kept spool files, never touching existing ones.
+            "net.boswell.phone.debug.RECOVER" -> {
+                val pending = goAsync()
+                Thread {
+                    try {
+                        val clipsDir = net.boswell.phone.capture.CaptureService.clipsDir(context)
+                        val kept = java.io.File(net.boswell.phone.capture.CaptureService.spoolDir(context), "kept")
+                        val work = java.io.File(context.cacheDir, "recover").apply { deleteRecursively(); mkdirs() }
+                        var restored = 0; var present = 0
+                        for (sp in kept.listFiles { f -> f.extension == "raw" }.orEmpty().sortedBy { it.name }) {
+                            val out = java.io.File(work, sp.nameWithoutExtension).apply { mkdirs() }
+                            val copy = java.io.File(work, sp.name); sp.copyTo(copy, overwrite = true)
+                            net.boswell.phone.sync.SpoolDrainer(out, sp.name.substringBefore('_'))
+                                .drain(copy, java.io.File(work, "scratch"), arrivedEpoch = sp.lastModified() / 1000.0)
+                            for (w in out.listFiles { f -> f.extension == "wav" }.orEmpty()) {
+                                val j = java.io.File(out, w.nameWithoutExtension + ".json")
+                                if (java.io.File(clipsDir, w.name).exists() || java.io.File(clipsDir, j.name).exists()) { present++; continue }
+                                w.copyTo(java.io.File(clipsDir, w.name)); j.copyTo(java.io.File(clipsDir, j.name)); restored++
+                            }
+                        }
+                        work.deleteRecursively()
+                        android.util.Log.i("Boswell", "recover: restored $restored clips, $present already present")
+                        net.boswell.phone.process.ProcessingWorker.enqueue(context)
+                    } catch (e: Exception) {
+                        android.util.Log.e("Boswell", "recover failed", e)
+                    } finally { pending.finish() }
+                }.start()
+            }
             // am broadcast -a net.boswell.phone.debug.BATTERY --ei level 8 --ez charging false
             "net.boswell.phone.debug.BATTERY" ->
                 net.boswell.phone.capture.BatteryWatch.omi(context, intent.getIntExtra("level", 50), intent.getBooleanExtra("charging", false))

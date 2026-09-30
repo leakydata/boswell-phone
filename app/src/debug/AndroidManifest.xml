@@ -19,6 +19,7 @@
                 <action android:name="net.boswell.phone.debug.NAME" />
                 <action android:name="net.boswell.phone.debug.FEED" />
                 <action android:name="net.boswell.phone.debug.BATTERY" />
+                <action android:name="net.boswell.phone.debug.RECOVER" />
             </intent-filter>
         </receiver>
     </application>

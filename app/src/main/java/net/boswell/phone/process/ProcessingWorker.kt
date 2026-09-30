@@ -61,6 +61,10 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
             OrtModels(models.path(ModelCatalog.SEGMENTATION, ".onnx"), models.path(ModelCatalog.VOICEPRINT, "voiceprint.onnx")).use { ort ->
                 val diarizer = ort.diarizer()
                 while (!isStopped) {
+                    // A question asked on the Omi goes first: the backlog waits
+                    // between clips so the question's own transcription isn't
+                    // competing with it for the CPU.
+                    while (!isStopped && net.boswell.phone.capture.CaptureRepository.state.value.asking != null) kotlinx.coroutines.delay(250)
                     val todo = pending(clips, out)
                     ProcessingRepository.state.value = ProcessingState(true, todo.size, done)
                     val wav = todo.firstOrNull() ?: break
