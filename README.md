@@ -205,3 +205,30 @@ day, not for operating a pipeline.
   **off by default**. When switched on it removes only the audio of clips at
   least a week old that have no speech and only background sound. The
   timeline entry and tags are kept.
+
+## Milestone 4: modes and the assistant (2026-09-30)
+
+**Modes** (Device page): Off, Sync, Live.
+- **Sync:** the Omi records on its own; the phone visits every 15 min–4 h and
+  whenever the Omi comes into range (companion-device presence), downloads
+  the backlog and lets go. Reading consumes, so every batch is fsynced to a
+  spool before the read pointer moves; partial batches are salvaged; visits
+  are capped at 10 min; the device clock is set on each visit. Clips carry the
+  device's own timestamps. Storage commands are never sent during a live stream.
+- **Live:** streaming, the Omi button, and the assistant listening along.
+
+**Assistant** (Ask tab; settings under Device → Assistant):
+- OpenRouter (default `z-ai/glm-5.3-flash`, configurable), key in the Android
+  Keystore, text only, every call logged with its cost.
+- Tools over the phone's archive: search, recent lines, a day's
+  conversations, read a conversation, people, set a reminder. Verified live:
+  the model calls `search_transcripts` and answers from the result
+  (`LlmToolTest`, about $0.00007 per two-round exchange).
+- **Omi button:** tap asks (listen until a pause, transcribe on the phone,
+  answer as a notification); double tap bookmarks the moment or summarizes
+  the last 10 minutes. On the desktop the BlueZ subscription to the button
+  always failed; on the phone this is still untested.
+- **Watcher:** in live mode it looks every 2 minutes, only when "Me" has said
+  something new, and speaks up rarely. It has its own daily budget ($0.50 by
+  default, adjustable).
+- Answers are notifications. Spoken answers are a toggle, off by default.

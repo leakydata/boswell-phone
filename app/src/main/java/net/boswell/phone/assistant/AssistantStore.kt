@@ -1,0 +1,87 @@
+package net.boswell.phone.assistant
+
+import android.content.ContentValues
+import android.content.Context
+import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteOpenHelper
+import java.time.LocalDate
+import java.time.ZoneId
+
+data class Exchange(val id: Long, val at: Double, val source: String, val question: String?, val answer: String, val cost: Double, val error: Boolean)
+data class Bookmark(val id: Long, val at: Double, val note: String?)
+
+/**
+ * What the assistant said and what it cost. Every call to a model is logged
+ * here -- when, why, which model, tokens, cost -- so what left the phone is
+ * always visible, and the daily budget has something to count.
+ */
+class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db", null, 1) {
+    override fun onCreate(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE calls (id INTEGER PRIMARY KEY, at REAL, purpose TEXT, model TEXT, prompt_tokens INTEGER, completion_tokens INTEGER, cost REAL, error TEXT)")
+        db.execSQL("CREATE TABLE exchanges (id INTEGER PRIMARY KEY, at REAL, source TEXT, question TEXT, answer TEXT, cost REAL, error INTEGER)")
+        db.execSQL("CREATE TABLE bookmarks (id INTEGER PRIMARY KEY, at REAL, note TEXT)")
+    }
+
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+
+    private fun now() = System.currentTimeMillis() / 1000.0
+
+    fun logCall(purpose: String, model: String, reply: LlmReply?, error: String? = null) {
+        writableDatabase.insert("calls", null, ContentValues().apply {
+            put("at", now()); put("purpose", purpose); put("model", model)
+            put("prompt_tokens", reply?.promptTokens ?: 0); put("completion_tokens", reply?.completionTokens ?: 0)
+            put("cost", reply?.cost ?: 0.0); put("error", error)
+        })
+    }
+
+    fun spentToday(purpose: String? = null): Double {
+        val start = LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toEpochSecond().toDouble()
+        val sql = "SELECT COALESCE(SUM(cost), 0) FROM calls WHERE at >= ?" + if (purpose != null) " AND purpose = ?" else ""
+        val args = listOfNotNull(start.toString(), purpose).toTypedArray()
+        return readableDatabase.rawQuery(sql, args).use { c -> c.moveToFirst(); c.getDouble(0) }
+    }
+
+    fun addExchange(source: String, question: String?, answer: String, cost: Double, error: Boolean = false): Long =
+        writableDatabase.insert("exchanges", null, ContentValues().apply {
+            put("at", now()); put("source", source); put("question", question); put("answer", answer); put("cost", cost); put("error", if (error) 1 else 0)
+        })
+
+    fun exchanges(limit: Int = 100): List<Exchange> = readableDatabase.rawQuery(
+        "SELECT id, at, source, question, answer, cost, error FROM exchanges ORDER BY at DESC LIMIT ?", arrayOf(limit.toString())).use { c ->
+        buildList { while (c.moveToNext()) add(Exchange(c.getLong(0), c.getDouble(1), c.getString(2), if (c.isNull(3)) null else c.getString(3), c.getString(4), c.getDouble(5), c.getInt(6) == 1)) }
+    }
+
+    fun addBookmark(at: Double, note: String? = null): Long =
+        writableDatabase.insert("bookmarks", null, ContentValues().apply { put("at", at); put("note", note) })
+
+    fun bookmarks(from: Double, to: Double): List<Bookmark> = readableDatabase.rawQuery(
+        "SELECT id, at, note FROM bookmarks WHERE at >= ? AND at < ? ORDER BY at", arrayOf(from.toString(), to.toString())).use { c ->
+        buildList { while (c.moveToNext()) add(Bookmark(c.getLong(0), c.getDouble(1), if (c.isNull(2)) null else c.getString(2))) }
+    }
+}
+
+/** Assistant settings. The API key itself lives in [Secrets]. */
+object AssistantPrefs {
+    private fun p(c: Context) = c.getSharedPreferences("boswell", Context.MODE_PRIVATE)
+
+    fun model(c: Context): String = p(c).getString("llm_model", null) ?: Llm.DEFAULT_MODEL
+    fun setModel(c: Context, m: String) = p(c).edit().putString("llm_model", m.trim().ifEmpty { Llm.DEFAULT_MODEL }).apply()
+
+    /** The person who is "me": the watcher listens for them, answers address them. */
+    fun owner(c: Context): Long? = p(c).getLong("owner_person", -1).takeIf { it >= 0 }
+    fun setOwner(c: Context, id: Long?) = p(c).edit().putLong("owner_person", id ?: -1).apply()
+
+    fun voice(c: Context) = p(c).getBoolean("voice_answers", false)
+    fun setVoice(c: Context, on: Boolean) = p(c).edit().putBoolean("voice_answers", on).apply()
+
+    fun watcher(c: Context) = p(c).getBoolean("watcher", false)
+    fun setWatcher(c: Context, on: Boolean) = p(c).edit().putBoolean("watcher", on).apply()
+
+    /** Dollars per day the watcher may spend. Questions you ask are never cut off by it. */
+    fun budget(c: Context): Double = p(c).getFloat("watcher_budget", 0.50f).toDouble()
+    fun setBudget(c: Context, d: Double) = p(c).edit().putFloat("watcher_budget", d.toFloat()).apply()
+
+    enum class DoubleTap { BOOKMARK, SUMMARIZE }
+    fun doubleTap(c: Context): DoubleTap = runCatching { DoubleTap.valueOf(p(c).getString("double_tap", "BOOKMARK")!!) }.getOrDefault(DoubleTap.BOOKMARK)
+    fun setDoubleTap(c: Context, d: DoubleTap) = p(c).edit().putString("double_tap", d.name).apply()
+}

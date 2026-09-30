@@ -17,6 +17,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -139,9 +140,9 @@ class CaptureService : LifecycleService() {
         CaptureRepository.log("connecting to $address")
 
         val packets = Channel<ByteArray>(capacity = 2_000)
-        val conn = OmiConnection(this, device) { data ->
+        val conn = OmiConnection(this, device, onAudio = { data ->
             if (packets.trySend(data).isFailure) CaptureRepository.update { it.copy(dropped = it.dropped + 1) }
-        }
+        }, onButton = { code -> lifecycleScope.launch { onButton(code) } })
         connection = conn
         conn.connect()
 
@@ -191,6 +192,7 @@ class CaptureService : LifecycleService() {
                     CaptureRepository.update { it.copy(dropped = it.dropped + 1) }
                     continue
                 }
+                question?.add(pcm)
                 val written = clip.add(run.extended, pcm)
                 val now = System.currentTimeMillis()
                 CaptureRepository.update {
@@ -211,6 +213,13 @@ class CaptureService : LifecycleService() {
 
         conn.enableNotifications(OmiUuids.AUDIO)
         CaptureRepository.log("subscribed to audio")
+        // The button, on the connection that is already open. Never fatal: the
+        // desktop's BlueZ refused this subscription on every attempt, and a
+        // recorder that streams but cannot report its button is still a recorder.
+        val buttonOk = conn.has(OmiUuids.BUTTON) && runCatching { conn.enableNotifications(OmiUuids.BUTTON) }
+            .onFailure { CaptureRepository.log("button: ${it.message}") }.isSuccess
+        CaptureRepository.update { it.copy(buttonReady = buttonOk) }
+        if (buttonOk) CaptureRepository.log("button ready: tap to ask")
         val began = System.currentTimeMillis()
         streamingSince = began
         // Connected and subscribed is "streaming" even before a frame arrives:
@@ -256,6 +265,9 @@ class CaptureService : LifecycleService() {
                     failedChecks = if (ok) 0 else failedChecks + 1
                     if (failedChecks >= 2) throw IllegalStateException("device stopped answering")
                 }
+                if (tick % net.boswell.phone.assistant.Watcher.EVERY_SECONDS == 0 && watching?.isActive != true) {
+                    watching = lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { watcher.tick() } }
+                }
                 if (tick % 10 == 0) {
                     val n = conn.notifications; val f = CaptureRepository.state.value.frames
                     android.util.Log.i("Boswell", "rate: ${(n - lastNotes) / 10.0}/s arriving, ${(f - lastFrames) / 10.0}/s decoded")
@@ -272,6 +284,74 @@ class CaptureService : LifecycleService() {
             packets.close()
             consumer.join()
             CaptureRepository.update { it.copy(heldSeconds = 0.0) }
+        }
+    }
+
+    // ------------------------------------------------------------ assistant
+
+    @Volatile private var question: net.boswell.phone.assistant.QuestionCapture? = null
+    private var watching: Job? = null
+    private val watcher by lazy { net.boswell.phone.assistant.Watcher(this) }
+
+    private fun onButton(code: Int) {
+        CaptureRepository.log("button event $code")
+        when (code) {
+            1 -> {
+                val q = question
+                if (q != null) q.finish()      // a second tap ends the question
+                else startQuestion()
+            }
+            2 -> when (net.boswell.phone.assistant.AssistantPrefs.doubleTap(this)) {
+                net.boswell.phone.assistant.AssistantPrefs.DoubleTap.BOOKMARK -> {
+                    val store = net.boswell.phone.assistant.AssistantStore(this)
+                    store.addBookmark(System.currentTimeMillis() / 1000.0); store.close()
+                    net.boswell.phone.assistant.AssistantNotify.post(this, net.boswell.phone.assistant.AssistantNotify.ANSWERS, "Bookmarked", "Marked this moment.")
+                }
+                net.boswell.phone.assistant.AssistantPrefs.DoubleTap.SUMMARIZE -> lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    val a = net.boswell.phone.assistant.Assistant(this@CaptureService).ask("Summarize what was said in the last 10 minutes.", "button")
+                    net.boswell.phone.assistant.AssistantNotify.post(this@CaptureService, net.boswell.phone.assistant.AssistantNotify.ANSWERS, "Last 10 minutes", a.text)
+                }
+            }
+            3 -> CaptureRepository.log("long press: the Omi turns itself off")
+        }
+    }
+
+    /**
+     * Tap to ask: listen until the question is over, transcribe it here, and
+     * hand it to the assistant. The recognizer loads while you talk, so the
+     * two seconds it takes are not added on after.
+     */
+    private fun startQuestion() {
+        val models = net.boswell.phone.models.ModelStore(this)
+        if (!models.isInstalled(net.boswell.phone.models.ModelCatalog.ASR)) {
+            net.boswell.phone.assistant.AssistantNotify.post(this, net.boswell.phone.assistant.AssistantNotify.ANSWERS, "Can't listen yet", "Download the transcription model first (Device → On-device models).")
+            return
+        }
+        val q = net.boswell.phone.assistant.QuestionCapture()
+        question = q
+        CaptureRepository.update { it.copy(asking = "listening") }
+        net.boswell.phone.assistant.AssistantNotify.post(this, net.boswell.phone.assistant.AssistantNotify.LISTENING, "Listening…", "Ask your question. Tap again when you're done.", LISTENING_ID)
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            val asr = async { net.boswell.phone.asr.LocalAsr(models) }
+            val started = System.currentTimeMillis()
+            while (!q.done) {
+                delay(100)
+                val last = CaptureRepository.state.value.lastAudioMillis ?: 0L
+                if (System.currentTimeMillis() - maxOf(last, started) > 1_000) q.idle()
+                if (System.currentTimeMillis() - started > 25_000) q.finish()
+            }
+            question = null
+            CaptureRepository.update { it.copy(asking = "thinking") }
+            net.boswell.phone.assistant.AssistantNotify.cancel(this@CaptureService, LISTENING_ID)
+            val text = asr.await().use { it.transcribe(q.audio()) }.joinToString(" ") { it.text }.trim()
+            if (text.isEmpty()) {
+                net.boswell.phone.assistant.AssistantNotify.post(this@CaptureService, net.boswell.phone.assistant.AssistantNotify.ANSWERS, "Didn't catch that", "Tap the Omi and try again.")
+            } else {
+                CaptureRepository.log("asked: $text")
+                val a = withContext(kotlinx.coroutines.Dispatchers.IO) { net.boswell.phone.assistant.Assistant(this@CaptureService).ask(text, "button") }
+                net.boswell.phone.assistant.AssistantNotify.post(this@CaptureService, net.boswell.phone.assistant.AssistantNotify.ANSWERS, text.take(60), a.text)
+            }
+            CaptureRepository.update { it.copy(asking = null) }
         }
     }
 
@@ -318,7 +398,7 @@ class CaptureService : LifecycleService() {
                 val device = getSystemService(BluetoothManager::class.java).adapter.getRemoteDevice(address)
                 CaptureRepository.update { it.copy(link = Link.SYNCING, sync = SyncStatus(0, 0, 0.0, "connecting")) }
                 CaptureRepository.log("sync: connecting to $address")
-                val conn = OmiConnection(this@CaptureService, device) { }
+                val conn = OmiConnection(this@CaptureService, device, onAudio = {})
                 connection = conn
                 conn.connect()
                 val info = DeviceInfo(address = address, model = readText(conn, OmiUuids.MODEL),
@@ -407,6 +487,7 @@ class CaptureService : LifecycleService() {
         /** The mic sleeps after ~3 s of quiet (OMI_VAD_HOLD_MS); a gap longer than that is a pause. */
         private const val PAUSE_CLOSES_CLIP_MS = 4_000L
         private const val LINK_CHECK_SECONDS = 30
+        private const val LISTENING_ID = 77
         private const val BACKOFF_MIN_MS = 5_000L
         private const val BACKOFF_MAX_MS = 120_000L
 

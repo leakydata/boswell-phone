@@ -28,6 +28,9 @@ object OmiUuids {
     val HARDWARE: UUID = UUID.fromString("00002a27-0000-1000-8000-00805f9b34fb")
     val MAKER: UUID = UUID.fromString("00002a29-0000-1000-8000-00805f9b34fb")
 
+    /** The button: notifies [event:u32 LE, ...]; 1 tap, 2 double tap, 3 long press (which powers the Omi off), 4 press, 5 release. */
+    val BUTTON: UUID = UUID.fromString("23ba7925-0000-1000-7450-346eac492e92")
+
     val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     /** Codec ids are numbered by frame length: 20 = Opus 10 ms, 21 = Opus 20 ms (CV 1). */

@@ -31,6 +31,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -181,6 +182,65 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                     Text("Android may stop recording to save battery. Allow Boswell to run unrestricted so it keeps listening all day.",
                         style = MaterialTheme.typography.bodyMedium)
                     Button(onClick = { ctx.startActivity(vm.batteryExemptionIntent()); vm.refreshStorage() }) { Text("Allow") }
+                }
+            }
+        }
+
+        item {
+            Section("Assistant") {
+                val ctx2 = LocalContext.current
+                var keyText by remember { mutableStateOf("") }
+                var hasKey by remember { mutableStateOf(net.boswell.phone.assistant.Secrets.has(ctx2, net.boswell.phone.assistant.Secrets.OPENROUTER)) }
+                var model by remember { mutableStateOf(net.boswell.phone.assistant.AssistantPrefs.model(ctx2)) }
+                var voice by remember { mutableStateOf(net.boswell.phone.assistant.AssistantPrefs.voice(ctx2)) }
+                var watcher by remember { mutableStateOf(net.boswell.phone.assistant.AssistantPrefs.watcher(ctx2)) }
+                var budget by remember { mutableStateOf(net.boswell.phone.assistant.AssistantPrefs.budget(ctx2).toFloat()) }
+                var dbl by remember { mutableStateOf(net.boswell.phone.assistant.AssistantPrefs.doubleTap(ctx2)) }
+                val owner = net.boswell.phone.assistant.AssistantPrefs.owner(ctx2)
+                val ownerName = ui.people.firstOrNull { it.id == owner }?.name
+                Text("Questions and hints go to a model through OpenRouter as text; audio never leaves the phone.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (hasKey) Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("OpenRouter key saved", Modifier.weight(1f), color = MaterialTheme.colorScheme.primary)
+                    TextButton(onClick = { net.boswell.phone.assistant.Secrets.put(ctx2, net.boswell.phone.assistant.Secrets.OPENROUTER, null); hasKey = false }) { Text("Remove") }
+                } else Row(verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.material3.OutlinedTextField(value = keyText, onValueChange = { keyText = it }, singleLine = true,
+                        label = { Text("OpenRouter API key") }, modifier = Modifier.weight(1f),
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation())
+                    TextButton(enabled = keyText.isNotBlank(), onClick = {
+                        net.boswell.phone.assistant.Secrets.put(ctx2, net.boswell.phone.assistant.Secrets.OPENROUTER, keyText); keyText = ""; hasKey = true
+                    }) { Text("Save") }
+                }
+                androidx.compose.material3.OutlinedTextField(value = model, onValueChange = { model = it; net.boswell.phone.assistant.AssistantPrefs.setModel(ctx2, it) },
+                    singleLine = true, label = { Text("Model") }, modifier = Modifier.fillMaxWidth())
+                Row2("Me", ownerName ?: "not set · open yourself in People and tap \"This is me\"")
+                Row2("Omi button", when (cap.buttonReady) { true -> "ready · tap to ask"; false -> "not available on this connection"; null -> "connect in Live mode" })
+                Text("Double tap", style = MaterialTheme.typography.bodyMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (d in net.boswell.phone.assistant.AssistantPrefs.DoubleTap.entries) FilterChip(selected = dbl == d,
+                        onClick = { dbl = d; net.boswell.phone.assistant.AssistantPrefs.setDoubleTap(ctx2, d) },
+                        label = { Text(if (d == net.boswell.phone.assistant.AssistantPrefs.DoubleTap.BOOKMARK) "Bookmark the moment" else "Summarize last 10 min") })
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Speak answers", style = MaterialTheme.typography.bodyLarge)
+                        Text("Read answers aloud as well as showing them.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(checked = voice, onCheckedChange = { voice = it; net.boswell.phone.assistant.AssistantPrefs.setVoice(ctx2, it) })
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Listen along (live mode)", style = MaterialTheme.typography.bodyLarge)
+                        Text("Every couple of minutes, if you've said something, it may send one short hint. Needs \"Me\" set.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(checked = watcher, onCheckedChange = { watcher = it; net.boswell.phone.assistant.AssistantPrefs.setWatcher(ctx2, it) })
+                }
+                if (watcher) {
+                    Text("Daily budget for hints: $%.2f".format(budget), style = MaterialTheme.typography.bodyMedium)
+                    androidx.compose.material3.Slider(value = budget, onValueChange = { budget = (it * 20).toInt() / 20f },
+                        onValueChangeFinished = { net.boswell.phone.assistant.AssistantPrefs.setBudget(ctx2, budget.toDouble()) },
+                        valueRange = 0.05f..3f)
                 }
             }
         }

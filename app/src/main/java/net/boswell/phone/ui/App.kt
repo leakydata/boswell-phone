@@ -1,6 +1,7 @@
 package net.boswell.phone.ui
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.DateRange
@@ -26,12 +27,13 @@ private data class Tab(val route: String, val label: String, val icon: ImageVect
 
 private val tabs = listOf(
     Tab("today", "Today", Icons.Filled.DateRange),
+    Tab("ask", "Ask", Icons.AutoMirrored.Filled.Send),
     Tab("people", "People", Icons.Filled.Person),
     Tab("device", "Device", Icons.Filled.Settings),
 )
 
 @Composable
-fun BoswellApp(device: MainViewModel) {
+fun BoswellApp(device: MainViewModel, startTab: String? = null) {
     val nav = rememberNavController()
     val archive: ArchiveViewModel = viewModel()
     val ui by device.ui.collectAsStateWithLifecycle()
@@ -40,6 +42,7 @@ fun BoswellApp(device: MainViewModel) {
     val route = entry?.destination?.route
     val onTab = tabs.any { it.route == route }
 
+    androidx.compose.runtime.LaunchedEffect(startTab) { if (startTab == "ask") nav.navigate("ask") }
     fun openConversation(id: Long, line: Long? = null) = nav.navigate("conversation/$id?line=${line ?: -1}")
     fun go(tab: String) = nav.navigate(tab) {
         popUpTo(nav.graph.findStartDestination().id) { saveState = true }
@@ -64,6 +67,7 @@ fun BoswellApp(device: MainViewModel) {
             composable("people") {
                 PeopleScreen(archive, pad, onPerson = { nav.navigate("person/$it") }, onOpenConversation = { openConversation(it) })
             }
+            composable("ask") { AskScreen(pad, onSetup = { go("device") }) }
             composable("device") {
                 val activity = androidx.compose.ui.platform.LocalContext.current as android.app.Activity
                 val launcher = androidx.activity.compose.rememberLauncherForActivityResult(

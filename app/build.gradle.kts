@@ -10,7 +10,7 @@ plugins {
 
 android {
     // Lets a -Dparity.* property reach the parity test (see OpusParityTest).
-    testOptions.unitTests.all { t -> System.getProperties().filterKeys { (it as String).startsWith("parity.") || (it as String).startsWith("diar.") }.forEach { (k, v) -> t.systemProperty(k as String, v) } }
+    testOptions.unitTests.all { t -> System.getProperties().filterKeys { (it as String).startsWith("parity.") || (it as String).startsWith("diar.") || (it as String).startsWith("llm.") }.forEach { (k, v) -> t.systemProperty(k as String, v) } }
 
     namespace = "net.boswell.phone"
     // android-37.1 is what the SDK has installed; AndroidX 2026.09 needs 37.

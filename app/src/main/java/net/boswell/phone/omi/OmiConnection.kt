@@ -40,6 +40,7 @@ class OmiConnection(
     private val context: Context,
     private val device: BluetoothDevice,
     private val onAudio: (ByteArray) -> Unit,
+    private val onButton: (Int) -> Unit = {},
 ) {
     private val opLock = Mutex()
     @Volatile private var pending: CompletableDeferred<Any?>? = null
@@ -92,6 +93,9 @@ class OmiConnection(
             when (c.uuid) {
                 OmiUuids.AUDIO -> onAudio(value)
                 OmiUuids.STORAGE -> storageMessages.trySend(value)
+                OmiUuids.BUTTON -> if (value.size >= 4) onButton(
+                    (value[0].toInt() and 0xff) or ((value[1].toInt() and 0xff) shl 8) or
+                        ((value[2].toInt() and 0xff) shl 16) or ((value[3].toInt() and 0xff) shl 24))
             }
         }
     }

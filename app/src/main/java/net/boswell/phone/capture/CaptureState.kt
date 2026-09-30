@@ -58,6 +58,10 @@ data class CaptureState(
     val lastAudioMillis: Long? = null,
     val nextRetryMillis: Long? = null,
     val sync: SyncStatus? = null,
+    /** listening | thinking while a button question is in flight. */
+    val asking: String? = null,
+    /** Whether the Omi accepted a button subscription this session (null: not tried). */
+    val buttonReady: Boolean? = null,
     val log: List<String> = emptyList(),
 )
 

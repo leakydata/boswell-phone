@@ -156,6 +156,19 @@ fun PersonScreen(vm: ArchiveViewModel, id: Long, onBack: () -> Unit, onOpen: (Lo
                     }
                 }
             }
+            if (p?.name != null) item {
+                val ctx = androidx.compose.ui.platform.LocalContext.current
+                var me by remember(p.id) { mutableStateOf(net.boswell.phone.assistant.AssistantPrefs.owner(ctx) == p.id) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("This is me", style = MaterialTheme.typography.bodyLarge)
+                        Text("The assistant listens for your voice and answers you.", style = MaterialTheme.typography.bodySmall)
+                    }
+                    androidx.compose.material3.Switch(checked = me, onCheckedChange = {
+                        me = it; net.boswell.phone.assistant.AssistantPrefs.setOwner(ctx, if (it) p.id else null)
+                    })
+                }
+            }
             item { Text("Conversations", style = MaterialTheme.typography.titleMedium) }
             items(s.conversations, key = { it.id }) { c ->
                 Card(onClick = { onOpen(c.id) }, modifier = Modifier.fillMaxWidth()) {

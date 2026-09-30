@@ -24,7 +24,7 @@ class MainActivity : ComponentActivity() {
                 Manifest.permission.POST_NOTIFICATIONS,
             )
         )
-        setContent { BoswellTheme { BoswellApp(vm) } }
+        setContent { BoswellTheme { BoswellApp(vm, intent?.getStringExtra("open")) } }
     }
 
     override fun onResume() {
