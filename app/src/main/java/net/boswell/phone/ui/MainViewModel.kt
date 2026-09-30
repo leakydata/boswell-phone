@@ -141,6 +141,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(scanning = false) }
     }
 
+    /** Remember this Omi without starting anything (setup picks the mode next). */
+    fun chooseOnly(address: String) {
+        stopScan()
+        prefs.edit().putString(KEY_ADDRESS, address).apply()
+        _ui.update { it.copy(savedAddress = address, found = emptyList()) }
+    }
+
     fun choose(address: String) {
         stopScan()
         prefs.edit().putString(KEY_ADDRESS, address).apply()

@@ -13,6 +13,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -52,6 +53,23 @@ fun BoswellApp(device: MainViewModel, startTab: String? = null) {
         restoreState = true
     }
 
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val activity = ctx as android.app.Activity
+    val pairLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult()) { device.refreshSync(activity) }
+    val pair: () -> Unit = {
+        ui.savedAddress?.let { address ->
+            net.boswell.phone.sync.OmiCompanion.pair(activity, address,
+                launch = { sender -> pairLauncher.launch(androidx.activity.result.IntentSenderRequest.Builder(sender).build()) },
+                done = { err -> if (err != null) net.boswell.phone.capture.CaptureRepository.log("pairing: $err"); device.refreshSync(activity) })
+        }
+    }
+    var setupDone by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(net.boswell.phone.setup.Setup.done(ctx)) }
+    if (!setupDone) {
+        net.boswell.phone.setup.SetupScreen(device, onPair = pair, onFinish = { setupDone = true; archive.refresh(force = true) })
+        return
+    }
+
     Scaffold(bottomBar = {
         if (onTab) NavigationBar {
             for (t in tabs) NavigationBarItem(
@@ -79,15 +97,8 @@ fun BoswellApp(device: MainViewModel, startTab: String? = null) {
                     onOpen = { openConversation(it) })
             }
             composable("device") {
-                val activity = androidx.compose.ui.platform.LocalContext.current as android.app.Activity
-                val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
-                    androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult()) { device.refreshSync(activity) }
-                DeviceScreen(ui, cap, device, pad, onTriggers = { nav.navigate("triggers") }, onUsage = { nav.navigate("usage") }, onPair = {
-                    val address = ui.savedAddress ?: return@DeviceScreen
-                    net.boswell.phone.sync.OmiCompanion.pair(activity, address,
-                        launch = { sender -> launcher.launch(androidx.activity.result.IntentSenderRequest.Builder(sender).build()) },
-                        done = { err -> if (err != null) net.boswell.phone.capture.CaptureRepository.log("pairing: $err"); device.refreshSync(activity) })
-                })
+                DeviceScreen(ui, cap, device, pad, onTriggers = { nav.navigate("triggers") }, onUsage = { nav.navigate("usage") },
+                    onPair = pair, onSetup = { net.boswell.phone.setup.Setup.setDone(ctx, false); setupDone = false })
             }
             composable(
                 "conversation/{id}?line={line}",

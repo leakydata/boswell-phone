@@ -90,7 +90,7 @@ private fun Section(title: String, content: @Composable () -> Unit) {
 
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: PaddingValues, onTriggers: () -> Unit, onUsage: () -> Unit, onPair: () -> Unit) {
+fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: PaddingValues, onTriggers: () -> Unit, onUsage: () -> Unit, onPair: () -> Unit, onSetup: () -> Unit = {}) {
     val ctx = LocalContext.current
     val progress by ModelProgressRepository.state.collectAsStateWithLifecycle()
     var confirmClean by remember { mutableStateOf(false) }
@@ -389,7 +389,10 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                 Row2("Frames · unusable", "${cap.frames} · ${cap.dropped}")
                 Row2("Clips this session", "${cap.clipsWritten}")
                 Row2("Device restarts seen", "${cap.reboots}")
-                TextButton(onClick = { showLog = !showLog }) { Text(if (showLog) "Hide log" else "Show log") }
+                Row {
+                    TextButton(onClick = { showLog = !showLog }) { Text(if (showLog) "Hide log" else "Show log") }
+                    TextButton(onClick = onSetup) { Text("Run setup again") }
+                }
             }
         }
         if (showLog) items(cap.log.asReversed().take(80)) { line ->
