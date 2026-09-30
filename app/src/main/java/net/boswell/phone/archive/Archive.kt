@@ -234,6 +234,23 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
         buildList { while (c.moveToNext()) add(c.getString(0)) }
     }
 
+    /**
+     * When one voice speaks in one clip, as (start, end) seconds into the clip:
+     * its lines, with pauses under [joinGap] closed so a sentence plays whole.
+     */
+    fun spansOf(clip: String, label: String, joinGap: Double = 0.6): List<Pair<Double, Double>> {
+        val raw = readableDatabase.rawQuery("SELECT offset, t1 - t0 FROM lines WHERE clip = ? AND label = ? ORDER BY t0", arrayOf(clip, label)).use { c ->
+            buildList { while (c.moveToNext()) add(c.getDouble(0) to c.getDouble(0) + c.getDouble(1)) }
+        }
+        val out = mutableListOf<Pair<Double, Double>>()
+        for (s in raw) {
+            val last = out.lastOrNull()
+            if (last != null && s.first - last.second <= joinGap) out[out.lastIndex] = last.first to maxOf(last.second, s.second)
+            else out += s
+        }
+        return out
+    }
+
     fun days(): List<Pair<LocalDate, Int>> = readableDatabase.rawQuery(
         "SELECT day, COUNT(*) FROM conversations GROUP BY day ORDER BY day DESC", null).use { c ->
         buildList { while (c.moveToNext()) add(LocalDate.parse(c.getString(0)) to c.getInt(1)) }

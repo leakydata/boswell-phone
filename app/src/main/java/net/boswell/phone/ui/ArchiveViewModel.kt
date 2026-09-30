@@ -59,6 +59,9 @@ data class PeopleState(val queue: List<Person> = emptyList(), val named: List<Pe
 
 data class PersonState(val person: Person? = null, val conversations: List<Conversation> = emptyList(), val groups: List<VoiceGroup> = emptyList())
 
+/** A little air either side of a voice's part, so words aren't clipped. */
+private const val PAD_S = 0.15
+
 class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     private val archive = Archive(app)
     private val speakers = SpeakerStore(app)
@@ -476,7 +479,45 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     private val _playingClip = MutableStateFlow<String?>(null)
     val playingClip: StateFlow<String?> = _playingClip.asStateFlow()
 
+    private var voicePlayer: ExoPlayer? = null
+
+    /**
+     * Play only what one voice said in a clip, its parts back to back, so the
+     * question "is this you?" is answered by the voice itself rather than by
+     * whoever else talks first. Falls back to the whole clip without lines.
+     */
+    fun toggleVoice(clip: String, label: String) {
+        val key = "$clip|$label"
+        val wasPlaying = _playingClip.value == key
+        clipPlayer?.release(); clipPlayer = null
+        voicePlayer?.release(); voicePlayer = null
+        _playingClip.value = null
+        if (wasPlaying) return
+        val f = File(CaptureService.clipsDir(getApplication()), clip)
+        if (!f.exists()) return
+        val spans = archive.spansOf(clip, label)
+        android.util.Log.i("Boswell", "playing $label of $clip: " + spans.joinToString { "%.1f-%.1f s".format(it.first, it.second) })
+        if (spans.isEmpty()) { toggleClip(clip); return }
+        val uri = f.toURI().toString()
+        voicePlayer = ExoPlayer.Builder(getApplication()).build().apply {
+            setMediaItems(spans.map { (a, b) ->
+                MediaItem.Builder().setUri(uri).setClippingConfiguration(MediaItem.ClippingConfiguration.Builder()
+                    .setStartPositionMs(((a - PAD_S).coerceAtLeast(0.0) * 1000).toLong())
+                    .setEndPositionMs(((b + PAD_S) * 1000).toLong()).build()).build()
+            })
+            addListener(object : Player.Listener {
+                override fun onPlaybackStateChanged(state: Int) {
+                    if (state == Player.STATE_ENDED) android.util.Log.i("Boswell", "finished $label of $clip")
+                    if (state == Player.STATE_ENDED && _playingClip.value == key) _playingClip.value = null
+                }
+            })
+            prepare(); play()
+        }
+        _playingClip.value = key
+    }
+
     fun toggleClip(name: String) {
+        voicePlayer?.release(); voicePlayer = null
         clipPlayer?.release(); clipPlayer = null
         if (_playingClip.value == name) { _playingClip.value = null; return }
         val f = File(CaptureService.clipsDir(getApplication()), name)
@@ -497,6 +538,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     override fun onCleared() {
         releasePlayer()
         clipPlayer?.release()
+        voicePlayer?.release()
         speakers.close()
         archive.close()
     }

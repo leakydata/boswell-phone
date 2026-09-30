@@ -85,8 +85,8 @@ fun ReviewScreen(vm: ArchiveViewModel, onBack: () -> Unit) {
                         if (item.said.isNotBlank()) Text("“${item.said}”", maxLines = 3, overflow = TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.bodyMedium)
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(onClick = { vm.toggleClip(s.clip) }) {
-                                Icon(if (playing == s.clip) Icons.Filled.PauseBars else Icons.Filled.PlayArrow, "play")
+                            IconButton(onClick = { vm.toggleVoice(s.clip, s.label) }) {
+                                Icon(if (playing == "${s.clip}|${s.label}") Icons.Filled.PauseBars else Icons.Filled.PlayArrow, "play this voice")
                             }
                             Spacer(Modifier.weight(1f))
                             if (s.clusterId != null) androidx.compose.material3.TextButton(onClick = { vm.reviewIsMedia(item) }) { Text("It's TV") }
