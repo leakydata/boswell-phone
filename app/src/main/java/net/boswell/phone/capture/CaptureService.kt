@@ -472,7 +472,8 @@ class CaptureService : LifecycleService() {
             }
             CaptureRepository.log("sync: $text")
             if (clips > 0) net.boswell.phone.process.ProcessingWorker.enqueue(this@CaptureService)
-            r = VisitResult(text, failed = false, emptied = outcome.waiting == 0L || outcome.took >= outcome.waiting)
+            r = VisitResult(text, failed = outcome.stoppedEarly != null && outcome.took == 0L,
+                emptied = outcome.waiting == 0L || outcome.took >= outcome.waiting)
         } catch (e: CancellationException) {
             if (!currentCoroutineContext().isActive) throw e
             r = VisitResult("could not reach the Omi (${e.message})", failed = true, emptied = false)
@@ -511,25 +512,36 @@ class CaptureService : LifecycleService() {
      * once each time it goes on the charger, then back to live.
      */
     @Volatile private var drainedThisCharge = false
+    /** After a drain that couldn't finish (a weak link), when to try again during the same charge. */
+    @Volatile private var drainRetryAt = 0L
 
     private class OnCharger : Exception("on the charger")
 
     private fun checkCharger() {
         val charging = CaptureRepository.state.value.charging?.value ?: return
-        if (!charging) { drainedThisCharge = false; return }
-        if (!drainedThisCharge && net.boswell.phone.sync.Modes.syncOnCharger(this)) throw OnCharger()
+        if (!charging) { drainedThisCharge = false; drainRetryAt = 0L; return }
+        if (!drainedThisCharge && System.currentTimeMillis() >= drainRetryAt &&
+            net.boswell.phone.sync.Modes.syncOnCharger(this)) throw OnCharger()
     }
 
     private suspend fun drainOnCharger(address: String) {
         CaptureRepository.log("on the charger: collecting what the Omi stored")
         notify("On the charger · collecting stored audio")
+        // Failures in a row, not in total: a weak link that drops now and then
+        // still makes progress between drops.
         var fails = 0
+        var emptied = false
         while (currentCoroutineContext().isActive) {
             val r = syncVisit(address)
-            if (r.failed) { if (++fails >= 2) break; delay(5_000); continue }
-            if (r.emptied) break
+            if (r.emptied) { emptied = true; break }
+            if (r.failed) { if (++fails >= 3) break; delay(5_000L * fails); continue }
+            fails = 0
         }
-        drainedThisCharge = true
+        if (emptied) drainedThisCharge = true
+        else {
+            drainRetryAt = System.currentTimeMillis() + DRAIN_RETRY_MS
+            CaptureRepository.log("on the charger: couldn't finish; trying again in ${DRAIN_RETRY_MS / 60_000} min")
+        }
         net.boswell.phone.sync.Modes.recordSync(this, "on the charger")
     }
 
@@ -574,6 +586,7 @@ class CaptureService : LifecycleService() {
         /** The mic sleeps after ~3 s of quiet (OMI_VAD_HOLD_MS); a gap longer than that is a pause. */
         private const val PAUSE_CLOSES_CLIP_MS = 4_000L
         private const val LINK_CHECK_SECONDS = 30
+        private const val DRAIN_RETRY_MS = 5 * 60_000L
         private const val LISTENING_ID = 77
         private const val BACKOFF_MIN_MS = 5_000L
         private const val BACKOFF_MAX_MS = 120_000L
