@@ -45,6 +45,17 @@ object Enrollment {
      * Turn what was heard into the owner: a named person with this voiceprint
      * as a hand-made reference, marked "me". Returns the person id, or an error.
      */
+    /** Make [name] a person and "me", with or without a voiceprint yet. */
+    fun claimName(context: Context, name: String): Long {
+        val store = SpeakerStore(context)
+        try {
+            val id = store.people().firstOrNull { it.name.equals(name.trim(), ignoreCase = true) }?.id
+                ?: store.newPerson(name.trim())
+            net.boswell.phone.assistant.AssistantPrefs.setOwner(context, id)
+            return id
+        } finally { store.close() }
+    }
+
     fun finish(context: Context, name: String): Result<Long> = runCatching {
         val audio = synchronized(frames) {
             val out = FloatArray(frames.sumOf { it.size }); var o = 0
@@ -57,12 +68,10 @@ object Enrollment {
         val vp = OrtModels(models.path(ModelCatalog.SEGMENTATION, ".onnx"), models.path(ModelCatalog.VOICEPRINT, "voiceprint.onnx")).use { it.voiceprint(audio) }
             ?: error("couldn't make a voiceprint from that audio")
         require(Matching.usable(vp)) { "couldn't make a voiceprint from that audio" }
+        val id = claimName(context, name)
         val store = SpeakerStore(context)
-        try {
-            val id = store.people().firstOrNull { it.name.equals(name, ignoreCase = true) }?.id ?: store.newPerson(name.trim())
-            store.addVoiceprint(id, vp, audio.size / 16_000.0, "enrollment", null, "manual")
-            net.boswell.phone.assistant.AssistantPrefs.setOwner(context, id)
-            id
-        } finally { store.close() }
+        try { store.addVoiceprint(id, vp, audio.size / 16_000.0, "enrollment", null, "manual") } finally { store.close() }
+        net.boswell.phone.capture.CaptureRepository.log("learned the voice of $name (%.0f s)".format(audio.size / 16_000.0))
+        id
     }
 }

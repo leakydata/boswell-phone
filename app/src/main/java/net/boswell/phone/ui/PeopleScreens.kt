@@ -44,7 +44,7 @@ import net.boswell.phone.speakers.Person
 private fun Person.asVoice() = Voice("p$id", name ?: if (kind == "media") "TV / media" else "Unknown voice $id", name != null, id, kind == "media")
 
 @Composable
-fun PeopleScreen(vm: ArchiveViewModel, pad: PaddingValues, onPerson: (Long) -> Unit, onOpenConversation: (Long) -> Unit) {
+fun PeopleScreen(vm: ArchiveViewModel, pad: PaddingValues, onPerson: (Long) -> Unit, onOpenConversation: (Long) -> Unit, onLearnVoice: () -> Unit = {}) {
     val s by vm.people.collectAsStateWithLifecycle()
     var naming by remember { mutableStateOf<Person?>(null) }
     LazyColumn(
@@ -52,6 +52,21 @@ fun PeopleScreen(vm: ArchiveViewModel, pad: PaddingValues, onPerson: (Long) -> U
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { Text("People", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.padding(horizontal = 16.dp)) }
+        item {
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            val owner = net.boswell.phone.assistant.AssistantPrefs.owner(ctx)
+            val me = s.named.firstOrNull { it.id == owner }
+            Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(if (me != null) "You: ${me.name}" else "Teach Boswell your voice", style = MaterialTheme.typography.titleMedium)
+                        Text(if (me != null) "${me.voiceprints} voice sample${if (me.voiceprints == 1) "" else "s"} · read a passage again to improve recognition"
+                            else "Read a short passage through your Omi so it knows which voice is you.", style = MaterialTheme.typography.bodySmall)
+                    }
+                    TextButton(onClick = onLearnVoice) { Text(if (me != null) "Improve" else "Start") }
+                }
+            }
+        }
 
         if (s.queue.isNotEmpty()) {
             item {

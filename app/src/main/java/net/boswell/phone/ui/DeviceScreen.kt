@@ -280,32 +280,7 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                         Text("Show calendar events in To-do", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
                         Switch(checked = showEv, onCheckedChange = { showEv = it; net.boswell.phone.todo.Calendar.setShowEvents(ctx2, it) })
                     }
-                    if (picking) {
-                        val cals = remember { net.boswell.phone.todo.Calendar.calendars(ctx2).filter { it.writable }.sortedWith(compareBy({ !it.visible }, { it.account }, { it.name })) }
-                        androidx.compose.material3.AlertDialog(
-                            onDismissRequest = { picking = false },
-                            title = { Text("Add events to…") },
-                            text = {
-                                androidx.compose.foundation.lazy.LazyColumn {
-                                    items(cals.size) { i ->
-                                        val c = cals[i]
-                                        Row(Modifier.fillMaxWidth().clickable {
-                                            net.boswell.phone.todo.Calendar.choose(ctx2, c.id); chosen = c; picking = false
-                                        }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                                            androidx.compose.foundation.layout.Box(Modifier.padding(end = 12.dp).size(14.dp)
-                                                .clip(androidx.compose.foundation.shape.CircleShape).background(androidx.compose.ui.graphics.Color(c.color)))
-                                            Column(Modifier.weight(1f)) {
-                                                Text(c.name + if (!c.visible) " (hidden)" else "")
-                                                Text(c.account, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                            }
-                                            if (chosen?.id == c.id) Text("✓", color = MaterialTheme.colorScheme.primary)
-                                        }
-                                    }
-                                }
-                            },
-                            confirmButton = { TextButton(onClick = { picking = false }) { Text("Close") } },
-                        )
-                    }
+                    if (picking) CalendarPicker(onDismiss = { picking = false }) { c -> chosen = c; picking = false }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -313,6 +288,42 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                         Text("Read answers aloud as well as showing them.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Switch(checked = voice, onCheckedChange = { voice = it; net.boswell.phone.assistant.AssistantPrefs.setVoice(ctx2, it) })
+                }
+                if (voice) {
+                    var voices by remember { mutableStateOf<List<net.boswell.phone.assistant.AssistantNotify.VoiceOption>>(emptyList()) }
+                    var chosenVoice by remember { mutableStateOf(net.boswell.phone.assistant.AssistantPrefs.ttsVoice(ctx2)) }
+                    var pickingVoice by remember { mutableStateOf(false) }
+                    LaunchedEffect(Unit) { net.boswell.phone.assistant.AssistantNotify.voices(ctx2) { voices = it } }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Voice: " + (voices.firstOrNull { it.name == chosenVoice }?.label ?: "system default"), Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyMedium)
+                        TextButton(onClick = { pickingVoice = true }, enabled = voices.isNotEmpty()) { Text("Choose") }
+                    }
+                    if (pickingVoice) androidx.compose.material3.AlertDialog(
+                        onDismissRequest = { pickingVoice = false },
+                        title = { Text("Answer voice") },
+                        text = {
+                            androidx.compose.foundation.lazy.LazyColumn {
+                                items(voices.size) { i ->
+                                    val v = voices[i]
+                                    Row(Modifier.fillMaxWidth().clickable {
+                                        chosenVoice = v.name; net.boswell.phone.assistant.AssistantPrefs.setTtsVoice(ctx2, v.name)
+                                    }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        androidx.compose.material3.RadioButton(selected = chosenVoice == v.name, onClick = {
+                                            chosenVoice = v.name; net.boswell.phone.assistant.AssistantPrefs.setTtsVoice(ctx2, v.name) })
+                                        Column(Modifier.weight(1f)) {
+                                            Text(v.label)
+                                            Text(if (v.offline) "on this phone" else "needs internet · slower to start", style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                        TextButton(onClick = { net.boswell.phone.assistant.AssistantNotify.speak(ctx2,
+                                            "Hi, I'm Boswell. This is how your answers will sound.", v.name) }) { Text("Preview") }
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = { TextButton(onClick = { pickingVoice = false }) { Text("Done") } },
+                    )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {

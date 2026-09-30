@@ -107,6 +107,10 @@ object AssistantPrefs {
     fun voice(c: Context) = p(c).getBoolean("voice_answers", false)
     fun setVoice(c: Context, on: Boolean) = p(c).edit().putBoolean("voice_answers", on).apply()
 
+    /** The text-to-speech voice for spoken answers (a TextToSpeech voice name), or null for the system default. */
+    fun ttsVoice(c: Context): String? = p(c).getString("tts_voice", null)
+    fun setTtsVoice(c: Context, name: String?) = p(c).edit().putString("tts_voice", name).apply()
+
     fun watcher(c: Context) = p(c).getBoolean("watcher", false)
     fun setWatcher(c: Context, on: Boolean) = p(c).edit().putBoolean("watcher", on).apply()
 

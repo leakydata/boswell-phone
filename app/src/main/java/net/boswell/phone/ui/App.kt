@@ -65,8 +65,10 @@ fun BoswellApp(device: MainViewModel, startTab: String? = null) {
         }
     }
     var setupDone by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(net.boswell.phone.setup.Setup.done(ctx)) }
-    if (!setupDone) {
-        net.boswell.phone.setup.SetupScreen(device, onPair = pair, onFinish = { setupDone = true; archive.refresh(force = true) })
+    var learningVoice by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    if (!setupDone || learningVoice) {
+        net.boswell.phone.setup.SetupScreen(device, onPair = pair, voiceOnly = learningVoice && setupDone,
+            onFinish = { setupDone = true; learningVoice = false; archive.refresh(force = true) })
         return
     }
 
@@ -86,7 +88,8 @@ fun BoswellApp(device: MainViewModel, startTab: String? = null) {
                     onRecordings = { d -> nav.navigate("recordings/${d.toEpochDay()}") })
             }
             composable("people") {
-                PeopleScreen(archive, pad, onPerson = { nav.navigate("person/$it") }, onOpenConversation = { openConversation(it) })
+                PeopleScreen(archive, pad, onPerson = { nav.navigate("person/$it") }, onOpenConversation = { openConversation(it) },
+                    onLearnVoice = { learningVoice = true })
             }
             composable("ask") { AskScreen(pad, onSetup = { go("device") }, onUsage = { nav.navigate("usage") }) }
             composable("todo") { TodoScreen(pad) }

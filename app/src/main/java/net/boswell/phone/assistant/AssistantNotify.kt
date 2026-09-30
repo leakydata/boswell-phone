@@ -60,15 +60,44 @@ object AssistantNotify {
 
     fun cancel(c: Context, id: Int) = c.getSystemService(NotificationManager::class.java).cancel(id)
 
-    private fun speak(c: Context, text: String) {
+    fun speak(c: Context, text: String, voiceName: String? = AssistantPrefs.ttsVoice(c)) {
+        fun go(t: TextToSpeech) {
+            val v = voiceName?.let { n -> t.voices?.firstOrNull { it.name == n } }
+            if (v != null) t.voice = v else t.language = Locale.getDefault()
+            t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "boswell")
+        }
         val t = tts
-        if (t != null && ttsReady) { t.speak(text, TextToSpeech.QUEUE_ADD, null, "boswell"); return }
+        if (t != null && ttsReady) { go(t); return }
         tts = TextToSpeech(c.applicationContext) { status ->
             ttsReady = status == TextToSpeech.SUCCESS
-            if (ttsReady) {
-                tts?.language = Locale.getDefault()
-                tts?.speak(text, TextToSpeech.QUEUE_ADD, null, "boswell")
-            }
+            if (ttsReady) tts?.let(::go)
+        }
+    }
+
+    data class VoiceOption(val name: String, val label: String, val offline: Boolean)
+
+    /**
+     * The system's voices for the phone's language. Android doesn't say which
+     * voice is male or female; Google's own voices carry it in their codes, so
+     * those are labelled, and everything can be previewed.
+     */
+    fun voices(c: Context, done: (List<VoiceOption>) -> Unit) {
+        fun list(t: TextToSpeech): List<VoiceOption> {
+            val lang = Locale.getDefault()
+            return t.voices.orEmpty().filter { it.locale.language == lang.language && !it.features.contains("notInstalled") }
+                .sortedWith(compareBy({ it.isNetworkConnectionRequired }, { it.locale.country != lang.country }, { it.name }))
+                .mapIndexed { i, v ->
+                    val code = Regex("-x-([a-z]{3})").find(v.name)?.groupValues?.get(1)
+                    val gender = when (code) { "iol", "iom", "tpd" -> "male"; null -> null; else -> "female" }
+                    val region = v.locale.displayCountry.takeIf { it.isNotBlank() && v.locale.country != lang.country }?.let { " · $it" } ?: ""
+                    VoiceOption(v.name, "Voice ${i + 1}" + (gender?.let { " · $it" } ?: "") + region, !v.isNetworkConnectionRequired)
+                }
+        }
+        val t = tts
+        if (t != null && ttsReady) { done(list(t)); return }
+        tts = TextToSpeech(c.applicationContext) { status ->
+            ttsReady = status == TextToSpeech.SUCCESS
+            done(if (ttsReady) tts?.let(::list).orEmpty() else emptyList())
         }
     }
 }

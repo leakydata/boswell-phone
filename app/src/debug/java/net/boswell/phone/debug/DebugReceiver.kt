@@ -41,6 +41,7 @@ class DebugReceiver : BroadcastReceiver() {
                 val pending = goAsync()
                 Thread { try { net.boswell.phone.process.ClipActions.editLine(context, clip, start, text); android.util.Log.i("Boswell", "debug edited $clip") } finally { pending.finish() } }.start()
             }
+            "net.boswell.phone.debug.CAL_REFRESH" -> { net.boswell.phone.todo.Calendar.refresh(context); android.util.Log.i("Boswell", "calendar refresh requested") }
             // am broadcast -a net.boswell.phone.debug.CALENDAR --el id 16
             "net.boswell.phone.debug.CALENDAR" -> {
                 net.boswell.phone.todo.Calendar.choose(context, intent.getLongExtra("id", -1).takeIf { it >= 0 })

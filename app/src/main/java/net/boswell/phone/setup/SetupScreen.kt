@@ -79,12 +79,20 @@ private const val PASSAGE = "The morning light came through the kitchen window w
  * changed later on the Device page.
  */
 @Composable
-fun SetupScreen(vm: MainViewModel, onPair: () -> Unit, onFinish: () -> Unit) {
-    var step by rememberSaveable { mutableStateOf(Step.WELCOME) }
+fun SetupScreen(vm: MainViewModel, onPair: () -> Unit, onFinish: () -> Unit, voiceOnly: Boolean = false) {
+    var step by rememberSaveable { mutableStateOf(if (voiceOnly) Step.YOU else Step.WELCOME) }
+    val ctx0 = LocalContext.current
+    var name by rememberSaveable { mutableStateOf(net.boswell.phone.assistant.AssistantPrefs.owner(ctx0)
+        ?.let { net.boswell.phone.speakers.SpeakerStore(ctx0).let { s -> try { s.nameOf(it) } finally { s.close() } } } ?: "") }
     val ui by vm.ui.collectAsStateWithLifecycle()
     val cap by vm.capture.collectAsStateWithLifecycle()
     val ctx = LocalContext.current
-    fun next() { step = Step.entries[(step.ordinal + 1).coerceAtMost(Step.entries.lastIndex)] }
+    fun next() {
+        // Leaving "who are you": the name counts even if the voice part was skipped.
+        if (step == Step.YOU && name.isNotBlank()) Enrollment.claimName(ctx, name)
+        if (voiceOnly && step == Step.YOU) { onFinish(); return }
+        step = Step.entries[(step.ordinal + 1).coerceAtMost(Step.entries.lastIndex)]
+    }
     fun back() { step = Step.entries[(step.ordinal - 1).coerceAtLeast(0)] }
 
     Surface(Modifier.fillMaxSize()) {
@@ -126,7 +134,7 @@ fun SetupScreen(vm: MainViewModel, onPair: () -> Unit, onFinish: () -> Unit) {
                         Body("You'll need Live for the next step, where Boswell learns your voice; it switches to your choice afterwards.")
                     }
                     Step.MODELS -> Models(vm, ui)
-                    Step.YOU -> You(vm, ui.mode, cap.link == Link.STREAMING, ui.savedAddress != null)
+                    Step.YOU -> You(vm, ui.mode, cap.link == Link.STREAMING, ui.savedAddress != null, name) { name = it }
                     Step.ASSISTANT -> Assistant()
                     Step.BACKGROUND -> {
                         Title("Keep it running")
@@ -144,13 +152,17 @@ fun SetupScreen(vm: MainViewModel, onPair: () -> Unit, onFinish: () -> Unit) {
                 }
             }
             Row(Modifier.fillMaxWidth().padding(vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (step != Step.WELCOME) TextButton(onClick = ::back) { Text("Back") }
+                if (step != Step.WELCOME && !voiceOnly) TextButton(onClick = ::back) { Text("Back") }
                 Spacer(Modifier.weight(1f))
                 if (step in listOf(Step.OMI, Step.MODELS, Step.YOU, Step.ASSISTANT, Step.BACKGROUND)) TextButton(onClick = ::next) { Text("Skip") }
                 Spacer(Modifier.width(8.dp))
                 Button(onClick = {
                     if (step == Step.DONE) { Setup.setDone(ctx, true); onFinish() } else next()
-                }) { Text(when (step) { Step.WELCOME -> "Get started"; Step.DONE -> "Open Boswell"; else -> "Next" }) }
+                }) { Text(when {
+                    step == Step.WELCOME -> "Get started"
+                    step == Step.DONE -> "Open Boswell"
+                    voiceOnly -> "Done"
+                    else -> "Next" }) }
             }
         }
     }
@@ -226,17 +238,16 @@ private fun Models(vm: MainViewModel, ui: net.boswell.phone.ui.UiState) {
 }
 
 @Composable
-private fun You(vm: MainViewModel, mode: Mode, streaming: Boolean, hasOmi: Boolean) {
+private fun You(vm: MainViewModel, mode: Mode, streaming: Boolean, hasOmi: Boolean, name: String, setName: (String) -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val en by Enrollment.state.collectAsStateWithLifecycle()
-    var name by rememberSaveable { mutableStateOf("") }
     var result by remember { mutableStateOf<String?>(null) }
     var enrolled by rememberSaveable { mutableStateOf(false) }
     val chosenMode = remember { mode }
     Title("Who are you?")
     Body("Boswell names the voices it knows. Tell it yours and read a short passage so it recognises you, and so the assistant knows which voice is you.")
-    OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Your name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(value = name, onValueChange = setName, label = { Text("Your name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
     if (!hasOmi) { Body("Connect an Omi first (the earlier step) to learn your voice. You can do it later from People."); return }
     val modelsReady = vm.ui.value.models.filter { it.spec.id == "voiceprint" || it.spec.id == "segmentation" }.all { it.installed }
     if (!modelsReady) { Body("Waiting for the voice model to finish downloading…"); return }
@@ -253,15 +264,26 @@ private fun You(vm: MainViewModel, mode: Mode, streaming: Boolean, hasOmi: Boole
             if (!streaming) Body("Connecting to your Omi…")
             LinearProgressIndicator(progress = { (en.heardSeconds / en.targetSeconds).toFloat().coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
             Text(if (en.active) "Heard %.0f of %.0f seconds — keep reading, at a normal pace".format(en.heardSeconds, en.targetSeconds)
-                else "Got it.", style = MaterialTheme.typography.bodyMedium)
-            if (!en.active || en.heardSeconds >= 10) Button(onClick = {
+                else "Got it, saving…", style = MaterialTheme.typography.bodyMedium)
+            var saving by remember { mutableStateOf(false) }
+            fun save() {
+                if (saving) return
+                saving = true
                 Enrollment.stop()
                 scope.launch {
                     val r = withContext(Dispatchers.IO) { Enrollment.finish(ctx, name) }
+                    saving = false
                     r.onSuccess { enrolled = true; result = null; if (chosenMode != Mode.LIVE) vm.setMode(chosenMode) }
-                        .onFailure { result = it.message; Enrollment.start() }
+                        .onFailure { result = "Couldn't save: ${it.message}. Keep reading and it will try again."
+                            net.boswell.phone.capture.CaptureRepository.log("voice enrollment failed: ${it.message}"); Enrollment.start() }
                 }
-            }) { Text("Save my voice") }
+            }
+            // Saves by itself once it has heard enough; the button is for stopping early.
+            LaunchedEffect(en.active, en.heardSeconds >= en.targetSeconds) {
+                if (!en.active && en.heardSeconds >= en.targetSeconds && !enrolled) save()
+            }
+            if (en.active && en.heardSeconds >= 10) OutlinedButton(onClick = ::save) { Text("That's enough, save it") }
+            if (saving) Text("Saving your voice…", style = MaterialTheme.typography.bodyMedium)
             result?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }
     }
@@ -294,14 +316,20 @@ private fun Assistant() {
             }
             Switch(checked = triggers, onCheckedChange = { triggers = it; Triggers.setEnabled(ctx, it) })
         }
+        var chosen by remember { mutableStateOf(net.boswell.phone.todo.Calendar.chosen(ctx)) }
+        var picking by remember { mutableStateOf(false) }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Calendar", style = MaterialTheme.typography.titleMedium)
-                Text(net.boswell.phone.todo.Calendar.chosen(ctx)?.let { "Events go to ${it.name}" }
-                    ?: if (calendarOk) "Choose which calendar on the Device page" else "Let the assistant add appointments", style = MaterialTheme.typography.bodyMedium)
+                Text(chosen?.let { "Events go to ${it.name} (${it.account})" }
+                    ?: if (calendarOk) "Choose which calendar the assistant adds events to" else "Let the assistant add appointments",
+                    style = MaterialTheme.typography.bodyMedium)
             }
             if (!calendarOk) TextButton(onClick = { calLauncher.launch(arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)) }) { Text("Allow") }
+            else TextButton(onClick = { picking = true }) { Text(if (chosen == null) "Choose" else "Change") }
         }
+        LaunchedEffect(calendarOk) { if (calendarOk && chosen == null) picking = true }
+        if (picking) net.boswell.phone.ui.CalendarPicker(onDismiss = { picking = false }) { c -> chosen = c; picking = false }
     }
     Spacer(Modifier.height(4.dp))
 }
