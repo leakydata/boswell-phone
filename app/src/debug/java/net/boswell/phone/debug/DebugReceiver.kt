@@ -47,6 +47,9 @@ class DebugReceiver : BroadcastReceiver() {
                 val st = net.boswell.phone.speakers.SpeakerStore(context)
                 try { android.util.Log.i("Boswell", "named -> ${st.name(intent.getLongExtra("id", -1), intent.getStringExtra("name") ?: return)}") } finally { st.close() }
             }
+            // am broadcast -a net.boswell.phone.debug.BATTERY --ei level 8 --ez charging false
+            "net.boswell.phone.debug.BATTERY" ->
+                net.boswell.phone.capture.BatteryWatch.omi(context, intent.getIntExtra("level", 50), intent.getBooleanExtra("charging", false))
             // am broadcast -a net.boswell.phone.debug.FEED --es clip omi_1.wav
             // Plays a recorded clip into the voice-enrollment step at real-time pace, standing in for the Omi's stream.
             "net.boswell.phone.debug.FEED" -> {

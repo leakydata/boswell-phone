@@ -18,6 +18,7 @@
                 <action android:name="net.boswell.phone.debug.CAL_REFRESH" />
                 <action android:name="net.boswell.phone.debug.NAME" />
                 <action android:name="net.boswell.phone.debug.FEED" />
+                <action android:name="net.boswell.phone.debug.BATTERY" />
             </intent-filter>
         </receiver>
     </application>

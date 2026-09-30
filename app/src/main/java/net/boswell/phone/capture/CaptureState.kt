@@ -62,8 +62,18 @@ data class CaptureState(
     val asking: String? = null,
     /** Whether the Omi accepted a button subscription this session (null: not tried). */
     val buttonReady: Boolean? = null,
+    /** The last tap (1) or double tap (2) the Omi reported, and when. */
+    val lastButton: Pair<Int, Long>? = null,
     val log: List<String> = emptyList(),
 )
+
+/**
+ * While setup's "try the button" step is showing, taps are only recorded and
+ * acknowledged with a buzz -- they don't start a question.
+ */
+object ButtonTest {
+    @Volatile var active = false
+}
 
 /** Process-wide capture state: the service writes it, the UI reads it. */
 object CaptureRepository {

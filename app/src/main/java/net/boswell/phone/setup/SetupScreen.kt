@@ -1,5 +1,7 @@
 package net.boswell.phone.setup
 
+import net.boswell.phone.capture.ButtonTest
+import androidx.compose.runtime.DisposableEffect
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -64,7 +66,7 @@ object Setup {
     fun setDone(c: Context, d: Boolean) = p(c).edit().putBoolean("setup_done", d).apply()
 }
 
-private enum class Step { WELCOME, PERMISSIONS, OMI, MODE, MODELS, YOU, ASSISTANT, BACKGROUND, DONE }
+private enum class Step { WELCOME, PERMISSIONS, OMI, MODE, MODELS, YOU, ASSISTANT, BUTTON, BACKGROUND, DONE }
 
 /** A short, neutral paragraph to read aloud: varied sounds, no names, about twenty seconds. */
 private const val PASSAGE = "The morning light came through the kitchen window while the kettle began to hum. " +
@@ -136,6 +138,7 @@ fun SetupScreen(vm: MainViewModel, onPair: () -> Unit, onFinish: () -> Unit, voi
                     Step.MODELS -> Models(vm, ui)
                     Step.YOU -> You(vm, ui.mode, cap.link == Link.STREAMING, ui.savedAddress != null, name) { name = it }
                     Step.ASSISTANT -> Assistant()
+                    Step.BUTTON -> ButtonStep(streaming = cap.link == Link.STREAMING, ready = cap.buttonReady == true, last = cap.lastButton)
                     Step.BACKGROUND -> {
                         Title("Keep it running")
                         Body("Android stops apps in the background to save battery. Allow Boswell to run unrestricted so it keeps recording and syncing all day.")
@@ -146,7 +149,7 @@ fun SetupScreen(vm: MainViewModel, onPair: () -> Unit, onFinish: () -> Unit, voi
                     Step.DONE -> {
                         Title("You're set")
                         Body("Your day appears on Today as conversations happen. People you haven't named show up in People, ready to be named.")
-                        if (ui.mode == Mode.LIVE) Body("Tap the Omi's button to ask a question; double tap to add a to-do.")
+                        if (ui.mode == Mode.LIVE) Body("Tap the Omi's button quickly to ask a question; double tap to add a to-do.")
                         Body("Everything here can be changed on the Device page.")
                     }
                 }
@@ -154,7 +157,7 @@ fun SetupScreen(vm: MainViewModel, onPair: () -> Unit, onFinish: () -> Unit, voi
             Row(Modifier.fillMaxWidth().padding(vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (step != Step.WELCOME && !voiceOnly) TextButton(onClick = ::back) { Text("Back") }
                 Spacer(Modifier.weight(1f))
-                if (step in listOf(Step.OMI, Step.MODELS, Step.YOU, Step.ASSISTANT, Step.BACKGROUND)) TextButton(onClick = ::next) { Text("Skip") }
+                if (step in listOf(Step.OMI, Step.MODELS, Step.YOU, Step.ASSISTANT, Step.BUTTON, Step.BACKGROUND)) TextButton(onClick = ::next) { Text("Skip") }
                 Spacer(Modifier.width(8.dp))
                 Button(onClick = {
                     if (step == Step.DONE) { Setup.setDone(ctx, true); onFinish() } else next()
@@ -299,6 +302,35 @@ private fun You(vm: MainViewModel, mode: Mode, streaming: Boolean, hasOmi: Boole
             if (saving) Text("Saving your voice…", style = MaterialTheme.typography.bodyMedium)
             result?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }
+    }
+}
+
+/**
+ * The Omi's firmware counts a press as a tap only if it's let go within
+ * 0.3 s (omi firmware lib/core/button.c, TAP_THRESHOLD); a firmer, longer
+ * push sends nothing at all. People push buttons deliberately, so it is
+ * practiced here, with the Omi's buzz as the confirmation, before it matters.
+ */
+@Composable
+private fun ButtonStep(streaming: Boolean, ready: Boolean, last: Pair<Int, Long>?) {
+    val shownAt = remember { System.currentTimeMillis() }
+    DisposableEffect(Unit) {
+        ButtonTest.active = true
+        onDispose { ButtonTest.active = false }
+    }
+    Title("Try the button")
+    if (!streaming || !ready) {
+        Body("The button works while the Omi is connected in Live mode. Skip this for now; you can use it once it connects.")
+        return
+    }
+    Body("The Omi counts only quick taps: press and let go right away, like tapping a key. A firm push held longer than about a third of a second is ignored.")
+    Body("Give it one quick tap now.")
+    val heard = last?.takeIf { it.second >= shownAt }
+    if (heard == null) Text("Waiting for a tap…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    else {
+        Text(if (heard.first == 2) "Double tap heard ✓" else "Tap heard ✓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+        Body("The Omi buzzes when it hears a tap. If it doesn't buzz, tap quicker.")
+        Body("One tap: ask a question, then tap again when you're done. Two quick taps: add a to-do.")
     }
 }
 

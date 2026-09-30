@@ -98,7 +98,7 @@ fun AskScreen(pad: PaddingValues, onSetup: () -> Unit, onUsage: () -> Unit = {})
                     Text("Ask", style = MaterialTheme.typography.headlineLarge)
                     Text(
                         if (!s.ready) "Add an OpenRouter key in Device → Assistant to start."
-                        else "Tap the Omi's button and ask out loud, or type below. Answers use what was said around you. " +
+                        else "Tap the Omi's button quickly (a firm push doesn't count) and ask out loud, or type below. Answers use what was said around you. " +
                             "Spent today: $%.3f · watcher budget $%.2f".format(s.spentToday, s.budget),
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

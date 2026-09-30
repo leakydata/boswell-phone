@@ -210,7 +210,9 @@ fun StatusPill(onClick: () -> Unit) {
             Box(Modifier.size(8.dp).clip(CircleShape).background(animated))
             Spacer(Modifier.width(6.dp))
             Text(label, style = MaterialTheme.typography.labelLarge)
-            cap.battery?.let { Text("  ${it.value}%", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            cap.battery?.let { Text("  ${it.value}%", style = MaterialTheme.typography.labelLarge,
+                color = if (it.value <= net.boswell.phone.capture.BatteryWatch.LOW && cap.charging?.value != true) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
 }

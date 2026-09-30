@@ -67,6 +67,10 @@
         </provider>
 
         <receiver
+            android:name=".capture.SwitchToSyncReceiver"
+            android:exported="false" />
+
+        <receiver
             android:name=".todo.TodoDoneReceiver"
             android:exported="false" />
 

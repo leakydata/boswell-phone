@@ -400,6 +400,8 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                 Row2("Frames · unusable", "${cap.frames} · ${cap.dropped}")
                 Row2("Clips this session", "${cap.clipsWritten}")
                 Row2("Device restarts seen", "${cap.reboots}")
+                Row2("Last button tap", cap.lastButton?.let { (code, at) -> (if (code == 2) "double · " else "") + ago(at) }
+                    ?: if (cap.buttonReady == true) "none yet (tap quickly)" else "not available")
                 Row {
                     TextButton(onClick = { showLog = !showLog }) { Text(if (showLog) "Hide log" else "Show log") }
                     TextButton(onClick = onSetup) { Text("Run setup again") }

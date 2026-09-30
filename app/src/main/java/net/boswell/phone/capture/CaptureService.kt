@@ -306,6 +306,8 @@ class CaptureService : LifecycleService() {
 
     private fun onButton(code: Int) {
         CaptureRepository.log("button event $code")
+        if (code == 1 || code == 2) CaptureRepository.update { it.copy(lastButton = code to System.currentTimeMillis()) }
+        if (ButtonTest.active) { if (code == 1 || code == 2) buzz(1); return }
         when (code) {
             1 -> {
                 val q = question
@@ -382,9 +384,10 @@ class CaptureService : LifecycleService() {
         val battery = if (strict) conn.read(OmiUuids.BATTERY)[0].toInt() and 0xff
         else runCatching { conn.read(OmiUuids.BATTERY)[0].toInt() and 0xff }.getOrNull()
         battery?.let { b -> CaptureRepository.update { it.copy(battery = Reading(b, now)) } }
-        runCatching { conn.read(OmiUuids.CHARGING)[0].toInt() != 0 }.getOrNull()?.let { c ->
-            CaptureRepository.update { it.copy(charging = Reading(c, now)) }
-        }
+        val charging = runCatching { conn.read(OmiUuids.CHARGING)[0].toInt() != 0 }.getOrNull()
+        charging?.let { c -> CaptureRepository.update { it.copy(charging = Reading(c, now)) } }
+        battery?.let { BatteryWatch.omi(this, it, charging) }
+        BatteryWatch.phone(this)
         runCatching { conn.rssi() }.getOrNull()?.let { r ->
             CaptureRepository.update { it.copy(rssi = Reading(r, now)) }
         }
