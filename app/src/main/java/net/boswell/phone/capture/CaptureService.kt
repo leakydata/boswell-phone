@@ -517,7 +517,7 @@ class CaptureService : LifecycleService() {
     private fun checkCharger() {
         val charging = CaptureRepository.state.value.charging?.value ?: return
         if (!charging) { drainedThisCharge = false; return }
-        if (!drainedThisCharge) throw OnCharger()
+        if (!drainedThisCharge && net.boswell.phone.sync.Modes.syncOnCharger(this)) throw OnCharger()
     }
 
     private suspend fun drainOnCharger(address: String) {

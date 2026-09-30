@@ -157,6 +157,17 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                         if (ui.companionPaired) Text("Paired for background sync: the phone visits when the Omi comes into range.",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                     }
+                    if (ui.mode == Mode.LIVE) {
+                        var onCharger by remember { mutableStateOf(net.boswell.phone.sync.Modes.syncOnCharger(ctx)) }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Sync on the charger", style = MaterialTheme.typography.bodyLarge)
+                                Text("While live, the Omi keeps what it hears out of range. When it goes on its charger, pause and download that, then go back to live.",
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Switch(checked = onCharger, onCheckedChange = { onCharger = it; net.boswell.phone.sync.Modes.setSyncOnCharger(ctx, it) })
+                        }
+                    }
                 }
                 cap.device?.let { d -> Row2("Device", "${d.model ?: "Omi"} · firmware ${d.firmware ?: "?"}") }
                     ?: ui.savedAddress?.let { Row2("Paired", it) }
