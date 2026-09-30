@@ -1,0 +1,79 @@
+{
+ "version": 1,
+ "release": "models-v1",
+ "base_url": "https://github.com/leakydata/boswell-phone/releases/download/models-v1/",
+ "models": [
+  {
+   "id": "asr-nemotron-1120",
+   "name": "Nemotron 3.5 ASR (on-device, 1120 ms, int8)",
+   "purpose": "transcription",
+   "license": "OpenMDW-1.1",
+   "source": "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b via sherpa-onnx int8 export",
+   "files": [
+    {
+     "name": "nemotron-asr-1120ms-encoder.int8.onnx",
+     "size": 657601521,
+     "sha256": "2fff2166acaa535bd969fb223c1f0783d71029f143cb298bc54c2afe85abf772"
+    },
+    {
+     "name": "nemotron-asr-1120ms-decoder.int8.onnx",
+     "size": 14978075,
+     "sha256": "19f9c98fc6d0a2c33a65a43b36fdb2e914c26c0aa9764be3aebc502a1e982fb0"
+    },
+    {
+     "name": "nemotron-asr-1120ms-joiner.int8.onnx",
+     "size": 9504438,
+     "sha256": "4101c7c679a0bc30483794b27a059e34e79232aa2068d78d51231a22c8b0d7ce"
+    },
+    {
+     "name": "nemotron-asr-1120ms-tokens.txt",
+     "size": 131440,
+     "sha256": "729cc103155bafa785f9cd45746cd41cabe97eab7182fc04d594129587958f8a"
+    },
+    {
+     "name": "LICENSE-nemotron-OpenMDW-1.1.txt",
+     "size": 2803,
+     "sha256": "565acee115c2ba4446ca445b948e5f65c3f5916abbe4f982e230babde5937142"
+    }
+   ]
+  },
+  {
+   "id": "segmentation",
+   "name": "Speaker segmentation (pyannote 3.0)",
+   "purpose": "who spoke when",
+   "license": "MIT",
+   "source": "https://huggingface.co/pyannote/segmentation-3.0 via sherpa-onnx export",
+   "files": [
+    {
+     "name": "pyannote-segmentation-3.0.onnx",
+     "size": 5992913,
+     "sha256": "220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079"
+    },
+    {
+     "name": "LICENSE-pyannote-segmentation-3.0.txt",
+     "size": 1061,
+     "sha256": "14d7016ad68e7394d6e6b78d96cc2ae431c905287b89674cfdf021e79e62b8ba"
+    }
+   ]
+  },
+  {
+   "id": "voiceprint",
+   "name": "Voiceprint (WeSpeaker ResNet34-LM, desktop-Boswell compatible)",
+   "purpose": "who they are",
+   "license": "CC-BY-4.0",
+   "source": "WeSpeaker voxceleb_resnet34_LM with pyannote's fbank in-graph (tools/export_voiceprint.py)",
+   "files": [
+    {
+     "name": "voiceprint.onnx",
+     "size": 27444655,
+     "sha256": "c06ec165624b4676ddd3b6fe79076f0925c1d4fe329d0a9f63c3650f35488a25"
+    },
+    {
+     "name": "NOTICE-voiceprint.txt",
+     "size": 716,
+     "sha256": "97f476fa70b98140c618d84059c35e97bd9a13df9e134005f2f661a8fe1c1bf5"
+    }
+   ]
+  }
+ ]
+}

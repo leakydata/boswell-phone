@@ -9,6 +9,7 @@ dependencies = [
     "onnx>=1.23.1",
     "onnxruntime>=1.30.0",
     "pyannote-audio==4.0.7",
+    "scipy>=1.18.1",
     "sherpa-onnx>=1.13.8",
     "sherpa-onnx-core>=1.13.8",
     "soundfile>=0.14.0",

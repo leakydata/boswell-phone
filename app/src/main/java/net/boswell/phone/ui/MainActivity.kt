@@ -73,7 +73,7 @@ class MainActivity : ComponentActivity() {
             MaterialTheme(colorScheme = if (dark) darkColorScheme() else lightColorScheme()) {
                 val ui by vm.ui.collectAsStateWithLifecycle()
                 val cap by vm.capture.collectAsStateWithLifecycle()
-                Screen(ui, cap, vm)
+                AppScaffold(ui, cap, vm)
             }
         }
     }
@@ -81,7 +81,7 @@ class MainActivity : ComponentActivity() {
 
 /** "12 s ago", ticking. Every device reading on screen says how old it is. */
 @Composable
-private fun ago(atMillis: Long?): String {
+internal fun ago(atMillis: Long?): String {
     val now = remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { delay(1_000); now.longValue = System.currentTimeMillis() } }
     if (atMillis == null) return "never"
@@ -110,11 +110,11 @@ private fun Row2(label: String, value: String) {
 }
 
 @Composable
-private fun Screen(ui: UiState, cap: CaptureState, vm: MainViewModel) {
+internal fun RecordScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: PaddingValues) {
     val time = remember { SimpleDateFormat("MMM d HH:mm:ss", Locale.getDefault()) }
-    Scaffold { pad ->
+    run {
         LazyColumn(
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = pad.calculateTopPadding() + 8.dp, bottom = 32.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = pad.calculateTopPadding() + 8.dp, bottom = pad.calculateBottomPadding() + 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item { Text("Boswell", style = MaterialTheme.typography.headlineMedium) }

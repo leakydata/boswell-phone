@@ -1,3 +1,7 @@
+import java.io.File
+import java.net.URI
+import java.security.MessageDigest
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -6,7 +10,7 @@ plugins {
 
 android {
     // Lets a -Dparity.* property reach the parity test (see OpusParityTest).
-    testOptions.unitTests.all { t -> System.getProperties().filterKeys { (it as String).startsWith("parity.") }.forEach { (k, v) -> t.systemProperty(k as String, v) } }
+    testOptions.unitTests.all { t -> System.getProperties().filterKeys { (it as String).startsWith("parity.") || (it as String).startsWith("diar.") }.forEach { (k, v) -> t.systemProperty(k as String, v) } }
 
     namespace = "net.boswell.phone"
     // android-37.1 is what the SDK has installed; AndroidX 2026.09 needs 37.
@@ -44,8 +48,40 @@ android {
 
     buildFeatures { compose = true }
 
+    // arm64 only (see abiFilters). sherpa's x86 build carries its own
+    // libonnxruntime.so, which would collide with onnxruntime-android's.
+    packaging {
+        jniLibs { excludes += listOf("lib/x86/**", "lib/x86_64/**", "lib/armeabi-v7a/**") }
+    }
+
     testOptions { unitTests.isReturnDefaultValues = true }
 }
+
+// sherpa-onnx (on-device ASR). The static-link build has ONNX Runtime compiled
+// into its own JNI library, so it sits beside onnxruntime-android (used for
+// segmentation and voiceprints) without two libonnxruntime.so colliding.
+// Fetched on first build and checked against a pinned hash; never committed.
+val sherpaVersion = "1.13.8"
+val sherpaSha256 = "b22c3fc1b6a45666d28892bb2f7694beeb77a8362d7ebd77c1a5431ec9435471"
+val sherpaAar = layout.projectDirectory.file("libs/sherpa-onnx-static-link-onnxruntime-$sherpaVersion.aar").asFile
+val fetchSherpa = tasks.register("fetchSherpa") {
+    val out = sherpaAar
+    val url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$sherpaVersion/${out.name}"
+    val want = sherpaSha256
+    outputs.file(out)
+    doLast {
+        fun sha(f: File) = MessageDigest.getInstance("SHA-256")
+            .digest(f.readBytes()).joinToString("") { "%02x".format(it) }
+        if (out.exists() && sha(out) == want) return@doLast
+        out.parentFile.mkdirs()
+        val tmp = File(out.path + ".part")
+        URI(url).toURL().openStream().use { i -> tmp.outputStream().use { i.copyTo(it) } }
+        val got = sha(tmp)
+        check(got == want) { "sherpa-onnx AAR hash mismatch: $got" }
+        tmp.renameTo(out)
+    }
+}
+tasks.named("preBuild") { dependsOn(fetchSherpa) }
 
 kotlin {
     jvmToolchain(21)   // installed at /usr/lib/jvm; 17 is not
@@ -66,7 +102,17 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.concentus)
+    implementation(files(sherpaAar))
+    implementation(libs.onnxruntime.android)
+    implementation(libs.androidx.work.runtime)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.onnxruntime.jvm)
+}
+
+// Unit tests run on the desktop JVM: use ONNX Runtime's desktop build there,
+// not the Android one, whose native libraries cannot load on x86_64 Linux.
+configurations.matching { it.name.endsWith("UnitTestRuntimeClasspath") }.configureEach {
+    exclude(group = "com.microsoft.onnxruntime", module = "onnxruntime-android")
 }

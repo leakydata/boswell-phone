@@ -68,6 +68,31 @@ Things learned on the device:
 `tools/omi_probe.py` counts live notifications from this machine without
 writing anything, to tell device behaviour from phone behaviour.
 
+## Milestone 2: on-phone transcripts with speakers (2026-09-30, local only)
+
+Everything runs on the phone; nothing is sent anywhere.
+
+- **Models** download on request from the `models-v1` GitHub release
+  (`tools/make_model_release.py` builds the catalog `app/src/main/assets/models.json`),
+  resume after interruption, and are checked against SHA-256. The APK ships none.
+- **Transcription:** Nemotron 3.5 ASR via the sherpa-onnx static AAR, fetched
+  and hash-checked by the `fetchSherpa` Gradle task (not committed).
+- **Diarization:** `diarize/Diarizer.kt`, pyannote's recipe in miniature --
+  segmentation-3.0 over 10 s windows every 2 s, local speakers embedded with
+  `voiceprint.onnx`, average-linkage clustering at cosine 0.60 (the desktop's
+  `SAME_VOICE`), and a per-frame vote to rebuild the timeline. The segmentation
+  ONNX matches pyannote's torch model frame for frame. Against desktop
+  pyannote 3.1 on 30 Omi clips (`tools/diarize_compare.py`): median 88%
+  speaker-time agreement, and the phone names the same person the desktop did
+  for 72% of voices the desktop had named. Most misses are voices under ~3 s.
+- **Identity:** `speakers/` ports the desktop's rules unchanged (best row per
+  person, margin between people, MATCH_HIGH 0.75, MARGIN_MIN 0.15,
+  MARGIN_STRONG 0.25, unnamed clusters at 0.75). The store starts empty.
+- **Transcripts** are saved per clip in desktop Boswell's own JSON format.
+  Organizing them into conversations is still to be decided.
+- **Speed on the Pixel 10 Pro XL:** median 3.6 s to transcribe, diarize and
+  identify a 30 s clip.
+
 Read these four files in order:
 
 | file | what it is |

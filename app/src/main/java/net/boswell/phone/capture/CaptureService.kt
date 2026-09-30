@@ -198,7 +198,10 @@ class CaptureService : LifecycleService() {
                         clipsWritten = if (written != null) it.clipsWritten + 1 else it.clipsWritten,
                     )
                 }
-                if (written != null) CaptureRepository.log("clip ${written.name}")
+                if (written != null) {
+                    CaptureRepository.log("clip ${written.name}")
+                    net.boswell.phone.process.ProcessingWorker.enqueue(this@CaptureService)
+                }
             }
         }
 
@@ -237,6 +240,7 @@ class CaptureService : LifecycleService() {
                     if (f != null) {
                         CaptureRepository.update { it.copy(clipsWritten = it.clipsWritten + 1, heldSeconds = 0.0) }
                         CaptureRepository.log("clip ${f.name} (closed by a pause)")
+                        net.boswell.phone.process.ProcessingWorker.enqueue(this@CaptureService)
                     }
                 }
 
