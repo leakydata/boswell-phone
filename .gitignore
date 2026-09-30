@@ -1,0 +1,28 @@
+# Secrets and machine-local settings
+.env
+*.env
+.claude/settings.local.json
+
+# Python (tools/ is a uv project)
+.venv/
+__pycache__/
+*.pyc
+
+# Models are downloaded, never committed (the app ships none either)
+tools/models/
+
+# Benchmark output contains real transcripts from the archive -- private
+tools/results/
+
+# Android
+.gradle/
+build/
+local.properties
+*.apk
+*.aab
+*.keystore
+*.jks
+.idea/
+captures/
+.externalNativeBuild/
+.cxx/
