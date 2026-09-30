@@ -60,7 +60,11 @@ class CaptureService : LifecycleService() {
                 startCapture(address)
             }
             ACTION_STOP -> lifecycleScope.launch { stopCapture("stopped by user"); stopSelf() }
-            ACTION_RING_INFO -> lifecycleScope.launch { refreshRing() }
+            ACTION_SYNC -> {
+                val address = intent.getStringExtra(EXTRA_ADDRESS) ?: return START_NOT_STICKY
+                goForeground("Syncing with Omi…")
+                startSync(address)
+            }
         }
         return START_NOT_STICKY
     }
@@ -295,14 +299,84 @@ class CaptureService : LifecycleService() {
         }
     }
 
-    private suspend fun refreshRing() {
-        val conn = connection ?: return CaptureRepository.log("ring info: not connected")
-        runCatching { conn.ringInfo() }
-            .onSuccess { r ->
-                CaptureRepository.update { it.copy(ring = Reading(r, System.currentTimeMillis())) }
-                CaptureRepository.log("ring: ${r.pending} packets waiting, read ${r.read} write ${r.write}")
+    /**
+     * A sync visit: connect, set the device clock (stored packets are stamped
+     * with it), download at most VISIT_SECONDS of backlog into the spool, let
+     * go, then turn the spool into clips and queue them for transcription.
+     */
+    private fun startSync(address: String) {
+        if (captureJob?.isActive == true) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            CaptureRepository.log("no Bluetooth permission"); stopSelf(); return
+        }
+        val deviceId = address.lowercase().filter { it in "0123456789abcdef" }
+        captureJob = lifecycleScope.launch {
+            var result: String
+            try {
+                // Anything a previous visit spooled but did not convert.
+                withContext(audioThread) { drainSpools(deviceId) }
+                val device = getSystemService(BluetoothManager::class.java).adapter.getRemoteDevice(address)
+                CaptureRepository.update { it.copy(link = Link.SYNCING, sync = SyncStatus(0, 0, 0.0, "connecting")) }
+                CaptureRepository.log("sync: connecting to $address")
+                val conn = OmiConnection(this@CaptureService, device) { }
+                connection = conn
+                conn.connect()
+                val info = DeviceInfo(address = address, model = readText(conn, OmiUuids.MODEL),
+                    firmware = readText(conn, OmiUuids.FIRMWARE), mtu = conn.mtu)
+                CaptureRepository.update { it.copy(device = info) }
+                readVolatile(conn)
+                CaptureRepository.state.value.deviceClockSkewSeconds?.let { skew ->
+                    if (kotlin.math.abs(skew.value) > 2) {
+                        runCatching { conn.setClock(System.currentTimeMillis() / 1000) }
+                            .onSuccess { CaptureRepository.log("set device clock (was off by ${skew.value}s)") }
+                    }
+                }
+                CaptureRepository.state.value.rssi?.let { CaptureRepository.log("sync: link ${it.value} dBm") }
+                conn.preferThroughput()
+                kotlinx.coroutines.delay(500)
+                val outcome = net.boswell.phone.sync.OmiSync(spoolDir(this@CaptureService), deviceId).visit(conn, VISIT_SECONDS,
+                    onRing = { r -> CaptureRepository.update { it.copy(ring = Reading(r, System.currentTimeMillis())) } },
+                    onProgress = { p ->
+                        CaptureRepository.update { it.copy(sync = SyncStatus(p.took, p.target, p.bytesPerSecond, "downloading")) }
+                        notify("Syncing · ${p.took * 100 / p.target.coerceAtLeast(1)}%")
+                    })
+                conn.close()
+                connection = null
+                CaptureRepository.update { it.copy(sync = SyncStatus(outcome.took, outcome.waiting, 0.0, "making clips")) }
+                val clips = withContext(audioThread) { drainSpools(deviceId) }
+                result = when {
+                    outcome.waiting == 0L -> "nothing waiting"
+                    else -> "${outcome.took} of ${outcome.waiting} packets → $clips clips" + (outcome.stoppedEarly?.let { " ($it)" } ?: "")
+                }
+                CaptureRepository.log("sync: $result")
+                if (clips > 0) net.boswell.phone.process.ProcessingWorker.enqueue(this@CaptureService)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                result = "could not reach the Omi (${e.message})"
+                CaptureRepository.log("sync: $result")
+            } finally {
+                connection?.close()
+                connection = null
             }
-            .onFailure { CaptureRepository.log("ring info failed: ${it.message}") }
+            net.boswell.phone.sync.Modes.recordSync(this@CaptureService, result)
+            CaptureRepository.update { it.copy(link = Link.IDLE, sync = null) }
+            captureJob = null
+            stopSelf()
+        }
+    }
+
+    /** Convert every spool file into clips. Returns how many clips were made. */
+    private fun drainSpools(deviceId: String): Int {
+        val dir = spoolDir(this)
+        val drainer = net.boswell.phone.sync.SpoolDrainer(clipsDir(this), deviceId)
+        var n = 0
+        for (f in dir.listFiles { x -> x.extension == "raw" }.orEmpty().sortedBy { it.name }) {
+            val r = drainer.drain(f, File(dir, "kept"))
+            n += r.clips.size
+            if (r.kept) CaptureRepository.log("spool ${f.name}: ${r.bad} frame(s) would not decode; kept the raw file")
+        }
+        return n
     }
 
     private suspend fun stopCapture(why: String) {
@@ -326,7 +400,7 @@ class CaptureService : LifecycleService() {
     companion object {
         const val ACTION_START = "net.boswell.phone.START"
         const val ACTION_STOP = "net.boswell.phone.STOP"
-        const val ACTION_RING_INFO = "net.boswell.phone.RING_INFO"
+        const val ACTION_SYNC = "net.boswell.phone.SYNC"
         const val EXTRA_ADDRESS = "address"
         private const val CHANNEL = "capture"
         private const val NOTIFICATION_ID = 1
@@ -347,7 +421,16 @@ class CaptureService : LifecycleService() {
         fun stop(context: Context) =
             context.startService(Intent(context, CaptureService::class.java).setAction(ACTION_STOP))
 
-        fun refreshRing(context: Context) =
-            context.startService(Intent(context, CaptureService::class.java).setAction(ACTION_RING_INFO))
+        /** One sync visit: download the backlog, then let the device go. */
+        fun sync(context: Context, address: String) =
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, CaptureService::class.java).setAction(ACTION_SYNC).putExtra(EXTRA_ADDRESS, address),
+            )
+
+        fun spoolDir(context: Context) = File(context.filesDir, "omi_spool").apply { mkdirs() }
+
+        /** Visits are bounded: on a weak link a full drain can take many hours, and the radio is exclusive meanwhile. */
+        private const val VISIT_SECONDS = 10 * 60L
     }
 }

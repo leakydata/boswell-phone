@@ -7,13 +7,34 @@ import java.nio.ByteOrder
  * The storage (offload) protocol. All multi-byte fields are big-endian.
  *
  * READING CONSUMES: the device advances its own read pointer as it sends, and
- * a packet handed over cannot be asked for again. This file therefore only
- * builds the ring-info query, which reads nothing. Commands that move audio
- * (0x11 read, 0x12 advance, 0x13 clear) are deliberately absent until spooling
- * to durable storage exists to receive them.
+ * a packet handed over cannot be asked for again. So everything read goes to
+ * a spool file and is fsynced before the pointer is advanced (see OmiSync),
+ * and 0x13 (clear) is deliberately not implemented at all.
+ *
+ * Never used underneath a live stream: the desktop sent a ring query one
+ * second into an audio stream and recording stopped working -- sessions
+ * connected, received no frames and dropped. Storage commands belong to sync
+ * visits, when nothing is streaming.
  */
 object Offload {
     const val CMD_RING_INFO: Byte = 0x10
+    const val CMD_READ: Byte = 0x11
+    const val CMD_ADVANCE: Byte = 0x12
+
+    /** Packets per request: large enough that round trips are not the cost, small enough that an interruption loses little. */
+    const val BATCH = 400
+
+    val STATUS = mapOf(0 to "ok", 6 to "invalid command", 9 to "storage not ready", 10 to "sequence out of range")
+
+    fun readCommand(start: Long, count: Int): ByteArray =
+        ByteBuffer.allocate(13).order(ByteOrder.BIG_ENDIAN).put(CMD_READ).putLong(start).putInt(count).array()
+
+    fun advanceCommand(seq: Long): ByteArray =
+        ByteBuffer.allocate(9).order(ByteOrder.BIG_ENDIAN).put(CMD_ADVANCE).putLong(seq).array()
+
+    /** 0x04 status:u8 next:u64 */
+    fun parseDone(d: ByteArray): Pair<Int, Long>? =
+        if (d.size >= 10 && d[0] == MSG_DONE) (d[1].toInt() and 0xff) to ByteBuffer.wrap(d, 2, 8).order(ByteOrder.BIG_ENDIAN).long else null
 
     const val MSG_ACK: Byte = 0x01
     const val MSG_INFO: Byte = 0x02

@@ -68,6 +68,11 @@ data class UiState(
     val usage: net.boswell.phone.archive.Archive.Usage? = null,
     val autoClean: Boolean = false,
     val batteryExempt: Boolean = true,
+    val mode: net.boswell.phone.sync.Mode = net.boswell.phone.sync.Mode.OFF,
+    val syncMinutes: Int = 60,
+    val lastSync: Long = 0,
+    val lastSyncResult: String? = null,
+    val companionPaired: Boolean = false,
 )
 
 @SuppressLint("MissingPermission")   // the activity requests permissions before any of this runs
@@ -95,6 +100,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refreshAll() {
+        refreshSync()
         refreshModels()
         refreshClips()
         refreshPeople()
@@ -139,18 +145,61 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         stopScan()
         prefs.edit().putString(KEY_ADDRESS, address).apply()
         _ui.update { it.copy(savedAddress = address, found = emptyList()) }
-        connect()
+        if (_ui.value.mode == net.boswell.phone.sync.Mode.OFF) setMode(net.boswell.phone.sync.Mode.LIVE) else setMode(_ui.value.mode)
     }
 
-    fun connect() {
-        val address = _ui.value.savedAddress ?: return
-        prefs.edit().putBoolean(net.boswell.phone.capture.BootReceiver.KEEP_RECORDING, true).apply()
-        CaptureService.start(getApplication(), address)
+    /**
+     * Off, Sync or Live. Switching tears down whatever the old mode was doing
+     * before starting the new one: the radio is exclusive.
+     */
+    fun setMode(m: net.boswell.phone.sync.Mode) {
+        val ctx = getApplication<Application>()
+        val address = _ui.value.savedAddress
+        net.boswell.phone.sync.Modes.setMode(ctx, m)
+        when (m) {
+            net.boswell.phone.sync.Mode.OFF -> {
+                net.boswell.phone.sync.SyncWorker.cancel(ctx)
+                CaptureService.stop(ctx)
+            }
+            net.boswell.phone.sync.Mode.LIVE -> {
+                net.boswell.phone.sync.SyncWorker.cancel(ctx)
+                address?.let { CaptureService.start(ctx, it) }
+            }
+            net.boswell.phone.sync.Mode.SYNC -> {
+                CaptureService.stop(ctx)
+                net.boswell.phone.sync.SyncWorker.schedule(ctx)
+                address?.let { a -> viewModelScope.launch { delay(1_500); CaptureService.sync(ctx, a) } }
+            }
+        }
+        refreshSync()
     }
 
-    fun disconnect() {
-        prefs.edit().putBoolean(net.boswell.phone.capture.BootReceiver.KEEP_RECORDING, false).apply()
-        CaptureService.stop(getApplication())
+    fun connect() = setMode(net.boswell.phone.sync.Mode.LIVE)
+
+    fun disconnect() = setMode(net.boswell.phone.sync.Mode.OFF)
+
+    fun syncNow() {
+        val a = _ui.value.savedAddress ?: return
+        CaptureService.sync(getApplication(), a)
+    }
+
+    fun setSyncMinutes(m: Int) {
+        net.boswell.phone.sync.Modes.setSyncMinutes(getApplication(), m)
+        if (_ui.value.mode == net.boswell.phone.sync.Mode.SYNC) net.boswell.phone.sync.SyncWorker.schedule(getApplication())
+        refreshSync()
+    }
+
+    fun refreshSync(activity: android.app.Activity? = null) {
+        val ctx = getApplication<Application>()
+        _ui.update {
+            it.copy(
+                mode = net.boswell.phone.sync.Modes.mode(ctx),
+                syncMinutes = net.boswell.phone.sync.Modes.syncMinutes(ctx),
+                lastSync = net.boswell.phone.sync.Modes.lastSync(ctx),
+                lastSyncResult = net.boswell.phone.sync.Modes.lastSyncResult(ctx),
+                companionPaired = activity?.let { a -> net.boswell.phone.sync.OmiCompanion.isPaired(a) } ?: it.companionPaired,
+            )
+        }
     }
 
     // --- Storage and reliability ---------------------------------------------
@@ -188,7 +237,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
             android.net.Uri.parse("package:" + getApplication<Application>().packageName))
 
-    fun refreshRing() = CaptureService.refreshRing(getApplication())
 
     fun forget() {
         disconnect()

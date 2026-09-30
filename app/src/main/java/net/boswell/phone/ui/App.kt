@@ -64,7 +64,17 @@ fun BoswellApp(device: MainViewModel) {
             composable("people") {
                 PeopleScreen(archive, pad, onPerson = { nav.navigate("person/$it") }, onOpenConversation = { openConversation(it) })
             }
-            composable("device") { DeviceScreen(ui, cap, device, pad) }
+            composable("device") {
+                val activity = androidx.compose.ui.platform.LocalContext.current as android.app.Activity
+                val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
+                    androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult()) { device.refreshSync(activity) }
+                DeviceScreen(ui, cap, device, pad, onPair = {
+                    val address = ui.savedAddress ?: return@DeviceScreen
+                    net.boswell.phone.sync.OmiCompanion.pair(activity, address,
+                        launch = { sender -> launcher.launch(androidx.activity.result.IntentSenderRequest.Builder(sender).build()) },
+                        done = { err -> if (err != null) net.boswell.phone.capture.CaptureRepository.log("pairing: $err"); device.refreshSync(activity) })
+                })
+            }
             composable(
                 "conversation/{id}?line={line}",
                 arguments = listOf(navArgument("id") { type = NavType.LongType }, navArgument("line") { type = NavType.LongType; defaultValue = -1L }),

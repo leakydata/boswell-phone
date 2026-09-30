@@ -21,7 +21,11 @@ enum class Link {
      * being lost while it is away.
      */
     AWAY,
+    /** Visiting to download what the device stored; lets go when done. */
+    SYNCING,
 }
+
+data class SyncStatus(val took: Long, val target: Long, val bytesPerSecond: Double, val phase: String)
 
 /** A reading from the device, with when it was read. A number without its age is a lie waiting to happen. */
 data class Reading<T>(val value: T, val atMillis: Long)
@@ -53,6 +57,7 @@ data class CaptureState(
     /** When the last audio packet arrived. Liveness is progress, not announcement. */
     val lastAudioMillis: Long? = null,
     val nextRetryMillis: Long? = null,
+    val sync: SyncStatus? = null,
     val log: List<String> = emptyList(),
 )
 

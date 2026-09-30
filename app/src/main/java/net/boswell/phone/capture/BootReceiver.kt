@@ -8,18 +8,20 @@ import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 
 /**
- * Picks recording back up after the phone restarts, if it was recording
- * before. "Keep recording" is set by Connect and cleared by Disconnect, so a
- * phone that was deliberately not recording stays that way.
+ * Picks the chosen mode back up after the phone restarts or the app updates:
+ * live streaming restarts, sync visits are re-armed, and Off stays off.
  */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED && intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
-        val prefs = context.getSharedPreferences("boswell", Context.MODE_PRIVATE)
-        val address = prefs.getString("omi_address", null) ?: return
-        if (!prefs.getBoolean(KEEP_RECORDING, false)) return
+        val address = net.boswell.phone.sync.Modes.address(context) ?: return
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
-        runCatching { CaptureService.start(context, address) }
+        when (net.boswell.phone.sync.Modes.mode(context)) {
+            net.boswell.phone.sync.Mode.LIVE -> runCatching { CaptureService.start(context, address) }
+            // WorkManager keeps the periodic visit across reboots; this only re-arms it after an update.
+            net.boswell.phone.sync.Mode.SYNC -> net.boswell.phone.sync.SyncWorker.schedule(context)
+            net.boswell.phone.sync.Mode.OFF -> Unit
+        }
     }
 
     companion object {

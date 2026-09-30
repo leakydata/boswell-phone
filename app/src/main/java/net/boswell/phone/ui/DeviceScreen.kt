@@ -20,6 +20,11 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import net.boswell.phone.sync.Mode
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -80,12 +85,12 @@ private fun Section(title: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: PaddingValues) {
+fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: PaddingValues, onPair: () -> Unit) {
     val ctx = LocalContext.current
     val progress by ModelProgressRepository.state.collectAsStateWithLifecycle()
     var confirmClean by remember { mutableStateOf(false) }
     var showLog by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { vm.refreshStorage(); vm.refreshModels() }
+    LaunchedEffect(Unit) { vm.refreshStorage(); vm.refreshModels(); vm.refreshSync(ctx as? android.app.Activity) }
 
     LazyColumn(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = pad.calculateTopPadding() + 8.dp, bottom = pad.calculateBottomPadding() + 24.dp),
@@ -99,28 +104,64 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                 val quiet = last == null || System.currentTimeMillis() - last > 4_000
                 Text(
                     when (cap.link) {
-                        Link.IDLE -> "Not recording"
+                        Link.IDLE -> when (ui.mode) {
+                            Mode.SYNC -> if (ui.lastSync > 0) "Synced ${Fmt.ago(ui.lastSync / 1000.0)} · ${ui.lastSyncResult ?: ""}" else "Waiting for the first sync"
+                            else -> "Not connected"
+                        }
                         Link.CONNECTING -> "Connecting…"
-                        Link.STREAMING -> if (quiet) "Connected · listening (the mic sleeps in silence)" else "Recording"
+                        Link.STREAMING -> if (quiet) "Live · listening (the mic sleeps in silence)" else "Live · recording"
                         Link.AWAY -> "Out of range or off · will keep trying"
+                        Link.SYNCING -> cap.sync?.let { s ->
+                            if (s.target > 0) "Syncing · ${s.took * 100 / s.target}% · %.0f kB/s".format(s.bytesPerSecond / 1000) else "Syncing · ${s.phase}"
+                        } ?: "Syncing…"
                     },
                     style = MaterialTheme.typography.bodyLarge,
                 )
+                cap.sync?.takeIf { it.target > 0 }?.let { s -> LinearProgressIndicator(progress = { s.took.toFloat() / s.target }, modifier = Modifier.fillMaxWidth()) }
+
+                if (ui.savedAddress == null) {
+                    Text("Find your Omi to get started.", style = MaterialTheme.typography.bodyMedium)
+                } else {
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        Mode.entries.forEachIndexed { i, m ->
+                            SegmentedButton(selected = ui.mode == m, onClick = { vm.setMode(m) }, shape = SegmentedButtonDefaults.itemShape(i, Mode.entries.size)) {
+                                Text(when (m) { Mode.OFF -> "Off"; Mode.SYNC -> "Sync"; Mode.LIVE -> "Live" })
+                            }
+                        }
+                    }
+                    Text(
+                        when (ui.mode) {
+                            Mode.OFF -> "The phone leaves the Omi alone. It keeps recording to its own memory."
+                            Mode.SYNC -> "The Omi records on its own. Every so often, and whenever it comes into range, the phone downloads what it stored and lets go. Easiest on both batteries; audio downloaded here is removed from the Omi."
+                            Mode.LIVE -> "The phone stays connected and conversations appear within seconds. Needed for the assistant to listen."
+                        },
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (ui.mode == Mode.SYNC) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Visit every", Modifier.padding(end = 8.dp))
+                            for (m in listOf(15, 30, 60, 120, 240)) {
+                                FilterChip(selected = ui.syncMinutes == m, onClick = { vm.setSyncMinutes(m) },
+                                    label = { Text(if (m < 60) "${m}m" else "${m / 60}h") }, modifier = Modifier.padding(end = 4.dp))
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = vm::syncNow, enabled = cap.link == Link.IDLE) { Text("Sync now") }
+                            if (!ui.companionPaired) OutlinedButton(onClick = onPair) { Text("Sync when in range") }
+                        }
+                        if (ui.companionPaired) Text("Paired for background sync: the phone visits when the Omi comes into range.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
                 cap.device?.let { d -> Row2("Device", "${d.model ?: "Omi"} · firmware ${d.firmware ?: "?"}") }
                     ?: ui.savedAddress?.let { Row2("Paired", it) }
                 ReadingRow("Battery", cap.battery) { "$it%" }
                 ReadingRow("Charging", cap.charging) { if (it) "yes" else "no" }
                 ReadingRow("Signal", cap.rssi) { "$it dBm" }
                 ReadingRow("Clock", cap.deviceClockSkewSeconds) { if (kotlin.math.abs(it) < 3) "in sync" else "off by ${it}s" }
-                ReadingRow("Stored on device", cap.ring) { r -> "≈ %.0f min".format(r.pending * (27 * 3600.0 / 1_115_064) / 60) }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (cap.link == Link.IDLE) {
-                        Button(onClick = vm::connect, enabled = ui.savedAddress != null) { Text("Start recording") }
-                        OutlinedButton(onClick = vm::scan, enabled = !ui.scanning) { Text(if (ui.scanning) "Looking…" else "Find Omi") }
-                    } else {
-                        OutlinedButton(onClick = vm::disconnect) { Text("Stop recording") }
-                        TextButton(onClick = vm::refreshRing, enabled = cap.link == Link.STREAMING) { Text("Check backlog") }
-                    }
+                ReadingRow("Waiting on the Omi", cap.ring) { r -> "≈ %.0f min".format(r.pending * (27 * 3600.0 / 1_115_064) / 60) }
+                if (ui.savedAddress == null || ui.mode == Mode.OFF) {
+                    OutlinedButton(onClick = vm::scan, enabled = !ui.scanning) { Text(if (ui.scanning) "Looking…" else "Find Omi") }
                 }
                 for (d in ui.found) {
                     Card(Modifier.fillMaxWidth().clickable { vm.choose(d.address) }) {
