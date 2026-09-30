@@ -76,6 +76,13 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     private val _searchVoices = MutableStateFlow<Map<String, Voice>>(emptyMap())
     val searchVoices: StateFlow<Map<String, Voice>> = _searchVoices.asStateFlow()
 
+    /** A voice that might be someone known, with what it said, for the review. */
+    data class ReviewItem(val s: net.boswell.phone.speakers.Suggestion, val said: String)
+    private val _review = MutableStateFlow<List<ReviewItem>?>(null)
+    val review: StateFlow<List<ReviewItem>?> = _review.asStateFlow()
+    private val _recheckNote = MutableStateFlow<String?>(null)
+    val recheckNote: StateFlow<String?> = _recheckNote.asStateFlow()
+
     private val skipped = mutableSetOf<Long>()
     private var searchJob: Job? = null
 
@@ -244,23 +251,23 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
      * sighting at once, merging into an existing person of that name); a voice
      * too short to have been clustered is enrolled as a confirmed voiceprint.
      */
-    fun nameVoice(conversation: Long, key: String, name: String) = act {
+    fun nameVoice(conversation: Long, key: String, name: String) = actVoices {
         val v = _conv.value.voices[key]
         val pid = v?.personId
         if (pid != null && v.named.not()) speakers.name(pid, name)
         else {
-            val (emb, secs, clip) = archive.voiceOf(conversation, key) ?: return@act
+            val (emb, secs, clip) = archive.voiceOf(conversation, key) ?: return@actVoices
             val target = speakers.people().firstOrNull { it.name == name }?.id ?: speakers.newPerson(name)
             speakers.addVoiceprint(target, emb, secs, clip, labelOf(conversation, key, clip), "confirmed")
         }
     }
 
     /** "Yes, that's them": the guess becomes a confirmed reference covering this condition. */
-    fun confirmGuess(conversation: Long, key: String, person: Person) = act {
+    fun confirmGuess(conversation: Long, key: String, person: Person) = actVoices {
         val v = _conv.value.voices[key]
-        if (v?.personId != null && !v.named) speakers.name(v.personId, person.name ?: return@act)
+        if (v?.personId != null && !v.named) speakers.name(v.personId, person.name ?: return@actVoices)
         else {
-            val (emb, secs, clip) = archive.voiceOf(conversation, key) ?: return@act
+            val (emb, secs, clip) = archive.voiceOf(conversation, key) ?: return@actVoices
             speakers.addVoiceprint(person.id, emb, secs, clip, labelOf(conversation, key, clip), "confirmed")
         }
     }
@@ -280,9 +287,51 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
             if (c.moveToFirst()) c.getString(0) else null
         }
 
-    fun namePerson(id: Long, name: String) = act { speakers.name(id, name) }
+    fun namePerson(id: Long, name: String) = actVoices { speakers.name(id, name) }
     fun setKind(id: Long, kind: String?) = act { speakers.setKind(id, kind) }
-    fun unnameGroup(personId: Long, group: Long) = act { speakers.unnameGroup(personId, group) }
+    fun unnameGroup(personId: Long, group: Long) = actVoices { speakers.unnameGroup(personId, group) }
+
+    /** An identity action, then another look at every voice with what is now known. */
+    private fun actVoices(block: () -> Unit) = act {
+        block()
+        val r = net.boswell.phone.speakers.VoiceReview(getApplication()).recheck()
+        if (r.matched > 0 || r.merged > 0) _recheckNote.value = recheckText(r)
+        if (_review.value != null) loadReviewNow()
+    }
+
+    private fun recheckText(r: net.boswell.phone.speakers.VoiceReview.Recheck): String = listOfNotNull(
+        if (r.matched > 0) "${r.matched} more voice${if (r.matched == 1) "" else "s"} recognized" else null,
+        if (r.merged > 0) "${r.merged} unnamed voice${if (r.merged == 1) "" else "s"} combined" else null,
+    ).joinToString(" · ").ifEmpty { "No changes: nothing new to recognize yet" }
+
+    fun recheckVoices() = act {
+        _recheckNote.value = recheckText(net.boswell.phone.speakers.VoiceReview(getApplication()).recheck())
+        if (_review.value != null) loadReviewNow()
+    }
+
+    fun clearRecheckNote() { _recheckNote.value = null }
+
+    fun loadReview() = viewModelScope.launch(Dispatchers.IO) { loadReviewNow() }
+
+    private fun loadReviewNow() {
+        _review.value = net.boswell.phone.speakers.VoiceReview(getApplication()).suggestions().map {
+            ReviewItem(it, archive.linesOf(it.clip, it.label).joinToString(" "))
+        }
+    }
+
+    /** A screen talking: kept and still collected, never given a person's name, and no longer asked about. */
+    fun reviewIsMedia(item: ReviewItem) {
+        _review.value = _review.value?.filter { it.s.key != item.s.key }
+        act { item.s.clusterId?.let { speakers.setKind(it, "media") } }
+    }
+
+    fun answerReview(item: ReviewItem, yes: Boolean) {
+        _review.value = _review.value?.filter { it.s.key != item.s.key }
+        actVoices {
+            val vr = net.boswell.phone.speakers.VoiceReview(getApplication())
+            if (yes) vr.confirm(item.s) else vr.reject(item.s)
+        }
+    }
     fun skip(id: Long) { skipped += id; viewModelScope.launch { loadPeople() } }
 
     private fun act(block: () -> Unit) = viewModelScope.launch {

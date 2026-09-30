@@ -89,8 +89,9 @@ fun BoswellApp(device: MainViewModel, startTab: String? = null) {
             }
             composable("people") {
                 PeopleScreen(archive, pad, onPerson = { nav.navigate("person/$it") }, onOpenConversation = { openConversation(it) },
-                    onLearnVoice = { learningVoice = true })
+                    onLearnVoice = { learningVoice = true }, onReview = { nav.navigate("review") })
             }
+            composable("review") { ReviewScreen(archive, onBack = { nav.popBackStack() }) }
             composable("ask") { AskScreen(pad, onSetup = { go("device") }, onUsage = { nav.navigate("usage") }) }
             composable("todo") { TodoScreen(pad) }
             composable("triggers") { TriggersScreen(onBack = { nav.popBackStack() }) }

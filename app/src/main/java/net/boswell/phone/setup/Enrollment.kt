@@ -104,6 +104,9 @@ object Enrollment {
         val store = SpeakerStore(context)
         try { store.addVoiceprint(id, vp, audio.size / 16_000.0, "enrollment", null, "manual") } finally { store.close() }
         net.boswell.phone.capture.CaptureRepository.log("learned the voice of $name (%.0f s)".format(audio.size / 16_000.0))
+        // Past recordings get another look with the new sample.
+        runCatching { net.boswell.phone.speakers.VoiceReview(context).recheck() }
+            .onSuccess { if (it.matched > 0) net.boswell.phone.capture.CaptureRepository.log("recognized $name in ${it.matched} more recordings") }
         id
     }
 }

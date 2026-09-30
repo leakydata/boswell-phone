@@ -32,7 +32,7 @@ data class VoiceGroup(val key: Long, val voiceprints: Int, val seconds: Double, 
  *
  * Starts empty. Nothing is imported from the desktop.
  */
-class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", null, 3) {
+class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", null, 4) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""
@@ -61,6 +61,7 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
             )""")
         db.execSQL("CREATE INDEX vp_person ON voiceprints(person_id)")
         db.execSQL(MERGES)
+        db.execSQL(REJECTIONS)
         db.execSQL("""
             CREATE TABLE matches (
                 id            INTEGER PRIMARY KEY,
@@ -79,6 +80,7 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) db.execSQL("ALTER TABLE voiceprints ADD COLUMN source_cluster INTEGER")
         if (oldVersion < 3) db.execSQL(MERGES)
+        if (oldVersion < 4) db.execSQL(REJECTIONS)
     }
 
     override fun onConfigure(db: SQLiteDatabase) = db.setForeignKeyConstraintsEnabled(true)
@@ -199,6 +201,9 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         db.beginTransaction()
         try {
             val fresh = newPerson(null)
+            val where = if (groupKey < 0) "id = ?" else "source_cluster = ?"
+            db.execSQL("INSERT OR IGNORE INTO rejections(clip, speaker, person_id) SELECT clip, speaker, person_id FROM voiceprints " +
+                "WHERE $where AND person_id = ? AND clip IS NOT NULL AND speaker IS NOT NULL", arrayOf<Any>(if (groupKey < 0) -groupKey else groupKey, personId))
             if (groupKey < 0) db.execSQL("UPDATE voiceprints SET person_id = ? WHERE id = ? AND person_id = ?", arrayOf<Any>(fresh, -groupKey, personId))
             else db.execSQL("UPDATE voiceprints SET person_id = ?, source_cluster = NULL WHERE source_cluster = ? AND person_id = ?", arrayOf<Any>(fresh, groupKey, personId))
             db.setTransactionSuccessful()
@@ -222,6 +227,57 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
             for (c in clips) db.execSQL("DELETE FROM voiceprints WHERE clip = ? AND origin = 'auto'", arrayOf(c))
             // Unnamed voices left with nothing are gone entirely.
             db.execSQL("DELETE FROM people WHERE name IS NULL AND id NOT IN (SELECT DISTINCT person_id FROM voiceprints)")
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    // ------------------------------------------------------------- review
+
+    /** Named people's voiceprints: what a voice is matched against. */
+    fun namedRefs(): List<Matching.Reference> = refs(named = true)
+
+    data class Member(val id: Long, val clip: String?, val speaker: String?, val vec: FloatArray, val seconds: Double)
+
+    /** Unnamed voices that are still open questions (not marked TV or ignored), with their voiceprints. */
+    fun unnamedClusters(): Map<Long, List<Member>> = readableDatabase.rawQuery("""
+        SELECT v.person_id, v.id, v.clip, v.speaker, v.vec, COALESCE(v.seconds, 0) FROM voiceprints v JOIN people p ON p.id = v.person_id
+        WHERE p.name IS NULL AND p.kind IS NULL AND v.impure = 0 ORDER BY v.person_id, v.id""", null).use { c ->
+        val out = LinkedHashMap<Long, MutableList<Member>>()
+        while (c.moveToNext()) out.getOrPut(c.getLong(0)) { mutableListOf() }
+            .add(Member(c.getLong(1), c.str(2), c.str(3), unpack(c.getBlob(4)), c.getDouble(5)))
+        out
+    }
+
+    fun reject(clip: String, speaker: String, personId: Long) {
+        writableDatabase.execSQL("INSERT OR IGNORE INTO rejections(clip, speaker, person_id) VALUES (?, ?, ?)", arrayOf<Any>(clip, speaker, personId))
+    }
+
+    fun rejected(clip: String, speaker: String): Set<Long> =
+        readableDatabase.rawQuery("SELECT person_id FROM rejections WHERE clip = ? AND speaker = ?", arrayOf(clip, speaker)).use { c ->
+            buildSet { while (c.moveToNext()) add(resolve(c.getLong(0))) }
+        }
+
+    /** Someone decided who this voice is (named it, confirmed it, read a passage): never second-guessed. */
+    fun decidedByHand(clip: String, speaker: String): Boolean =
+        readableDatabase.rawQuery("SELECT 1 FROM voiceprints WHERE clip = ? AND speaker = ? AND origin IN ('manual', 'confirmed') LIMIT 1",
+            arrayOf(clip, speaker)).use { it.moveToFirst() }
+
+    /** A voice now matched to a named person leaves its unnamed cluster; clusters left empty go. */
+    fun releaseFromCluster(clip: String, speaker: String) {
+        val db = writableDatabase
+        db.execSQL("DELETE FROM voiceprints WHERE clip = ? AND speaker = ? AND origin = 'auto' AND person_id IN (SELECT id FROM people WHERE name IS NULL)",
+            arrayOf(clip, speaker))
+        db.execSQL("DELETE FROM people WHERE name IS NULL AND id NOT IN (SELECT DISTINCT person_id FROM voiceprints)")
+    }
+
+    /** Fold one unnamed voice into another; transcripts that recorded the old id follow the merge. */
+    fun mergeUnnamed(from: Long, into: Long) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.execSQL("UPDATE voiceprints SET person_id = ? WHERE person_id = ?", arrayOf<Any>(into, from))
+            db.execSQL("INSERT OR REPLACE INTO merges(from_id, into_id) VALUES (?, ?)", arrayOf<Any>(from, into))
+            db.execSQL("DELETE FROM people WHERE id = ? AND name IS NULL", arrayOf<Any>(from))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
@@ -254,6 +310,8 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
 
     companion object {
         private const val MERGES = "CREATE TABLE IF NOT EXISTS merges (from_id INTEGER PRIMARY KEY, into_id INTEGER NOT NULL)"
+        /** "Not them" and "No" answers: this voice in this clip is not this person, so never suggest or match it again. */
+        private const val REJECTIONS = "CREATE TABLE IF NOT EXISTS rejections (clip TEXT NOT NULL, speaker TEXT NOT NULL, person_id INTEGER NOT NULL, PRIMARY KEY (clip, speaker, person_id))"
 
         fun pack(v: FloatArray): ByteArray = ByteBuffer.allocate(v.size * 4).order(ByteOrder.LITTLE_ENDIAN).apply { v.forEach { putFloat(it) } }.array()
         fun unpack(b: ByteArray): FloatArray { val bb = ByteBuffer.wrap(b).order(ByteOrder.LITTLE_ENDIAN); return FloatArray(b.size / 4) { bb.float } }

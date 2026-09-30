@@ -44,8 +44,12 @@ import net.boswell.phone.speakers.Person
 private fun Person.asVoice() = Voice("p$id", name ?: if (kind == "media") "TV / media" else "Unknown voice $id", name != null, id, kind == "media")
 
 @Composable
-fun PeopleScreen(vm: ArchiveViewModel, pad: PaddingValues, onPerson: (Long) -> Unit, onOpenConversation: (Long) -> Unit, onLearnVoice: () -> Unit = {}) {
+fun PeopleScreen(vm: ArchiveViewModel, pad: PaddingValues, onPerson: (Long) -> Unit, onOpenConversation: (Long) -> Unit, onLearnVoice: () -> Unit = {},
+                 onReview: () -> Unit = {}) {
     val s by vm.people.collectAsStateWithLifecycle()
+    val review by vm.review.collectAsStateWithLifecycle()
+    val note by vm.recheckNote.collectAsStateWithLifecycle()
+    androidx.compose.runtime.LaunchedEffect(s.named.size) { vm.loadReview() }
     var naming by remember { mutableStateOf<Person?>(null) }
     LazyColumn(
         contentPadding = PaddingValues(top = pad.calculateTopPadding() + 8.dp, bottom = pad.calculateBottomPadding() + 24.dp),
@@ -64,6 +68,25 @@ fun PeopleScreen(vm: ArchiveViewModel, pad: PaddingValues, onPerson: (Long) -> U
                             else "Read a short passage through your Omi so it knows which voice is you.", style = MaterialTheme.typography.bodySmall)
                     }
                     TextButton(onClick = onLearnVoice) { Text(if (me != null) "Improve" else "Start") }
+                }
+            }
+        }
+
+        if (s.named.isNotEmpty()) item {
+            val n = review?.size ?: 0
+            Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp), colors = CardDefaults.cardColors(
+                containerColor = if (n > 0) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surfaceContainer)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(if (n > 0) "$n voice${if (n == 1) "" else "s"} might be people you know" else "Voices", style = MaterialTheme.typography.titleMedium)
+                    Text(if (n > 0) "Close to someone known, but not close enough to be sure. A quick yes or no teaches Boswell and labels past recordings."
+                        else "Boswell checks past recordings again whenever it learns a voice.", style = MaterialTheme.typography.bodySmall)
+                    val onCard = if (n > 0) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onSurface
+                    note?.let { Text(it, style = MaterialTheme.typography.labelLarge, color = onCard) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (n > 0) Button(onClick = onReview) { Text("Review") }
+                        OutlinedButton(onClick = { vm.recheckVoices() },
+                            colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = onCard)) { Text("Re-check voices") }
+                    }
                 }
             }
         }

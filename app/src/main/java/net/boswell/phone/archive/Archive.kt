@@ -228,6 +228,12 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
 
     // --------------------------------------------------------------- queries
 
+    /** What one voice said in one clip, in order. */
+    fun linesOf(clip: String, label: String): List<String> = readableDatabase.rawQuery(
+        "SELECT text FROM lines WHERE clip = ? AND label = ? ORDER BY t0", arrayOf(clip, label)).use { c ->
+        buildList { while (c.moveToNext()) add(c.getString(0)) }
+    }
+
     fun days(): List<Pair<LocalDate, Int>> = readableDatabase.rawQuery(
         "SELECT day, COUNT(*) FROM conversations GROUP BY day ORDER BY day DESC", null).use { c ->
         buildList { while (c.moveToNext()) add(LocalDate.parse(c.getString(0)) to c.getInt(1)) }
