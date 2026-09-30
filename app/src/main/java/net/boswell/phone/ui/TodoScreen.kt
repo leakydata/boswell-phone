@@ -16,10 +16,20 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -72,6 +82,24 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
     }
 
+    /** Move (or clear) a due time; the reminder moves with it. */
+    fun setDue(t: Todo, due: Double?) = viewModelScope.launch {
+        withContext(Dispatchers.IO) {
+            store.update(t.id, t.text, t.category, due)
+            TodoReminders.cancel(getApplication(), t.id)
+            if (due != null && !t.done && due > System.currentTimeMillis() / 1000.0) TodoReminders.schedule(getApplication(), t.id, due)
+        }
+        refresh()
+    }
+
+    fun addOn(text: String, category: String?, due: Double) = viewModelScope.launch {
+        withContext(Dispatchers.IO) {
+            val id = store.add(text, category, due, "typed")
+            if (due > System.currentTimeMillis() / 1000.0) TodoReminders.schedule(getApplication(), id, due)
+        }
+        refresh()
+    }
+
     fun delete(t: Todo) = viewModelScope.launch {
         withContext(Dispatchers.IO) { store.delete(t.id); TodoReminders.cancel(getApplication(), t.id) }
         refresh()
@@ -83,6 +111,21 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
 @Composable
 fun TodoScreen(pad: PaddingValues) {
     val vm: TodoViewModel = viewModel()
+    var byDay by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    Column(Modifier.padding(top = pad.calculateTopPadding())) {
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            listOf("Lists", "By day").forEachIndexed { i, label ->
+                SegmentedButton(selected = byDay == (i == 1), onClick = { byDay = i == 1 },
+                    shape = SegmentedButtonDefaults.itemShape(i, 2)) { Text(label) }
+            }
+        }
+        val inner = PaddingValues(bottom = pad.calculateBottomPadding())
+        if (byDay) TodoByDay(vm, inner) else TodoLists(vm, inner)
+    }
+}
+
+@Composable
+private fun TodoLists(vm: TodoViewModel, pad: PaddingValues) {
     val items by vm.items.collectAsStateWithLifecycle()
     var filter by remember { mutableStateOf<String?>(null) }
     var showDone by remember { mutableStateOf(false) }
@@ -95,10 +138,9 @@ fun TodoScreen(pad: PaddingValues) {
     val done = items.filter { it.done && (filter == null || it.category == filter) }
     val now = System.currentTimeMillis() / 1000.0
 
-    Column(Modifier.padding(top = pad.calculateTopPadding(), bottom = pad.calculateBottomPadding()).imePadding()) {
+    Column(Modifier.padding(bottom = pad.calculateBottomPadding()).imePadding()) {
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             item {
-                Text("To-do", style = MaterialTheme.typography.headlineLarge)
                 Text("Double tap the Omi and say it, ask the assistant, or type below.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -132,31 +174,147 @@ fun TodoScreen(pad: PaddingValues) {
         }
     }
 
-    editing?.let { t ->
-        var et by remember(t.id) { mutableStateOf(t.text) }
-        var ec by remember(t.id) { mutableStateOf(t.category) }
-        AlertDialog(
-            onDismissRequest = { editing = null },
-            title = { Text("Edit") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = et, onValueChange = { et = it }, label = { Text("To-do") })
-                    OutlinedTextField(value = ec, onValueChange = { ec = it }, singleLine = true, label = { Text("Category") })
-                }
-            },
-            confirmButton = { TextButton(onClick = { vm.save(t, et, ec); editing = null }) { Text("Save") } },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = { vm.delete(t); editing = null }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
-                    TextButton(onClick = { editing = null }) { Text("Cancel") }
-                }
-            },
-        )
-    }
+    editing?.let { t -> EditTodoDialog(vm, t) { editing = null } }
 }
 
 @Composable
-private fun TodoRow(t: Todo, now: Double, onToggle: () -> Unit, onEdit: () -> Unit) {
+fun EditTodoDialog(vm: TodoViewModel, t: Todo, onClose: () -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var et by remember(t.id) { mutableStateOf(t.text) }
+    var ec by remember(t.id) { mutableStateOf(t.category) }
+    var due by remember(t.id) { mutableStateOf(t.due) }
+    val zone = java.time.ZoneId.systemDefault()
+    fun pickDue() {
+        val start = due?.let { java.time.Instant.ofEpochSecond(it.toLong()).atZone(zone) } ?: java.time.LocalDate.now().atTime(9, 0).atZone(zone)
+        android.app.DatePickerDialog(ctx, { _, y, m, d ->
+            android.app.TimePickerDialog(ctx, { _, h, min ->
+                due = java.time.LocalDateTime.of(y, m + 1, d, h, min).atZone(zone).toEpochSecond().toDouble()
+            }, start.hour, start.minute, android.text.format.DateFormat.is24HourFormat(ctx)).show()
+        }, start.year, start.monthValue - 1, start.dayOfMonth).show()
+    }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Edit") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(value = et, onValueChange = { et = it }, label = { Text("To-do") })
+                OutlinedTextField(value = ec, onValueChange = { ec = it }, singleLine = true, label = { Text("Category") })
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(due?.let { "Due ${Fmt.shortDay(java.time.Instant.ofEpochSecond(it.toLong()).atZone(zone).toLocalDate())} ${Fmt.time(it)}" } ?: "No due date",
+                        Modifier.weight(1f))
+                    TextButton(onClick = ::pickDue) { Text(if (due == null) "Set" else "Change") }
+                    if (due != null) TextButton(onClick = { due = null }) { Text("Clear") }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                vm.save(t, et, ec)
+                if (due != t.due) vm.setDue(t.copy(text = et, category = ec), due)
+                onClose()
+            }) { Text("Save") }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = { vm.delete(t); onClose() }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                TextButton(onClick = onClose) { Text("Cancel") }
+            }
+        },
+    )
+}
+
+/**
+ * The same to-dos by the day they are due: a week strip to pick a day (dots
+ * where something is due), swipe to move a day, and that day's list --
+ * with anything overdue shown on today.
+ */
+@Composable
+private fun TodoByDay(vm: TodoViewModel, pad: PaddingValues) {
+    val items by vm.items.collectAsStateWithLifecycle()
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val zone = java.time.ZoneId.systemDefault()
+    val today = java.time.LocalDate.now()
+    var day by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(today.toEpochDay()) }
+    val selected = java.time.LocalDate.ofEpochDay(day)
+    var editing by remember { mutableStateOf<Todo?>(null) }
+    var text by remember { mutableStateOf("") }
+    val drag = remember { floatArrayOf(0f) }
+    LaunchedEffect(Unit) { vm.refresh() }
+
+    fun dayOf(t: Todo) = t.due?.let { java.time.Instant.ofEpochSecond(it.toLong()).atZone(zone).toLocalDate() }
+    val dueDays = items.filter { !it.done }.mapNotNull(::dayOf).toSet()
+    val onDay = items.filter { dayOf(it) == selected }.sortedWith(compareBy({ it.done }, { it.due }))
+    val overdue = if (selected == today) items.filter { !it.done && dayOf(it)?.isBefore(today) == true }.sortedBy { it.due } else emptyList()
+    val now = System.currentTimeMillis() / 1000.0
+
+    Column(Modifier.padding(bottom = pad.calculateBottomPadding()).imePadding()) {
+        // Week strip: Monday-first week containing the selected day.
+        val weekStart = selected.minusDays((selected.dayOfWeek.value - 1).toLong())
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            androidx.compose.material3.IconButton(onClick = { day -= 7 }) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "previous week") }
+            for (i in 0 until 7) {
+                val d = weekStart.plusDays(i.toLong())
+                val sel = d == selected
+                Column(
+                    Modifier.weight(1f).clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                        .background(if (sel) MaterialTheme.colorScheme.primaryContainer else androidx.compose.ui.graphics.Color.Transparent)
+                        .clickable { day = d.toEpochDay() }.padding(vertical = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(d.dayOfWeek.getDisplayName(java.time.format.TextStyle.NARROW, java.util.Locale.getDefault()),
+                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("${d.dayOfMonth}", style = MaterialTheme.typography.titleMedium,
+                        color = if (d == today) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                    androidx.compose.foundation.layout.Box(Modifier.padding(top = 2.dp).size(5.dp).clip(androidx.compose.foundation.shape.CircleShape)
+                        .background(if (d in dueDays) MaterialTheme.colorScheme.tertiary else androidx.compose.ui.graphics.Color.Transparent))
+                }
+            }
+            androidx.compose.material3.IconButton(onClick = { day += 7 }) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "next week") }
+        }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(Fmt.day(selected), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            if (selected != today) TextButton(onClick = { day = today.toEpochDay() }) { Text("Today") }
+            TextButton(onClick = {
+                android.app.DatePickerDialog(ctx, { _, y, m, d -> day = java.time.LocalDate.of(y, m + 1, d).toEpochDay() },
+                    selected.year, selected.monthValue - 1, selected.dayOfMonth).show()
+            }) { Text("Pick a date") }
+        }
+        LazyColumn(
+            Modifier.weight(1f).pointerInput(day) {
+                detectHorizontalDragGestures(onDragStart = { drag[0] = 0f },
+                    onDragEnd = { if (drag[0] > 120) day -= 1 else if (drag[0] < -120) day += 1 }) { _, dx -> drag[0] += dx }
+            },
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            if (overdue.isNotEmpty()) {
+                item { Text("Overdue", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error) }
+                items(overdue, key = { "o${it.id}" }) { t -> TodoRow(t, now, onToggle = { vm.toggle(t) }, onEdit = { editing = t }) }
+                item { Text("Due ${Fmt.day(selected).lowercase()}", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 10.dp)) }
+            }
+            if (onDay.isEmpty()) item {
+                val next = items.filter { !it.done && dayOf(it)?.isAfter(selected) == true }.minByOrNull { it.due ?: Double.MAX_VALUE }
+                Column(Modifier.padding(vertical = 16.dp)) {
+                    Text("Nothing due.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    next?.let { n -> TextButton(onClick = { day = dayOf(n)!!.toEpochDay() }) {
+                        Text("Next: ${Fmt.shortDay(dayOf(n)!!)} · ${n.text}") } }
+                }
+            }
+            items(onDay, key = { it.id }) { t -> TodoRow(t, now, onToggle = { vm.toggle(t) }, onEdit = { editing = t }) }
+        }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(value = text, onValueChange = { text = it }, modifier = Modifier.weight(1f), singleLine = true,
+                placeholder = { Text("Add for ${Fmt.shortDay(selected)}") })
+            Spacer(Modifier.width(8.dp))
+            FilledIconButton(onClick = {
+                vm.addOn(text, null, selected.atTime(9, 0).atZone(zone).toEpochSecond().toDouble()); text = ""
+            }, enabled = text.isNotBlank()) { Icon(Icons.Filled.Add, "add") }
+        }
+    }
+    editing?.let { t -> EditTodoDialog(vm, t) { editing = null } }
+}
+
+@Composable
+fun TodoRow(t: Todo, now: Double, onToggle: () -> Unit, onEdit: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(onClick = onEdit), verticalAlignment = Alignment.CenterVertically) {
         Checkbox(checked = t.done, onCheckedChange = { onToggle() })
         Column(Modifier.weight(1f)) {

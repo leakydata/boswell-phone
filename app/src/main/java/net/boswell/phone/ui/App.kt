@@ -64,7 +64,7 @@ fun BoswellApp(device: MainViewModel, startTab: String? = null) {
     }) { pad ->
         NavHost(nav, startDestination = "today") {
             composable("today") {
-                TodayScreen(archive, pad, onOpen = { openConversation(it) }, onSearch = { nav.navigate("search") }, onDevice = { go("device") })
+                TodayScreen(archive, pad, onOpen = { openConversation(it) }, onSearch = { nav.navigate("search") }, onDevice = { go("device") }, onTodos = { go("todo") })
             }
             composable("people") {
                 PeopleScreen(archive, pad, onPerson = { nav.navigate("person/$it") }, onOpenConversation = { openConversation(it) })

@@ -40,6 +40,8 @@ data class DayState(
     val ribbon: List<ClipRow> = emptyList(),
     val voices: Map<String, Voice> = emptyMap(),
     val loading: Boolean = true,
+    /** To-dos due this day (and, on today, anything overdue). */
+    val todos: List<net.boswell.phone.todo.Todo> = emptyList(),
 )
 
 data class ConversationState(
@@ -122,7 +124,28 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun loadDay(d: LocalDate) {
         val (convs, ribbon, days) = withContext(Dispatchers.IO) { Triple(archive.conversations(d), archive.clips(d), archive.days().map { it.first }) }
         val vs = withContext(Dispatchers.IO) { voices(convs.flatMap { it.speakers }) }
-        _day.value = DayState(d, days, convs, ribbon, vs, loading = false)
+        val todos = withContext(Dispatchers.IO) { dueOn(d) }
+        _day.value = DayState(d, days, convs, ribbon, vs, loading = false, todos = todos)
+    }
+
+    private fun dueOn(d: LocalDate): List<net.boswell.phone.todo.Todo> {
+        val zone = java.time.ZoneId.systemDefault()
+        val from = d.atStartOfDay(zone).toEpochSecond().toDouble()
+        val to = d.plusDays(1).atStartOfDay(zone).toEpochSecond().toDouble()
+        val store = net.boswell.phone.todo.TodoStore(getApplication())
+        return try {
+            store.all().filter { t -> val due = t.due ?: return@filter false
+                (due in from..<to) || (d == LocalDate.now() && !t.done && due < from) }
+        } finally { store.close() }
+    }
+
+    fun toggleTodo(t: net.boswell.phone.todo.Todo) = viewModelScope.launch {
+        withContext(Dispatchers.IO) {
+            val store = net.boswell.phone.todo.TodoStore(getApplication())
+            try { store.setDone(t.id, !t.done) } finally { store.close() }
+            if (!t.done) net.boswell.phone.todo.TodoReminders.cancel(getApplication(), t.id)
+        }
+        loadDay(_day.value.day)
     }
 
     // ------------------------------------------------------------ conversation

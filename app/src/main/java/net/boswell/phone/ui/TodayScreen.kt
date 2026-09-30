@@ -63,7 +63,7 @@ import java.time.LocalDate
 import java.time.ZoneId
 
 @Composable
-fun TodayScreen(vm: ArchiveViewModel, pad: PaddingValues, onOpen: (Long) -> Unit, onSearch: () -> Unit, onDevice: () -> Unit) {
+fun TodayScreen(vm: ArchiveViewModel, pad: PaddingValues, onOpen: (Long) -> Unit, onSearch: () -> Unit, onDevice: () -> Unit, onTodos: () -> Unit = {}) {
     val s by vm.day.collectAsStateWithLifecycle()
     val proc by ProcessingRepository.state.collectAsStateWithLifecycle()
     val isToday = s.day == LocalDate.now()
@@ -113,6 +113,17 @@ fun TodayScreen(vm: ArchiveViewModel, pad: PaddingValues, onOpen: (Long) -> Unit
             Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
                 Text("Transcribing on your phone · ${proc.pending} left", Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                     style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+
+        if (s.todos.isNotEmpty()) item {
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+                Column(Modifier.padding(horizontal = 8.dp, vertical = 10.dp)) {
+                    Text(if (isToday) "Due today" else "Due this day", style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(start = 8.dp, bottom = 2.dp))
+                    val now = System.currentTimeMillis() / 1000.0
+                    for (t in s.todos.sortedWith(compareBy({ it.done }, { it.due }))) TodoRow(t, now, onToggle = { vm.toggleTodo(t) }, onEdit = onTodos)
+                }
             }
         }
 
