@@ -263,7 +263,7 @@ private fun You(vm: MainViewModel, mode: Mode, streaming: Boolean, hasOmi: Boole
             }
             if (!streaming) Body("Connecting to your Omi…")
             LinearProgressIndicator(progress = { (en.heardSeconds / en.targetSeconds).toFloat().coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
-            Text(if (en.active) "Heard %.0f of %.0f seconds — keep reading, at a normal pace".format(en.heardSeconds, en.targetSeconds)
+            Text(if (en.active) "Heard %.0f of %.0f seconds of your voice — keep reading, at a normal pace".format(en.heardSeconds, en.targetSeconds)
                 else "Got it, saving…", style = MaterialTheme.typography.bodyMedium)
             var saving by remember { mutableStateOf(false) }
             fun save() {
@@ -279,10 +279,23 @@ private fun You(vm: MainViewModel, mode: Mode, streaming: Boolean, hasOmi: Boole
                 }
             }
             // Saves by itself once it has heard enough; the button is for stopping early.
-            LaunchedEffect(en.active, en.heardSeconds >= en.targetSeconds) {
-                if (!en.active && en.heardSeconds >= en.targetSeconds && !enrolled) save()
+            // Finishes by itself: at the target, or when you stop reading with enough heard.
+            LaunchedEffect(en.active) {
+                if (!en.active && en.heardSeconds >= Enrollment.MIN_SECONDS && !enrolled) save()
             }
-            if (en.active && en.heardSeconds >= 10) OutlinedButton(onClick = ::save) { Text("That's enough, save it") }
+            val cap2 by vm.capture.collectAsStateWithLifecycle()
+            LaunchedEffect(cap2.lastAudioMillis, en.active) {
+                if (!en.active) return@LaunchedEffect
+                kotlinx.coroutines.delay(2_500)
+                val last = vm.capture.value.lastAudioMillis ?: 0L
+                if (System.currentTimeMillis() - last >= 2_400) Enrollment.paused()
+            }
+            if (en.active) {
+                Text("Hearing you", style = MaterialTheme.typography.labelMedium)
+                LinearProgressIndicator(progress = { en.level }, modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.tertiary)
+            }
+            if (en.active && en.heardSeconds >= Enrollment.MIN_SECONDS) OutlinedButton(onClick = ::save) { Text("That's enough, save it") }
             if (saving) Text("Saving your voice…", style = MaterialTheme.typography.bodyMedium)
             result?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }

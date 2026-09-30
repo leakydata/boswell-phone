@@ -18,28 +18,52 @@ import kotlin.math.sqrt
  * silence, and a voiceprint of room noise would match nobody.
  */
 object Enrollment {
-    data class State(val active: Boolean = false, val heardSeconds: Double = 0.0, val targetSeconds: Double = 20.0)
+    data class State(val active: Boolean = false, val heardSeconds: Double = 0.0, val targetSeconds: Double = 15.0,
+                     /** 0..1, the level of the latest frame against the room's, for a live meter. */
+                     val level: Float = 0f)
 
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
     private val frames = ArrayList<ShortArray>()
+    /** The quietest levels seen, to learn the room: speech is what stands clearly above it. */
+    private val recent = ArrayDeque<Double>()
 
-    fun start(target: Double = 20.0) = synchronized(frames) {
-        frames.clear(); _state.value = State(true, 0.0, target)
+    fun start(target: Double = 15.0) = synchronized(frames) {
+        frames.clear(); recent.clear(); _state.value = State(true, 0.0, target)
     }
 
     fun stop() = synchronized(frames) { _state.value = _state.value.copy(active = false) }
 
-    /** Called by the capture service for every decoded frame while [State.active]. */
+    /**
+     * Called by the capture service for every decoded frame while [State.active].
+     *
+     * The Omi records quietly -- measured here, a person reading aloud sat at a
+     * median frame level of 0.006 -- so a fixed loudness bar (0.01, the first
+     * version) heard only 12 s of a minute's reading and never finished. The
+     * bar is now relative: 2.5x the room's own level, learned from the quietest
+     * frames, with a small absolute floor.
+     */
     fun feed(pcm: ShortArray) = synchronized(frames) {
         if (!_state.value.active) return
         var s = 0.0
         for (x in pcm) { val v = x / 32768.0; s += v * v }
-        if (sqrt(s / pcm.size) < 0.01) return          // near-silence: not voice
+        val rms = sqrt(s / pcm.size)
+        recent.addLast(rms); if (recent.size > 500) recent.removeFirst()
+        val noise = recent.sorted()[recent.size / 10]
+        val bar = maxOf(0.003, noise * 2.5)
+        val level = (rms / (bar * 4)).toFloat().coerceIn(0f, 1f)
+        if (rms < bar) { _state.value = _state.value.copy(level = level); return }
         frames += pcm
         val secs = frames.sumOf { it.size } / 16_000.0
-        _state.value = _state.value.copy(heardSeconds = secs, active = secs < _state.value.targetSeconds)
+        _state.value = _state.value.copy(heardSeconds = secs, active = secs < _state.value.targetSeconds, level = level)
     }
+
+    /** The stream paused (the mic sleeps when you stop talking): with enough heard, that's the end. */
+    fun paused() = synchronized(frames) {
+        if (_state.value.active && _state.value.heardSeconds >= MIN_SECONDS) _state.value = _state.value.copy(active = false)
+    }
+
+    const val MIN_SECONDS = 8.0
 
     /**
      * Turn what was heard into the owner: a named person with this voiceprint
@@ -62,7 +86,7 @@ object Enrollment {
             for (f in frames) for (x in f) out[o++] = x / 32768f
             out
         }
-        require(audio.size >= 16_000 * 8) { "need at least 8 seconds of speech" }
+        require(audio.size >= (16_000 * MIN_SECONDS).toInt()) { "need at least 8 seconds of speech" }
         val models = ModelStore(context)
         require(models.isInstalled(ModelCatalog.VOICEPRINT) && models.isInstalled(ModelCatalog.SEGMENTATION)) { "the voiceprint model isn't downloaded yet" }
         val vp = OrtModels(models.path(ModelCatalog.SEGMENTATION, ".onnx"), models.path(ModelCatalog.VOICEPRINT, "voiceprint.onnx")).use { it.voiceprint(audio) }
