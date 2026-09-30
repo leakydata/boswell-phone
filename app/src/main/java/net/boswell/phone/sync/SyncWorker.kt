@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit
  * The clock that drives sync visits. It only asks the capture service to
  * visit; the service holds the radio. Starting a foreground service from the
  * background is allowed because the app is paired as a companion of the Omi,
- * or exempt from battery optimisation -- without either, Android refuses, and
+ * or exempt from battery optimization -- without either, Android refuses, and
  * that is reported rather than swallowed.
  */
 class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {

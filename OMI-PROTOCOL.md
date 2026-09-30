@@ -119,7 +119,7 @@ desktop daemon are mutually exclusive, and so is the vendor's own Omi app.
 - **The live stream does not.** It carries only a packet counter, so those
   clips are placed by arrival time.
 
-This distinction leaks everywhere and must be modelled explicitly, not
+This distinction leaks everywhere and must be modeled explicitly, not
 inferred. The desktop marks it `time_known` per clip. Two consequences that
 cost real time to learn:
 

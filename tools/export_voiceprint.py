@@ -15,7 +15,7 @@ of its own, and there is nothing to drift.
 
 Output: models/voiceprint.onnx
   input  "audio"  float32 [1, N]  mono 16 kHz, range -1..1, N >= 400
-  output "embs"   float32 [1, 256] (not normalised; unit-normalise before cosine)
+  output "embs"   float32 [1, 256] (not normalized; unit-normalize before cosine)
 
     uv run python export_voiceprint.py
 """
@@ -95,7 +95,7 @@ def main():
     merged = compose.merge_models(front, net, io_map=[("feats", "feats")])
     merged.metadata_props.clear()
     for k, v in {"what": "desktop-Boswell voiceprint: raw 16k audio -> 256-d WeSpeaker ResNet34-LM",
-                 "frontend": "pyannote kaldi fbank 80 mel 25/10ms hamming dither0 x2^15, global mean centred",
+                 "frontend": "pyannote kaldi fbank 80 mel 25/10ms hamming dither0 x2^15, global mean centered",
                  "sample_rate": "16000", "output_dim": "256"}.items():
         onnx.helper.set_model_props(merged, {**{p.key: p.value for p in merged.metadata_props}, k: v})
     onnx.checker.check_model(merged)

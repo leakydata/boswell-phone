@@ -79,7 +79,7 @@ object AssistantNotify {
     /**
      * The system's voices for the phone's language. Android doesn't say which
      * voice is male or female; Google's own voices carry it in their codes, so
-     * those are labelled, and everything can be previewed.
+     * those are labeled, and everything can be previewed.
      */
     fun voices(c: Context, done: (List<VoiceOption>) -> Unit) {
         fun list(t: TextToSpeech): List<VoiceOption> {

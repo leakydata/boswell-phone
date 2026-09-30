@@ -72,7 +72,7 @@ fun PeopleScreen(vm: ArchiveViewModel, pad: PaddingValues, onPerson: (Long) -> U
             item {
                 Column(Modifier.padding(horizontal = 16.dp)) {
                     Text("Who's this?", style = MaterialTheme.typography.titleMedium)
-                    Text("Voices heard more than once that nobody has named. Name one and every recording of it is labelled.",
+                    Text("Voices heard more than once that nobody has named. Name one and every recording of it is labeled.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }

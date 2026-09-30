@@ -213,7 +213,7 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
     /**
      * Forget what was learned automatically from deleted clips. Voiceprints
      * someone confirmed or named by hand stay: deleting a recording is not a
-     * request to stop recognising a person.
+     * request to stop recognizing a person.
      */
     fun forgetClips(clips: Collection<String>) {
         val db = writableDatabase

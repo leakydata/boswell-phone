@@ -117,7 +117,7 @@ def transcribe(client, key, model, wav, diarize=False, timeout=300):
     return r.status_code, dt, j
 
 
-def summarise(j):
+def summarize(j):
     words = j.get("words") or []
     segs = j.get("segments") or []
     speakers = {w.get("speaker") for w in words if w.get("speaker") is not None} | \
@@ -171,7 +171,7 @@ def main():
                     err = (j.get("error") or {}).get("message") if isinstance(j.get("error"), dict) else j
                     line.append(f"  {m:9s} HTTP {code}: {str(err)[:160]}")
                     continue
-                s = summarise(j)
+                s = summarize(j)
                 w = wer(ref, s["text"])
                 a["wer"].append(w)
                 a["lat"].append(dt)

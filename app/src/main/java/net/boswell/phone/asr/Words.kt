@@ -1,6 +1,6 @@
 package net.boswell.phone.asr
 
-/** One recognised word and when it was said, in seconds from the start of the audio. */
+/** One recognized word and when it was said, in seconds from the start of the audio. */
 data class Word(val text: String, val start: Double, val end: Double)
 
 object Words {

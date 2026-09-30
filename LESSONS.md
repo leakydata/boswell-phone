@@ -95,7 +95,7 @@ nor the unknown-cluster path, so every later occurrence arrived as a fresh
 stranger. Tag fifty video voices and you get fifty clusters today and fifty
 more next week. Nathan's objection is the right way to think about the whole
 feature: he will not use a label meaning "doesn't matter" if it stops that
-voice being labelled properly some other day.
+voice being labeled properly some other day.
 
 ---
 

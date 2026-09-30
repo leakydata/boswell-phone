@@ -66,7 +66,7 @@ Things learned on the device:
   Boswell.
 
 `tools/omi_probe.py` counts live notifications from this machine without
-writing anything, to tell device behaviour from phone behaviour.
+writing anything, to tell device behavior from phone behavior.
 
 ## Milestone 2: on-phone transcripts with speakers (2026-09-30, local only)
 
@@ -130,7 +130,7 @@ Every one of those assumes a card with several gigabytes of VRAM. On a phone,
 that work has to be hosted.
 
 This is the whole reason the phone version is a separate project rather than a
-port. It is not "the same program on a smaller screen" — the division of labour
+port. It is not "the same program on a smaller screen" — the division of labor
 is different. What stays local is the radio and the storage; what leaves is the
 intelligence.
 

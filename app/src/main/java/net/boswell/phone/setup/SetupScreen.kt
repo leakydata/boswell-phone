@@ -70,7 +70,7 @@ private enum class Step { WELCOME, PERMISSIONS, OMI, MODE, MODELS, YOU, ASSISTAN
 private const val PASSAGE = "The morning light came through the kitchen window while the kettle began to hum. " +
     "I checked the weather, found my keys beside the fruit bowl, and made a short list for the day: " +
     "call the plumber, pick up bread and oranges, and finish the report before four o'clock. " +
-    "Outside, a neighbour was walking two small dogs, and somewhere a radio played an old song."
+    "Outside, a neighbor was walking two small dogs, and somewhere a radio played an old song."
 
 /**
  * First run, one decision per screen: permissions, the Omi, how it should
@@ -103,7 +103,7 @@ fun SetupScreen(vm: MainViewModel, onPair: () -> Unit, onFinish: () -> Unit, voi
                     Step.WELCOME -> {
                         Title("Welcome to Boswell")
                         Body("Boswell turns what your Omi hears into a record of your day: conversations, who said what, and the things you said you'd do.")
-                        Body("Transcribing, recognising voices and sorting it all happens on this phone. Nothing is sent anywhere unless you switch on the assistant later, and then only text.")
+                        Body("Transcribing, recognizing voices and sorting it all happens on this phone. Nothing is sent anywhere unless you switch on the assistant later, and then only text.")
                         Body("Setup takes a couple of minutes. Every step can be skipped and changed later.")
                     }
                     Step.PERMISSIONS -> Permissions()
@@ -215,7 +215,7 @@ private fun Models(vm: MainViewModel, ui: net.boswell.phone.ui.UiState) {
     val progress by ModelProgressRepository.state.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { vm.refreshModels() }
     Title("Download the on-phone models")
-    Body("Transcription, voices and sounds are recognised on this phone. That takes about ${Fmt.bytes(ui.models.sumOf { it.spec.totalBytes })} of models, downloaded once.")
+    Body("Transcription, voices and sounds are recognized on this phone. That takes about ${Fmt.bytes(ui.models.sumOf { it.spec.totalBytes })} of models, downloaded once.")
     for (m in ui.models) {
         val p = progress[m.spec.id]
         Column {
@@ -246,7 +246,7 @@ private fun You(vm: MainViewModel, mode: Mode, streaming: Boolean, hasOmi: Boole
     var enrolled by rememberSaveable { mutableStateOf(false) }
     val chosenMode = remember { mode }
     Title("Who are you?")
-    Body("Boswell names the voices it knows. Tell it yours and read a short passage so it recognises you, and so the assistant knows which voice is you.")
+    Body("Boswell names the voices it knows. Tell it yours and read a short passage so it recognizes you, and so the assistant knows which voice is you.")
     OutlinedTextField(value = name, onValueChange = setName, label = { Text("Your name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
     if (!hasOmi) { Body("Connect an Omi first (the earlier step) to learn your voice. You can do it later from People."); return }
     val modelsReady = vm.ui.value.models.filter { it.spec.id == "voiceprint" || it.spec.id == "segmentation" }.all { it.installed }

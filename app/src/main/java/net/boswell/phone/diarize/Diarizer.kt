@@ -213,7 +213,7 @@ class Diarizer(
         /** segmentation-3.0's receptive field, from the model's own metadata. */
         const val RF_SHIFT = 270
         const val RF_SIZE = 991
-        /** Frames are centred in their receptive field; this is where a frame's hop starts. */
+        /** Frames are centered in their receptive field; this is where a frame's hop starts. */
         const val RF_OFFSET = (RF_SIZE - RF_SHIFT) / 2
         const val FRAME_S = RF_SHIFT / SR.toDouble()
 

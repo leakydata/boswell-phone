@@ -68,7 +68,7 @@ object ModelDownloader {
                     FileOutputStream(part, true).use { out ->
                         val buf = ByteArray(BUFFER)
                         while (true) {
-                            if (isCancelled()) throw DownloadException("cancelled")
+                            if (isCancelled()) throw DownloadException("canceled")
                             val n = input.read(buf)
                             if (n < 0) break
                             out.write(buf, 0, n)
