@@ -17,6 +17,7 @@
                 <action android:name="net.boswell.phone.debug.CALENDAR" />
                 <action android:name="net.boswell.phone.debug.CAL_REFRESH" />
                 <action android:name="net.boswell.phone.debug.NAME" />
+                <action android:name="net.boswell.phone.debug.FEED" />
             </intent-filter>
         </receiver>
     </application>

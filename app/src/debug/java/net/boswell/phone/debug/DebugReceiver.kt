@@ -47,6 +47,24 @@ class DebugReceiver : BroadcastReceiver() {
                 val st = net.boswell.phone.speakers.SpeakerStore(context)
                 try { android.util.Log.i("Boswell", "named -> ${st.name(intent.getLongExtra("id", -1), intent.getStringExtra("name") ?: return)}") } finally { st.close() }
             }
+            // am broadcast -a net.boswell.phone.debug.FEED --es clip omi_1.wav
+            // Plays a recorded clip into the voice-enrollment step at real-time pace, standing in for the Omi's stream.
+            "net.boswell.phone.debug.FEED" -> {
+                val f = java.io.File(net.boswell.phone.capture.CaptureService.clipsDir(context), intent.getStringExtra("clip") ?: return)
+                val pending = goAsync()
+                Thread {
+                    try {
+                        val (pcm, _) = net.boswell.phone.audio.Wav.readPcm(f)
+                        var i = 0
+                        while (i + 320 <= pcm.size) {
+                            net.boswell.phone.setup.Enrollment.feed(pcm.copyOfRange(i, i + 320))
+                            net.boswell.phone.capture.CaptureRepository.update { it.copy(lastAudioMillis = System.currentTimeMillis()) }
+                            i += 320; Thread.sleep(20)
+                        }
+                        android.util.Log.i("Boswell", "debug feed done: ${net.boswell.phone.setup.Enrollment.state.value}")
+                    } finally { pending.finish() }
+                }.start()
+            }
             // am broadcast -a net.boswell.phone.debug.CALENDAR --el id 16
             "net.boswell.phone.debug.CALENDAR" -> {
                 net.boswell.phone.todo.Calendar.choose(context, intent.getLongExtra("id", -1).takeIf { it >= 0 })

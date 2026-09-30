@@ -25,11 +25,16 @@ object Enrollment {
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
     private val frames = ArrayList<ShortArray>()
-    /** The quietest levels seen, to learn the room: speech is what stands clearly above it. */
-    private val recent = ArrayDeque<Double>()
+    /**
+     * The room's level. Learned only from frames that are not speech, so a
+     * person reading without pauses can never raise it -- the first version
+     * took the quietest 10% of recent frames, and continuous reading filled
+     * "recent" with voice until the voice itself became the room.
+     */
+    private var noise = -1.0
 
     fun start(target: Double = 15.0) = synchronized(frames) {
-        frames.clear(); recent.clear(); _state.value = State(true, 0.0, target)
+        frames.clear(); noise = -1.0; _state.value = State(true, 0.0, target)
     }
 
     fun stop() = synchronized(frames) { _state.value = _state.value.copy(active = false) }
@@ -40,19 +45,22 @@ object Enrollment {
      * The Omi records quietly -- measured here, a person reading aloud sat at a
      * median frame level of 0.006 -- so a fixed loudness bar (0.01, the first
      * version) heard only 12 s of a minute's reading and never finished. The
-     * bar is now relative: 2.5x the room's own level, learned from the quietest
-     * frames, with a small absolute floor.
+     * bar is now relative: 2.5x the room's own level (see [noise]), with a
+     * small absolute floor.
      */
     fun feed(pcm: ShortArray) = synchronized(frames) {
         if (!_state.value.active) return
         var s = 0.0
         for (x in pcm) { val v = x / 32768.0; s += v * v }
         val rms = sqrt(s / pcm.size)
-        recent.addLast(rms); if (recent.size > 500) recent.removeFirst()
-        val noise = recent.sorted()[recent.size / 10]
+        if (noise < 0) noise = minOf(rms, 0.004)
         val bar = maxOf(0.003, noise * 2.5)
         val level = (rms / (bar * 4)).toFloat().coerceIn(0f, 1f)
-        if (rms < bar) { _state.value = _state.value.copy(level = level); return }
+        if (rms < bar) {
+            noise = noise * 0.95 + rms * 0.05          // only quiet frames teach it the room
+            _state.value = _state.value.copy(level = level)
+            return
+        }
         frames += pcm
         val secs = frames.sumOf { it.size } / 16_000.0
         _state.value = _state.value.copy(heardSeconds = secs, active = secs < _state.value.targetSeconds, level = level)
