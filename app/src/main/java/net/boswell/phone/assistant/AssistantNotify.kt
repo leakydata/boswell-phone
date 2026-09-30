@@ -16,7 +16,12 @@ import java.util.Locale
  * the answer read aloud through whatever the phone is playing to.
  */
 object AssistantNotify {
-    const val ANSWERS = "answers"
+    /**
+     * High importance, so an answer you are waiting for appears as a banner.
+     * A channel's importance is fixed once created, hence the new id; the
+     * first version ("answers", default importance) is deleted.
+     */
+    const val ANSWERS = "answers_v2"
     const val SUGGESTIONS = "suggestions"
     const val LISTENING = "listening"
 
@@ -25,7 +30,8 @@ object AssistantNotify {
 
     fun ensureChannels(c: Context) {
         val nm = c.getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(ANSWERS, "Answers", NotificationManager.IMPORTANCE_DEFAULT).apply {
+        nm.deleteNotificationChannel("answers")
+        nm.createNotificationChannel(NotificationChannel(ANSWERS, "Answers", NotificationManager.IMPORTANCE_HIGH).apply {
             description = "Answers to questions you ask, and reminders"
         })
         nm.createNotificationChannel(NotificationChannel(SUGGESTIONS, "Suggestions", NotificationManager.IMPORTANCE_DEFAULT).apply {

@@ -296,6 +296,13 @@ class CaptureService : LifecycleService() {
     private var watching: Job? = null
     private val watcher by lazy { net.boswell.phone.assistant.Watcher(this) }
 
+    /** A short buzz on the Omi, if it has a motor. Best effort: feedback, never a failure. */
+    private fun buzz(level: Int) {
+        val c = connection ?: return
+        if (!c.has(OmiUuids.HAPTIC)) return
+        lifecycleScope.launch { runCatching { c.write(OmiUuids.HAPTIC, byteArrayOf(level.toByte())) } }
+    }
+
     private fun onButton(code: Int) {
         CaptureRepository.log("button event $code")
         when (code) {
@@ -332,6 +339,7 @@ class CaptureService : LifecycleService() {
         }
         val q = net.boswell.phone.assistant.QuestionCapture()
         question = q
+        buzz(1)          // heard the tap: talk now
         CaptureRepository.update { it.copy(asking = "listening") }
         net.boswell.phone.assistant.AssistantNotify.post(this, net.boswell.phone.assistant.AssistantNotify.LISTENING, "Listening…", "Ask your question. Tap again when you're done.", LISTENING_ID)
         lifecycleScope.launch(kotlinx.coroutines.Dispatchers.Default) {
@@ -348,10 +356,12 @@ class CaptureService : LifecycleService() {
             net.boswell.phone.assistant.AssistantNotify.cancel(this@CaptureService, LISTENING_ID)
             val text = asr.await().use { it.transcribe(q.audio()) }.joinToString(" ") { it.text }.trim()
             if (text.isEmpty()) {
+                buzz(3)
                 net.boswell.phone.assistant.AssistantNotify.post(this@CaptureService, net.boswell.phone.assistant.AssistantNotify.ANSWERS, "Didn't catch that", "Tap the Omi and try again.")
             } else {
                 CaptureRepository.log("asked: $text")
                 val a = withContext(kotlinx.coroutines.Dispatchers.IO) { net.boswell.phone.assistant.Assistant(this@CaptureService).ask(text, "button") }
+                buzz(if (a.error) 3 else 2)          // the answer is on the phone
                 net.boswell.phone.assistant.AssistantNotify.post(this@CaptureService, net.boswell.phone.assistant.AssistantNotify.ANSWERS, text.take(60), a.text)
             }
             CaptureRepository.update { it.copy(asking = null) }

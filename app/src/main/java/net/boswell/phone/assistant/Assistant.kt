@@ -60,7 +60,7 @@ class Assistant(private val context: Context) {
         try {
             archive.sync(speakers)
             val messages = mutableListOf(
-                Llm.system(systemPrompt(archive, speakers)),
+                Llm.system(systemPrompt(archive, speakers, source)),
                 Llm.user(question),
             )
             repeat(MAX_ROUNDS) {
@@ -97,13 +97,14 @@ class Assistant(private val context: Context) {
 
     private fun ownerName(speakers: SpeakerStore): String? = AssistantPrefs.owner(context)?.let(speakers::nameOf)
 
-    private fun systemPrompt(archive: Archive, speakers: SpeakerStore): String {
+    private fun systemPrompt(archive: Archive, speakers: SpeakerStore, source: String): String {
         val me = ownerName(speakers)
         val recent = lines(archive, speakers, System.currentTimeMillis() / 1000.0 - 10 * 60)
         return buildString {
             appendLine("You are Boswell, a personal assistant on ${me ?: "the user"}'s phone. The phone records the conversations around them through a wearable microphone and transcribes them on the device; you can look through that record with tools.")
             appendLine("It is now ${LocalDateTime.now().format(clock)} (${zone.id}).")
             if (me != null) appendLine("Lines marked (me) are ${me}, the person you are helping.")
+            if (source == "button") appendLine("${me ?: "The user"} asked this out loud just now by tapping the button on their Omi wearable; the phone heard it and transcribed it, so expect small transcription errors in the question. The question itself also appears in the recent lines below.")
             appendLine("Answers appear as a phone notification: be direct and brief, one to three sentences, unless asked for detail. Say so plainly when the record does not contain the answer; do not invent what was said. Transcripts are machine-made and may contain errors.")
             appendLine()
             appendLine("What was said in the last 10 minutes:")
