@@ -3,6 +3,7 @@ name = "boswell-phone-tools"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+    "bleak>=3.0.2",
     "httpx>=0.28.1",
     "numpy>=2.5.3",
     "onnx>=1.23.1",

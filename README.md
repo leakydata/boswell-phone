@@ -34,6 +34,40 @@ desktop archive read-only and never touch a device.
 - **The app ships with no models.** ASR, segmentation and `voiceprint.onnx`
   are optional in-app downloads. The app must work with none installed.
 
+## The app (milestone 1, 2026-09-30)
+
+Kotlin + Compose, `app/`, package `net.boswell.phone` (debug build installs as
+`net.boswell.phone.debug`). Build with `./gradlew :app:assembleDebug`; unit
+tests with `./gradlew :app:testDebugUnitTest`. JDK 21, AGP 9.4, compileSdk 37.1,
+minSdk 33, arm64 only.
+
+What works, verified on a Pixel 10 Pro XL with the Omi CV 1 (fw 3.0.21):
+scan by service UUID, connect without bonding, read device info, battery,
+charging, live link RSSI and device clock (each shown with its age), subscribe
+to live audio, decode Opus, and write 30 s WAV clips with desktop-compatible
+sidecar JSON (`time_known: false`) in app-private storage, from a foreground
+service that reconnects with backoff.
+
+Things learned on the device:
+
+- **The CV 1 sends nothing while it is quiet.** Its mic has hardware acoustic
+  activity detection (`CONFIG_OMI_ENABLE_T5838_AAD`, ~3 s hold): in silence
+  the stream pauses, for minutes, on a healthy link. Liveness is therefore a
+  GATT read succeeding, never audio arriving, and a pause longer than 4 s
+  closes the current clip so a clip never spans a silence.
+- **Concentus (pure-Java Opus) is close enough to libopus.** Same refused
+  frames, 99.85% of samples within ±1, voiceprint cosine 0.9999
+  (`tools/opus_parity.py`, `OpusParityTest`).
+- The live packet counter is 16-bit and wraps every ~22 min. `RunTracker`
+  treats a wrap as a wrap. The desktop's `Run.note` treats it as a reboot.
+- **Offload is deliberately absent.** Only the read-only ring-info query
+  exists (the "Check backlog" button). Reading the ring consumes it: audio
+  drained to the phone is gone from the device, and so never reaches desktop
+  Boswell.
+
+`tools/omi_probe.py` counts live notifications from this machine without
+writing anything, to tell device behaviour from phone behaviour.
+
 Read these four files in order:
 
 | file | what it is |
