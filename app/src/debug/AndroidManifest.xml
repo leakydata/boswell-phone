@@ -10,6 +10,7 @@
                 <action android:name="net.boswell.phone.debug.MODE" />
                 <action android:name="net.boswell.phone.debug.SYNC" />
                 <action android:name="net.boswell.phone.debug.ASK" />
+                <action android:name="net.boswell.phone.debug.TRIGGER" />
             </intent-filter>
         </receiver>
     </application>

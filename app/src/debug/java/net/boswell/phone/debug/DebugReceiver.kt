@@ -27,6 +27,23 @@ class DebugReceiver : BroadcastReceiver() {
                 }
             }
             "net.boswell.phone.debug.SYNC" -> CaptureService.sync(context, address)
+            // am broadcast -a net.boswell.phone.debug.TRIGGER --es q "..."  (as a line said by "Me", right now)
+            "net.boswell.phone.debug.TRIGGER" -> {
+                val q = intent.getStringExtra("q") ?: return
+                val owner = net.boswell.phone.assistant.AssistantPrefs.owner(context)
+                val pending = goAsync()
+                Thread {
+                    try {
+                        val t = net.boswell.phone.process.Transcript(
+                            clip = "debug_${System.currentTimeMillis()}.wav", created = System.currentTimeMillis() / 1000.0,
+                            segments = listOf(net.boswell.phone.process.Segment(0.0, 3.0, "SPEAKER_00", q)),
+                            speakers = mapOf("SPEAKER_00" to net.boswell.phone.process.SpeakerId(null, 0.9, "matched", 0.5, emptyList(), owner, 3.0)),
+                            embeddings = emptyMap(), engine = "debug", processMs = 0)
+                        net.boswell.phone.assistant.TriggerEngine(context).run(t, System.currentTimeMillis() / 1000.0 - 3, force = true)
+                        android.util.Log.i("Boswell", "debug trigger done")
+                    } finally { pending.finish() }
+                }.start()
+            }
             // am broadcast -a net.boswell.phone.debug.ASK --es q "..." [--es source capture]
             "net.boswell.phone.debug.ASK" -> {
                 val q = intent.getStringExtra("q") ?: return

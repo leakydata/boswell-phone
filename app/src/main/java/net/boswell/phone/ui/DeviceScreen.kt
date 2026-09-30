@@ -87,7 +87,7 @@ private fun Section(title: String, content: @Composable () -> Unit) {
 
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: PaddingValues, onPair: () -> Unit) {
+fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: PaddingValues, onTriggers: () -> Unit, onPair: () -> Unit) {
     val ctx = LocalContext.current
     val progress by ModelProgressRepository.state.collectAsStateWithLifecycle()
     var confirmClean by remember { mutableStateOf(false) }
@@ -225,6 +225,15 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                             net.boswell.phone.assistant.AssistantPrefs.DoubleTap.BOOKMARK -> "Bookmark the moment"
                             net.boswell.phone.assistant.AssistantPrefs.DoubleTap.SUMMARIZE -> "Summarize last 10 min"
                         }) })
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable(onClick = onTriggers)) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Voice triggers", style = MaterialTheme.typography.bodyLarge)
+                        Text(if (net.boswell.phone.assistant.Triggers.enabled(ctx2)) "On · say \"remind me…\", \"hey Boswell…\" and more"
+                            else "Off · act on phrases like \"remind me\" when you say them",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Text("Edit", color = MaterialTheme.colorScheme.primary)
                 }
                 var calendarOk by remember { mutableStateOf(net.boswell.phone.todo.Calendar.allowed(ctx2)) }
                 val calLauncher = androidx.activity.compose.rememberLauncherForActivityResult(

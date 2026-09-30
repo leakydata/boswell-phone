@@ -62,7 +62,7 @@ class Assistant(private val context: Context) {
      * Answer one question. [source] is how it was asked (typed, button, …).
      * Up to six rounds of tool use, then a short answer suited to a notification.
      */
-    fun ask(question: String, source: String): Answer {
+    fun ask(question: String, source: String, instruction: String? = null, saidAt: Double? = null, fileOnly: Boolean = source == CAPTURE, display: String? = null): Answer {
         val key = Secrets.get(context, Secrets.OPENROUTER) ?: return Answer("Add an OpenRouter key under Device → Assistant first.", 0.0, true)
         val model = AssistantPrefs.model(context)
         val llm = Llm(key, model)
@@ -73,12 +73,15 @@ class Assistant(private val context: Context) {
         try {
             archive.sync(speakers)
             val messages = mutableListOf(
-                Llm.system(systemPrompt(archive, speakers, source)),
+                Llm.system(systemPrompt(archive, speakers, source) + (instruction?.let { i ->
+                    "\n\nThis came from a voice trigger. " + (saidAt?.let { "The words were said at ${Instant.ofEpochSecond(it.toLong()).atZone(zone).format(clock)}; read relative times (\"in an hour\", \"tomorrow\") from then. " } ?: "") +
+                        "Your job: $i\nIf the words are not really a request of that kind (a phrase used in passing), call no tools and reply exactly NONE."
+                } ?: "")),
                 Llm.user(question),
             )
             repeat(MAX_ROUNDS) {
                 val reply = try {
-                    llm.chat(messages, tools(forCapture = source == CAPTURE))
+                    llm.chat(messages, tools(forCapture = fileOnly))
                 } catch (e: Exception) {
                     store.logCall("ask", model, null, e.message)
                     throw e
@@ -87,7 +90,9 @@ class Assistant(private val context: Context) {
                 cost += reply.cost
                 if (reply.toolCalls.isEmpty()) {
                     val text = reply.text?.trim().orEmpty().ifEmpty { "I don't have an answer for that." }
-                    store.addExchange(source, question, text, cost)
+                    // A trigger that turned out not to be a request: nothing to record or show.
+                    if (instruction != null && text.trim().trimEnd('.').equals("NONE", ignoreCase = true)) return Answer(NONE, cost)
+                    store.addExchange(source, display ?: question, text, cost)
                     return Answer(text, cost)
                 }
                 messages += reply.message
@@ -97,11 +102,11 @@ class Assistant(private val context: Context) {
                 }
             }
             val text = "I looked but ran out of steps before finding an answer."
-            store.addExchange(source, question, text, cost, error = true)
+            store.addExchange(source, display ?: question, text, cost, error = true)
             return Answer(text, cost, true)
         } catch (e: Exception) {
             val text = "Couldn't reach the assistant: ${e.message?.take(160)}"
-            store.addExchange(source, question, text, cost, error = true)
+            store.addExchange(source, display ?: question, text, cost, error = true)
             return Answer(text, cost, true)
         } finally {
             speakers.close(); archive.close(); store.close()
@@ -223,5 +228,7 @@ class Assistant(private val context: Context) {
         const val MAX_ROUNDS = 6
         /** Double tap: file what was said, don't chat. */
         const val CAPTURE = "capture"
+        const val TRIGGER = "trigger"
+        const val NONE = "NONE"
     }
 }

@@ -144,6 +144,12 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
             processMs = System.currentTimeMillis() - t0,
             sounds = tags, verdict = tags?.let { verdictFor(segments.isNotEmpty(), it) })
         writeAtomically(File(out, wav.nameWithoutExtension + ".json"), TranscriptJson.json.encodeToString(Transcript.serializer(), t).toByteArray())
+        // Voice triggers act on new transcripts only; the line's own time goes with it.
+        val started = runCatching {
+            net.boswell.phone.capture.Clipper.json.decodeFromString(net.boswell.phone.capture.ClipTimes.serializer(),
+                File(wav.parentFile, wav.nameWithoutExtension + ".json").readText()).started
+        }.getOrNull()
+        if (started != null) runCatching { net.boswell.phone.assistant.TriggerEngine(applicationContext).run(t, started) }
     }
 
     private fun foreground(text: String): ForegroundInfo {

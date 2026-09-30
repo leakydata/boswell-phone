@@ -133,7 +133,7 @@ private fun ExchangeCard(e: Exchange) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (watcher) Text("Hint · ${e.question ?: ""}", style = MaterialTheme.typography.labelLarge)
                 Text(e.answer, style = MaterialTheme.typography.bodyLarge)
-                Text("${Fmt.time(e.at)} · ${when (e.source) { "button" -> "asked on the Omi"; "watcher" -> "while listening"; else -> "typed" }}" +
+                Text("${Fmt.time(e.at)} · ${when (e.source) { "button" -> "asked on the Omi"; "watcher" -> "while listening"; "trigger" -> "from a voice trigger"; "capture" -> "double tap"; else -> "typed" }}" +
                     (if (e.cost > 0) " · $%.4f".format(e.cost) else ""), style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }

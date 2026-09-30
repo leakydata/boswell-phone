@@ -71,11 +71,12 @@ fun BoswellApp(device: MainViewModel, startTab: String? = null) {
             }
             composable("ask") { AskScreen(pad, onSetup = { go("device") }) }
             composable("todo") { TodoScreen(pad) }
+            composable("triggers") { TriggersScreen(onBack = { nav.popBackStack() }) }
             composable("device") {
                 val activity = androidx.compose.ui.platform.LocalContext.current as android.app.Activity
                 val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
                     androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult()) { device.refreshSync(activity) }
-                DeviceScreen(ui, cap, device, pad, onPair = {
+                DeviceScreen(ui, cap, device, pad, onTriggers = { nav.navigate("triggers") }, onPair = {
                     val address = ui.savedAddress ?: return@DeviceScreen
                     net.boswell.phone.sync.OmiCompanion.pair(activity, address,
                         launch = { sender -> launcher.launch(androidx.activity.result.IntentSenderRequest.Builder(sender).build()) },

@@ -15,14 +15,23 @@ data class Bookmark(val id: Long, val at: Double, val note: String?)
  * here -- when, why, which model, tokens, cost -- so what left the phone is
  * always visible, and the daily budget has something to count.
  */
-class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db", null, 1) {
+class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db", null, 2) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE calls (id INTEGER PRIMARY KEY, at REAL, purpose TEXT, model TEXT, prompt_tokens INTEGER, completion_tokens INTEGER, cost REAL, error TEXT)")
         db.execSQL("CREATE TABLE exchanges (id INTEGER PRIMARY KEY, at REAL, source TEXT, question TEXT, answer TEXT, cost REAL, error INTEGER)")
         db.execSQL("CREATE TABLE bookmarks (id INTEGER PRIMARY KEY, at REAL, note TEXT)")
+        db.execSQL(TRIGGER_HITS)
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) db.execSQL(TRIGGER_HITS)
+    }
+
+    /** True the first time a (clip, line, trigger) is seen; a line never fires the same trigger twice. */
+    fun claimTrigger(clip: String, start: Double, trigger: Long): Boolean =
+        writableDatabase.insertWithOnConflict("trigger_hits", null, ContentValues().apply {
+            put("clip", clip); put("start", start); put("trigger", trigger); put("at", now())
+        }, SQLiteDatabase.CONFLICT_IGNORE) != -1L
 
     private fun now() = System.currentTimeMillis() / 1000.0
 
@@ -59,6 +68,8 @@ class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db
         buildList { while (c.moveToNext()) add(Bookmark(c.getLong(0), c.getDouble(1), if (c.isNull(2)) null else c.getString(2))) }
     }
 }
+
+private const val TRIGGER_HITS = "CREATE TABLE IF NOT EXISTS trigger_hits (clip TEXT, start REAL, trigger INTEGER, at REAL, PRIMARY KEY (clip, start, trigger))"
 
 /** Assistant settings. The API key itself lives in [Secrets]. */
 object AssistantPrefs {
