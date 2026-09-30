@@ -117,7 +117,7 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                         Link.STREAMING -> if (quiet) "Live · listening (the mic sleeps in silence)" else "Live · recording"
                         Link.AWAY -> "Out of range or off · will keep trying"
                         Link.SYNCING -> cap.sync?.let { s ->
-                            if (s.target > 0) "Syncing · ${s.took * 100 / s.target}% · %.0f kB/s".format(s.bytesPerSecond / 1000) else "Syncing · ${s.phase}"
+                            if (s.target > 0) "Syncing · ${s.took * 100 / s.target}% · " + "%.0f kB/s".format(s.bytesPerSecond / 1000) else "Syncing · ${s.phase}"
                         } ?: "Syncing…"
                     },
                     style = MaterialTheme.typography.bodyLarge,
