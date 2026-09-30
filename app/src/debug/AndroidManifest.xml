@@ -9,6 +9,7 @@
             <intent-filter>
                 <action android:name="net.boswell.phone.debug.MODE" />
                 <action android:name="net.boswell.phone.debug.SYNC" />
+                <action android:name="net.boswell.phone.debug.ASK" />
             </intent-filter>
         </receiver>
     </application>

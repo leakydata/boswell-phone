@@ -3,6 +3,7 @@ package net.boswell.phone.ui
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material3.Icon
@@ -28,6 +29,7 @@ private data class Tab(val route: String, val label: String, val icon: ImageVect
 private val tabs = listOf(
     Tab("today", "Today", Icons.Filled.DateRange),
     Tab("ask", "Ask", Icons.AutoMirrored.Filled.Send),
+    Tab("todo", "To-do", Icons.Filled.CheckCircle),
     Tab("people", "People", Icons.Filled.Person),
     Tab("device", "Device", Icons.Filled.Settings),
 )
@@ -42,7 +44,7 @@ fun BoswellApp(device: MainViewModel, startTab: String? = null) {
     val route = entry?.destination?.route
     val onTab = tabs.any { it.route == route }
 
-    androidx.compose.runtime.LaunchedEffect(startTab) { if (startTab == "ask") nav.navigate("ask") }
+    androidx.compose.runtime.LaunchedEffect(startTab) { if (startTab == "ask" || startTab == "todo") nav.navigate(startTab) }
     fun openConversation(id: Long, line: Long? = null) = nav.navigate("conversation/$id?line=${line ?: -1}")
     fun go(tab: String) = nav.navigate(tab) {
         popUpTo(nav.graph.findStartDestination().id) { saveState = true }
@@ -68,6 +70,7 @@ fun BoswellApp(device: MainViewModel, startTab: String? = null) {
                 PeopleScreen(archive, pad, onPerson = { nav.navigate("person/$it") }, onOpenConversation = { openConversation(it) })
             }
             composable("ask") { AskScreen(pad, onSetup = { go("device") }) }
+            composable("todo") { TodoScreen(pad) }
             composable("device") {
                 val activity = androidx.compose.ui.platform.LocalContext.current as android.app.Activity
                 val launcher = androidx.activity.compose.rememberLauncherForActivityResult(

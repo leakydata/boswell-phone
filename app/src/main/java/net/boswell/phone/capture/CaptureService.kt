@@ -309,9 +309,10 @@ class CaptureService : LifecycleService() {
             1 -> {
                 val q = question
                 if (q != null) q.finish()      // a second tap ends the question
-                else startQuestion()
+                else startQuestion(capture = false)
             }
             2 -> when (net.boswell.phone.assistant.AssistantPrefs.doubleTap(this)) {
+                net.boswell.phone.assistant.AssistantPrefs.DoubleTap.TODO -> if (question == null) startQuestion(capture = true)
                 net.boswell.phone.assistant.AssistantPrefs.DoubleTap.BOOKMARK -> {
                     val store = net.boswell.phone.assistant.AssistantStore(this)
                     store.addBookmark(System.currentTimeMillis() / 1000.0); store.close()
@@ -331,7 +332,7 @@ class CaptureService : LifecycleService() {
      * hand it to the assistant. The recognizer loads while you talk, so the
      * two seconds it takes are not added on after.
      */
-    private fun startQuestion() {
+    private fun startQuestion(capture: Boolean) {
         val models = net.boswell.phone.models.ModelStore(this)
         if (!models.isInstalled(net.boswell.phone.models.ModelCatalog.ASR)) {
             net.boswell.phone.assistant.AssistantNotify.post(this, net.boswell.phone.assistant.AssistantNotify.ANSWERS, "Can't listen yet", "Download the transcription model first (Device → On-device models).")
@@ -341,7 +342,8 @@ class CaptureService : LifecycleService() {
         question = q
         buzz(1)          // heard the tap: talk now
         CaptureRepository.update { it.copy(asking = "listening") }
-        net.boswell.phone.assistant.AssistantNotify.post(this, net.boswell.phone.assistant.AssistantNotify.LISTENING, "Listening…", "Ask your question. Tap again when you're done.", LISTENING_ID)
+        net.boswell.phone.assistant.AssistantNotify.post(this, net.boswell.phone.assistant.AssistantNotify.LISTENING, "Listening…",
+            if (capture) "Say what to remember. Tap once when you're done." else "Ask your question. Tap again when you're done.", LISTENING_ID)
         lifecycleScope.launch(kotlinx.coroutines.Dispatchers.Default) {
             val asr = async { net.boswell.phone.asr.LocalAsr(models) }
             val started = System.currentTimeMillis()
@@ -359,10 +361,12 @@ class CaptureService : LifecycleService() {
                 buzz(3)
                 net.boswell.phone.assistant.AssistantNotify.post(this@CaptureService, net.boswell.phone.assistant.AssistantNotify.ANSWERS, "Didn't catch that", "Tap the Omi and try again.")
             } else {
-                CaptureRepository.log("asked: $text")
-                val a = withContext(kotlinx.coroutines.Dispatchers.IO) { net.boswell.phone.assistant.Assistant(this@CaptureService).ask(text, "button") }
+                CaptureRepository.log(if (capture) "captured: $text" else "asked: $text")
+                val source = if (capture) net.boswell.phone.assistant.Assistant.CAPTURE else "button"
+                val a = withContext(kotlinx.coroutines.Dispatchers.IO) { net.boswell.phone.assistant.Assistant(this@CaptureService).ask(text, source) }
                 buzz(if (a.error) 3 else 2)          // the answer is on the phone
-                net.boswell.phone.assistant.AssistantNotify.post(this@CaptureService, net.boswell.phone.assistant.AssistantNotify.ANSWERS, text.take(60), a.text)
+                net.boswell.phone.assistant.AssistantNotify.post(this@CaptureService, net.boswell.phone.assistant.AssistantNotify.ANSWERS,
+                    if (capture) "To-do" else text.take(60), a.text)
             }
             CaptureRepository.update { it.copy(asking = null) }
         }

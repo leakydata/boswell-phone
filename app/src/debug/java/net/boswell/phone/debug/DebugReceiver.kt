@@ -15,7 +15,7 @@ import net.boswell.phone.sync.SyncWorker
  */
 class DebugReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val address = Modes.address(context) ?: return
+        val address = Modes.address(context) ?: ""
         when (intent.action) {
             "net.boswell.phone.debug.MODE" -> {
                 val m = Mode.valueOf(intent.getStringExtra("mode") ?: return)
@@ -27,6 +27,20 @@ class DebugReceiver : BroadcastReceiver() {
                 }
             }
             "net.boswell.phone.debug.SYNC" -> CaptureService.sync(context, address)
+            // am broadcast -a net.boswell.phone.debug.ASK --es q "..." [--es source capture]
+            "net.boswell.phone.debug.ASK" -> {
+                val q = intent.getStringExtra("q") ?: return
+                val source = intent.getStringExtra("source") ?: "typed"
+                val pending = goAsync()
+                Thread {
+                    try {
+                        val a = net.boswell.phone.assistant.Assistant(context).ask(q, source)
+                        net.boswell.phone.assistant.AssistantNotify.post(context, net.boswell.phone.assistant.AssistantNotify.ANSWERS,
+                            if (source == "capture") "To-do" else q.take(60), a.text)
+                        android.util.Log.i("Boswell", "debug ask -> ${a.text} (${a.cost})")
+                    } finally { pending.finish() }
+                }.start()
+            }
         }
     }
 }

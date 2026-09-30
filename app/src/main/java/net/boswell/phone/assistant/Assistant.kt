@@ -28,7 +28,23 @@ class Assistant(private val context: Context) {
     private val zone = ZoneId.systemDefault()
     private val clock = DateTimeFormatter.ofPattern("EEE MMM d, h:mm a")
 
-    private val tools = buildJsonArray {
+    private fun tools(forCapture: Boolean = false) = buildJsonArray {
+        val cats = net.boswell.phone.todo.TodoStore(context).let { t -> try { t.categories() } finally { t.close() } }
+        val catHint = if (cats.isEmpty()) "e.g. Errands, Work, Home, Health, Shopping, Calls" else "reuse one of: ${cats.joinToString()} — or a new short one if none fits"
+        add(Llm.tool("add_todo", "Add an item to the user's to-do list, optionally with a reminder at a due time.",
+            mapOf("text" to ("string" to "the to-do, short and actionable, in the user's words"),
+                "category" to ("string" to "one short category, $catHint"),
+                "due" to ("string" to "local date-time to be reminded, YYYY-MM-DDTHH:MM (optional)"),
+                "minutes_from_now" to ("integer" to "alternative to due: remind in N minutes (optional)")),
+            listOf("text", "category")))
+        add(Llm.tool("add_calendar_event", "Put an event in the user's calendar. Only for appointments, meetings or events with a specific time.",
+            mapOf("title" to ("string" to "event title"), "start" to ("string" to "local start, YYYY-MM-DDTHH:MM"),
+                "minutes" to ("integer" to "duration in minutes, default 60"), "location" to ("string" to "optional"),
+                "notes" to ("string" to "optional")), listOf("title", "start")))
+        if (forCapture) return@buildJsonArray
+        add(Llm.tool("list_todos", "The user's open to-dos (and optionally done ones), with ids, categories and due times.",
+            mapOf("category" to ("string" to "only this category (optional)"), "include_done" to ("boolean" to "include finished items (optional)"))))
+        add(Llm.tool("complete_todo", "Check off a to-do by id.", mapOf("id" to ("integer" to "to-do id from list_todos")), listOf("id")))
         add(Llm.tool("search_transcripts", "Full-text search over everything recorded and transcribed. Returns matching lines with time and speaker.",
             mapOf("query" to ("string" to "words to search for"), "days" to ("integer" to "only the last N days (optional)")), listOf("query")))
         add(Llm.tool("recent_lines", "What was said in the last N minutes, in order, with speakers.",
@@ -38,9 +54,6 @@ class Assistant(private val context: Context) {
         add(Llm.tool("read_conversation", "Every line of one conversation.",
             mapOf("id" to ("integer" to "conversation id from day_conversations or search")), listOf("id")))
         add(Llm.tool("people", "Everyone the phone knows by name, and when each was last heard.", emptyMap()))
-        add(Llm.tool("set_reminder", "Remind the user later with a phone notification.",
-            mapOf("text" to ("string" to "what to remind them of"), "minutes_from_now" to ("integer" to "when, in minutes from now")),
-            listOf("text", "minutes_from_now")))
     }
 
     fun ready(): Boolean = Secrets.get(context, Secrets.OPENROUTER) != null
@@ -65,7 +78,7 @@ class Assistant(private val context: Context) {
             )
             repeat(MAX_ROUNDS) {
                 val reply = try {
-                    llm.chat(messages, tools)
+                    llm.chat(messages, tools(forCapture = source == CAPTURE))
                 } catch (e: Exception) {
                     store.logCall("ask", model, null, e.message)
                     throw e
@@ -79,7 +92,7 @@ class Assistant(private val context: Context) {
                 }
                 messages += reply.message
                 for (call in reply.toolCalls) {
-                    val result = runCatching { runTool(call, archive, speakers) }.getOrElse { "error: ${it.message}" }
+                    val result = runCatching { runTool(call, archive, speakers, source) }.getOrElse { "error: ${it.message}" }
                     messages += Llm.toolResult(call.id, result.take(12_000))
                 }
             }
@@ -102,9 +115,10 @@ class Assistant(private val context: Context) {
         val recent = lines(archive, speakers, System.currentTimeMillis() / 1000.0 - 10 * 60)
         return buildString {
             appendLine("You are Boswell, a personal assistant on ${me ?: "the user"}'s phone. The phone records the conversations around them through a wearable microphone and transcribes them on the device; you can look through that record with tools.")
-            appendLine("It is now ${LocalDateTime.now().format(clock)} (${zone.id}).")
+            appendLine("It is now ${LocalDateTime.now().format(clock)} (${zone.id}); today is ${LocalDate.now()}.")
             if (me != null) appendLine("Lines marked (me) are ${me}, the person you are helping.")
             if (source == "button") appendLine("${me ?: "The user"} asked this out loud just now by tapping the button on their Omi wearable; the phone heard it and transcribed it, so expect small transcription errors in the question. The question itself also appears in the recent lines below.")
+            if (source == CAPTURE) appendLine("The user double-tapped the Omi to capture something to remember. File it with add_todo (pick a fitting category; set due only if they said when). Use add_calendar_event instead only if it is clearly an appointment or meeting at a specific time. Then reply with a very short confirmation like 'Added to Errands: pick up prescription (Thu 9:00)'.")
             appendLine("Answers appear as a phone notification: be direct and brief, one to three sentences, unless asked for detail. Say so plainly when the record does not contain the answer; do not invent what was said. Transcripts are machine-made and may contain errors.")
             appendLine()
             appendLine("What was said in the last 10 minutes:")
@@ -132,7 +146,12 @@ class Assistant(private val context: Context) {
         }
     }
 
-    private fun runTool(call: ToolCall, archive: Archive, speakers: SpeakerStore): String {
+    /** "2026-10-01T09:00" (or with a space, or seconds) in local time -> epoch seconds. */
+    private fun parseLocal(s: String): Double? = runCatching {
+        LocalDateTime.parse(s.trim().replace(" ", "T").let { if (it.length == 16) it else it.take(19) }).atZone(zone).toEpochSecond().toDouble()
+    }.getOrNull()
+
+    private fun runTool(call: ToolCall, archive: Archive, speakers: SpeakerStore, source: String): String {
         val args: JsonObject = runCatching { Llm.json.parseToJsonElement(call.arguments).jsonObject }.getOrDefault(JsonObject(emptyMap()))
         fun str(k: String) = args[k]?.jsonPrimitive?.contentOrNull
         fun int(k: String) = args[k]?.jsonPrimitive?.intOrNull ?: str(k)?.toIntOrNull()
@@ -166,11 +185,35 @@ class Assistant(private val context: Context) {
             "people" -> speakers.people().filter { it.name != null }.joinToString("\n") { p ->
                 "${p.name}${if (p.id == AssistantPrefs.owner(context)) " (me)" else ""}: last heard ${p.lastHeard?.let(::at) ?: "never"}"
             }.ifBlank { "nobody has been named yet" }
-            "set_reminder" -> {
+            "add_todo" -> {
                 val text = str("text") ?: return "missing text"
-                val minutes = (int("minutes_from_now") ?: return "missing minutes_from_now").coerceIn(1, 60 * 24 * 14)
-                Reminders.schedule(context, text, minutes.toLong())
-                "reminder set for ${at(System.currentTimeMillis() / 1000.0 + minutes * 60)}"
+                val due = str("due")?.let(::parseLocal) ?: int("minutes_from_now")?.let { System.currentTimeMillis() / 1000.0 + it.coerceIn(1, 60 * 24 * 365) * 60 }
+                val store = net.boswell.phone.todo.TodoStore(context)
+                val id = try { store.add(text, str("category"), due, if (source == CAPTURE || source == "button") "voice" else "assistant") } finally { store.close() }
+                due?.let { net.boswell.phone.todo.TodoReminders.schedule(context, id, it) }
+                "added to-do $id" + (due?.let { " with a reminder at ${at(it)}" } ?: "")
+            }
+            "list_todos" -> {
+                val store = net.boswell.phone.todo.TodoStore(context)
+                val all = try { store.all(includeDone = args["include_done"]?.jsonPrimitive?.contentOrNull == "true") } finally { store.close() }
+                val cat = str("category")
+                all.filter { cat == null || it.category.equals(cat, ignoreCase = true) }.joinToString("\n") { t ->
+                    "id ${t.id} [${t.category}] ${t.text}" + (t.due?.let { " (due ${at(it)})" } ?: "") + if (t.done) " — done" else ""
+                }.ifBlank { "no to-dos" }
+            }
+            "complete_todo" -> {
+                val id = int("id")?.toLong() ?: return "missing id"
+                val store = net.boswell.phone.todo.TodoStore(context)
+                try { store.get(id) ?: return "no to-do $id"; store.setDone(id, true) } finally { store.close() }
+                net.boswell.phone.todo.TodoReminders.cancel(context, id)
+                "checked off $id"
+            }
+            "add_calendar_event" -> {
+                val title = str("title") ?: return "missing title"
+                val start = str("start")?.let(::parseLocal) ?: return "could not read the start time; use YYYY-MM-DDTHH:MM"
+                net.boswell.phone.todo.Calendar.add(context, title, start, int("minutes") ?: 60, str("location"), str("notes")).fold(
+                    onSuccess = { "added to the calendar: $title at ${at(start)}" },
+                    onFailure = { "not added: ${it.message}" })
             }
             else -> "unknown tool ${call.name}"
         }
@@ -178,5 +221,7 @@ class Assistant(private val context: Context) {
 
     companion object {
         const val MAX_ROUNDS = 6
+        /** Double tap: file what was said, don't chat. */
+        const val CAPTURE = "capture"
     }
 }

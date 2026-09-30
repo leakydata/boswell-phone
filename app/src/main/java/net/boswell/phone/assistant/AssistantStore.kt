@@ -81,7 +81,7 @@ object AssistantPrefs {
     fun budget(c: Context): Double = p(c).getFloat("watcher_budget", 0.50f).toDouble()
     fun setBudget(c: Context, d: Double) = p(c).edit().putFloat("watcher_budget", d.toFloat()).apply()
 
-    enum class DoubleTap { BOOKMARK, SUMMARIZE }
-    fun doubleTap(c: Context): DoubleTap = runCatching { DoubleTap.valueOf(p(c).getString("double_tap", "BOOKMARK")!!) }.getOrDefault(DoubleTap.BOOKMARK)
+    enum class DoubleTap { TODO, BOOKMARK, SUMMARIZE }
+    fun doubleTap(c: Context): DoubleTap = runCatching { DoubleTap.valueOf(p(c).getString("double_tap", "TODO")!!) }.getOrDefault(DoubleTap.TODO)
     fun setDoubleTap(c: Context, d: DoubleTap) = p(c).edit().putString("double_tap", d.name).apply()
 }

@@ -33,6 +33,8 @@ object AssistantNotify {
         nm.deleteNotificationChannel("answers")
         nm.createNotificationChannel(NotificationChannel(ANSWERS, "Answers", NotificationManager.IMPORTANCE_HIGH).apply {
             description = "Answers to questions you ask, and reminders"
+            // Readable on the lock screen: you asked, so you want to see it there.
+            lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
         })
         nm.createNotificationChannel(NotificationChannel(SUGGESTIONS, "Suggestions", NotificationManager.IMPORTANCE_DEFAULT).apply {
             description = "Hints from the assistant listening in live mode"
@@ -49,6 +51,7 @@ object AssistantNotify {
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setContentIntent(open)
+            .setVisibility(if (channel == ANSWERS) NotificationCompat.VISIBILITY_PUBLIC else NotificationCompat.VISIBILITY_PRIVATE)
             .setAutoCancel(true)
             .build()
         runCatching { c.getSystemService(NotificationManager::class.java).notify(id, n) }

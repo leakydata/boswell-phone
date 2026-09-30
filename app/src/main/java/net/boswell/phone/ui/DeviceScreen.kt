@@ -85,6 +85,7 @@ private fun Section(title: String, content: @Composable () -> Unit) {
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: PaddingValues, onPair: () -> Unit) {
     val ctx = LocalContext.current
@@ -216,10 +217,26 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                 Row2("Me", ownerName ?: "not set · open yourself in People and tap \"This is me\"")
                 Row2("Omi button", when (cap.buttonReady) { true -> "ready · tap to ask"; false -> "not available on this connection"; null -> "connect in Live mode" })
                 Text("Double tap", style = MaterialTheme.typography.bodyMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     for (d in net.boswell.phone.assistant.AssistantPrefs.DoubleTap.entries) FilterChip(selected = dbl == d,
                         onClick = { dbl = d; net.boswell.phone.assistant.AssistantPrefs.setDoubleTap(ctx2, d) },
-                        label = { Text(if (d == net.boswell.phone.assistant.AssistantPrefs.DoubleTap.BOOKMARK) "Bookmark the moment" else "Summarize last 10 min") })
+                        label = { Text(when (d) {
+                            net.boswell.phone.assistant.AssistantPrefs.DoubleTap.TODO -> "Add a to-do"
+                            net.boswell.phone.assistant.AssistantPrefs.DoubleTap.BOOKMARK -> "Bookmark the moment"
+                            net.boswell.phone.assistant.AssistantPrefs.DoubleTap.SUMMARIZE -> "Summarize last 10 min"
+                        }) })
+                }
+                var calendarOk by remember { mutableStateOf(net.boswell.phone.todo.Calendar.allowed(ctx2)) }
+                val calLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+                    androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()) { calendarOk = net.boswell.phone.todo.Calendar.allowed(ctx2) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Calendar", style = MaterialTheme.typography.bodyLarge)
+                        Text(if (calendarOk) "The assistant can add events to your calendar." else "Let the assistant add appointments to your calendar.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (!calendarOk) TextButton(onClick = { calLauncher.launch(arrayOf(android.Manifest.permission.READ_CALENDAR, android.Manifest.permission.WRITE_CALENDAR)) }) { Text("Allow") }
+                    else Text("On", color = MaterialTheme.colorScheme.primary)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
