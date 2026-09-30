@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -62,7 +64,7 @@ import net.boswell.phone.ui.theme.Voices
 fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack: () -> Unit, onPerson: (Long) -> Unit) {
     val s by vm.conv.collectAsStateWithLifecycle()
     var who by remember { mutableStateOf<String?>(null) }
-    var lineMenu by remember { mutableStateOf<LineRow?>(null) }
+    var lineMenu by remember { mutableStateOf<List<LineRow>?>(null) }
     var confirmDelete by remember { mutableStateOf<List<String>?>(null) }
     val ctx = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(id) { vm.openConversation(id) }
@@ -130,13 +132,13 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
                 val newSpeaker = prev?.speaker != line.speaker || line.t0 - (prev?.t1 ?: 0.0) > 30
                 val merged = if (turn.size == 1) line else line.copy(text = turn.joinToString(" ") { it.text }, t1 = turn.last().t1)
                 Bubble(merged, s.voices[line.speaker], newSpeaker, turn.any { it.id == s.playingLine },
-                    onTap = { vm.playLine(line) }, onWho = { line.speaker?.let { who = it } }, onLong = { lineMenu = merged })
+                    onTap = { vm.playLine(line) }, onWho = { line.speaker?.let { who = it } }, onLong = { lineMenu = turn.toList() }, edited = turn.any { it.original != null })
             }
             if (s.lines.isEmpty() && c != null) item { Text("No words were transcribed in this conversation.", Modifier.padding(16.dp)) }
         }
     }
 
-    lineMenu?.let { l -> LineSheet(vm, l, onDismiss = { lineMenu = null }, onDelete = { confirmDelete = listOf(l.clip); lineMenu = null }) }
+    lineMenu?.let { ls -> LineSheet(vm, ls, onDismiss = { lineMenu = null }, onDelete = { confirmDelete = ls.map { it.clip }.distinct(); lineMenu = null }) }
     confirmDelete?.let { clips ->
         val whole = "#conversation" in clips
         val targets = clips.filter { it != "#conversation" }
@@ -159,7 +161,7 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun Bubble(line: LineRow, v: Voice?, header: Boolean, playing: Boolean, onTap: () -> Unit, onWho: () -> Unit, onLong: () -> Unit = {}) {
+private fun Bubble(line: LineRow, v: Voice?, header: Boolean, playing: Boolean, onTap: () -> Unit, onWho: () -> Unit, onLong: () -> Unit = {}, edited: Boolean = false) {
     val color = Voices.color(line.speaker)
     Column(Modifier.fillMaxWidth().padding(top = if (header) 10.dp else 0.dp)) {
         if (header) Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable(onClick = onWho).padding(bottom = 4.dp)) {
@@ -176,29 +178,65 @@ private fun Bubble(line: LineRow, v: Voice?, header: Boolean, playing: Boolean, 
             color = if (v?.media == true) MaterialTheme.colorScheme.surfaceVariant else color.copy(alpha = if (playing) 0.35f else 0.14f),
             border = if (playing) BorderStroke(1.5.dp, color) else null,
         ) {
-            Text(line.text, Modifier.padding(horizontal = 14.dp, vertical = 9.dp), style = MaterialTheme.typography.bodyLarge)
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 9.dp)) {
+                Text(line.text, style = MaterialTheme.typography.bodyLarge)
+                if (edited) Text("edited", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 }
 
+/**
+ * Long-press on what was said: fix it first. Each line of the bubble is an
+ * edit box, already focused, with a play button to hear exactly that bit.
+ * The transcriber's version is kept and can be restored.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun LineSheet(vm: ArchiveViewModel, line: LineRow, onDismiss: () -> Unit, onDelete: () -> Unit) {
+private fun LineSheet(vm: ArchiveViewModel, lines: List<LineRow>, onDismiss: () -> Unit, onDelete: () -> Unit) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     fun toast(t: String) = android.widget.Toast.makeText(ctx, t, android.widget.Toast.LENGTH_SHORT).show()
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(horizontal = 12.dp).padding(bottom = 24.dp)) {
-            Text("\"${line.text}\"", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(12.dp), maxLines = 4)
+    val texts = remember(lines) { androidx.compose.runtime.mutableStateListOf(*lines.map { it.text }.toTypedArray()) }
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    val changed = lines.indices.filter { texts[it].trim() != lines[it].text }
+    val all = lines.joinToString(" ") { it.text }
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 24.dp).imePadding(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Fix what was said", style = MaterialTheme.typography.titleMedium)
+            lines.forEachIndexed { i, l ->
+                Row(verticalAlignment = Alignment.Top) {
+                    IconButton(onClick = { vm.playLine(l) }) { Icon(Icons.Filled.PlayArrow, "hear this part") }
+                    Column(Modifier.weight(1f)) {
+                        OutlinedTextField(value = texts[i], onValueChange = { texts[i] = it },
+                            modifier = Modifier.fillMaxWidth().let { if (i == 0) it.focusRequester(focus) else it })
+                        l.original?.let { o ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Heard: \"$o\"", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                                TextButton(onClick = { texts[i] = o }) { Text("Restore") }
+                            }
+                        }
+                    }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+                androidx.compose.material3.Button(enabled = changed.isNotEmpty(), onClick = {
+                    vm.editLines(changed.map { lines[it] to texts[it] }); toast("Saved"); onDismiss()
+                }) { Text("Save") }
+            }
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
             @Composable fun action(label: String, danger: Boolean = false, go: () -> Unit) =
                 TextButton(onClick = { go(); onDismiss() }, modifier = Modifier.fillMaxWidth()) {
                     Text(label, Modifier.fillMaxWidth(), color = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
                 }
-            action("Copy text") { clipboard.setText(androidx.compose.ui.text.AnnotatedString(line.text)); toast("Copied") }
-            action("Make it a to-do") { vm.lineToTodo(line); toast("Added to your to-do list") }
-            action("Ask the assistant about it") { vm.askAbout(line); toast("The answer will appear in Ask") }
-            action("Transcribe this clip again") { vm.retranscribe(listOf(line.clip)); toast("Re-transcribing") }
-            action("Delete this 30-second clip", danger = true) { onDelete() }
+            action("Copy text") { clipboard.setText(androidx.compose.ui.text.AnnotatedString(all)); toast("Copied") }
+            action("Make it a to-do") { vm.lineToTodo(lines.first().copy(text = all)); toast("Added to your to-do list") }
+            action("Ask the assistant about it") { vm.askAbout(lines.first().copy(text = all)); toast("The answer will appear in Ask") }
+            action("Transcribe again (drops your fixes)") { vm.retranscribe(lines.map { it.clip }.distinct()); toast("Re-transcribing") }
+            action("Delete this clip", danger = true) { onDelete() }
         }
     }
 }

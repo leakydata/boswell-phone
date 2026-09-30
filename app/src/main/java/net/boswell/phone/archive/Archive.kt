@@ -26,7 +26,7 @@ data class Conversation(val id: Long, val started: Double, val ended: Double, va
                         val speakers: List<String>, val snippet: String, val sounds: List<String>)
 
 data class LineRow(val id: Long, val clip: String, val t0: Double, val t1: Double, val offset: Double,
-                   val speaker: String?, val personId: Long?, val text: String)
+                   val speaker: String?, val personId: Long?, val text: String, val original: String? = null)
 
 data class SearchHit(val line: LineRow, val conversation: Long?, val snippet: String)
 
@@ -42,7 +42,7 @@ data class SearchHit(val line: LineRow, val conversation: Long?, val snippet: St
  * CONVERSATION_GAP of the previous one ending: the desktop's measured value,
  * after 300 s turned an evening into one 183-minute "conversation".
  */
-class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive.db", null, 1) {
+class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive.db", null, 2) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE clips (
@@ -56,7 +56,7 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
             candidate_id INTEGER, candidate_score REAL, emb BLOB, conv_key TEXT,
             PRIMARY KEY (clip, label))""")
         db.execSQL("""CREATE TABLE lines (
-            id INTEGER PRIMARY KEY, clip TEXT, t0 REAL, t1 REAL, offset REAL, label TEXT, text TEXT)""")
+            id INTEGER PRIMARY KEY, clip TEXT, t0 REAL, t1 REAL, offset REAL, label TEXT, text TEXT, original TEXT)""")
         db.execSQL("CREATE INDEX lines_clip ON lines(clip)")
         db.execSQL("CREATE INDEX lines_t0 ON lines(t0)")
         db.execSQL("CREATE VIRTUAL TABLE lines_fts USING fts4(text)")
@@ -68,7 +68,11 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
         db.execSQL("CREATE INDEX conv_day ON conversations(day)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    /** The index is rebuilt from the files, so an upgrade simply starts it over. */
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        for (t in listOf("clips", "clip_speakers", "lines", "lines_fts", "sounds", "conversations")) db.execSQL("DROP TABLE IF EXISTS $t")
+        onCreate(db)
+    }
 
     private val json = Json { ignoreUnknownKeys = true }
     private val zone: ZoneId get() = ZoneId.systemDefault()
@@ -137,7 +141,7 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
         for (seg in t.segments) {
             val id = db.insert("lines", null, ContentValues().apply {
                 put("clip", name); put("t0", times.started + seg.start); put("t1", times.started + seg.end)
-                put("offset", seg.start); put("label", seg.speaker); put("text", seg.text)
+                put("offset", seg.start); put("label", seg.speaker); put("text", seg.text); put("original", seg.original)
             })
             db.insert("lines_fts", null, ContentValues().apply { put("docid", id); put("text", seg.text) })
         }
@@ -271,7 +275,7 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
 
     /** Lines of a conversation with each one's conversation-level speaker key. */
     fun lines(conversation: Long): List<LineRow> = readableDatabase.rawQuery("""
-        SELECT l.id, l.clip, l.t0, l.t1, l.offset, s.conv_key, s.person_id, l.text FROM lines l
+        SELECT l.id, l.clip, l.t0, l.t1, l.offset, s.conv_key, s.person_id, l.text, l.original FROM lines l
         JOIN clips c ON c.name = l.clip LEFT JOIN clip_speakers s ON s.clip = l.clip AND s.label = l.label
         WHERE c.conversation = ? ORDER BY l.t0""", arrayOf(conversation.toString())).use { c ->
         buildList { while (c.moveToNext()) add(c.toLine()) }
@@ -279,8 +283,10 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
 
     private fun Cursor.toLine(): LineRow {
         val key = if (isNull(5)) null else getString(5)
+        val originalIdx = getColumnIndex("original")
         return LineRow(getLong(0), getString(1), getDouble(2), getDouble(3), getDouble(4), key,
-            key?.takeIf { it.startsWith("p") }?.drop(1)?.toLongOrNull(), getString(7))
+            key?.takeIf { it.startsWith("p") }?.drop(1)?.toLongOrNull(), getString(7),
+            if (originalIdx >= 0 && !isNull(originalIdx)) getString(originalIdx) else null)
     }
 
     /** The best guess for a voice nobody named: its top candidate, if any. */

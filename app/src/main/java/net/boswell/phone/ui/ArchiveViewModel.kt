@@ -384,6 +384,15 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         net.boswell.phone.assistant.AssistantNotify.post(getApplication(), net.boswell.phone.assistant.AssistantNotify.ANSWERS, "Summary · ${Fmt.time(c.started)}", a.text)
     }
 
+    /** Save hand corrections for several lines at once, then refresh what shows them. */
+    fun editLines(edits: List<Pair<LineRow, String>>) = viewModelScope.launch {
+        withContext(Dispatchers.IO) {
+            for ((line, text) in edits) net.boswell.phone.process.ClipActions.editLine(getApplication(), line.clip, line.offset, text)
+        }
+        _conv.value.conversation?.let { openConversation(it.id, keepPlayer = true) }
+        loadDay(_day.value.day)
+    }
+
     fun lineToTodo(line: LineRow) = viewModelScope.launch(Dispatchers.IO) {
         val t = net.boswell.phone.todo.TodoStore(getApplication())
         try { t.add(line.text, null, null, "typed") } finally { t.close() }

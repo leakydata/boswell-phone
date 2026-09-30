@@ -33,7 +33,28 @@ object ClipActions {
         } finally { speakers.close(); archive.close() }
     }
 
-    /** Throw the transcripts away so the background pass transcribes these clips again. */
+    /**
+     * Correct one line by hand. The transcriber's version is kept in
+     * `original` the first time, so it can always be restored; saving the
+     * original text again removes the correction.
+     */
+    fun editLine(context: Context, clip: String, start: Double, text: String) {
+        val f = File(ProcessingWorker.transcriptsDir(context), clip.removeSuffix(".wav") + ".json")
+        val t = TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText())
+        val i = t.segments.indexOfFirst { kotlin.math.abs(it.start - start) < 0.001 }
+        if (i < 0) return
+        val seg = t.segments[i]
+        val heard = seg.original ?: seg.text
+        val clean = text.trim().replace(Regex("\\s+"), " ")
+        val updated = if (clean == heard || clean.isEmpty()) seg.copy(text = heard, original = null) else seg.copy(text = clean, original = heard)
+        net.boswell.phone.audio.writeAtomically(f, TranscriptJson.json.encodeToString(Transcript.serializer(),
+            t.copy(segments = t.segments.toMutableList().also { it[i] = updated })).toByteArray())
+        val speakers = SpeakerStore(context)
+        val archive = Archive(context)
+        try { archive.sync(speakers) } finally { speakers.close(); archive.close() }
+    }
+
+    /** Throw the transcripts away so the background pass transcribes these clips again. Hand corrections go with them. */
     fun retranscribe(context: Context, clips: Collection<String>) {
         val tdir = ProcessingWorker.transcriptsDir(context)
         for (name in clips) File(tdir, name.removeSuffix(".wav") + ".json").delete()

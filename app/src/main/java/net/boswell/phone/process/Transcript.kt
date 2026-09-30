@@ -27,7 +27,14 @@ data class Transcript(
 )
 
 @Serializable
-data class Segment(val start: Double, val end: Double, val speaker: String?, val text: String)
+data class Segment(
+    val start: Double,
+    val end: Double,
+    val speaker: String?,
+    val text: String,
+    /** What the transcriber heard, kept when the text was corrected by hand. */
+    val original: String? = null,
+)
 
 @Serializable
 data class Candidate(

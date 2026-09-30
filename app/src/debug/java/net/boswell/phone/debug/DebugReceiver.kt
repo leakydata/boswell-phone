@@ -33,6 +33,14 @@ class DebugReceiver : BroadcastReceiver() {
                 val pending = goAsync()
                 Thread { try { net.boswell.phone.process.ClipActions.delete(context, listOf(clip)); android.util.Log.i("Boswell", "debug deleted $clip") } finally { pending.finish() } }.start()
             }
+            // am broadcast -a net.boswell.phone.debug.EDIT --es clip omi_1.wav --ef start 0.0 --es text "..."
+            "net.boswell.phone.debug.EDIT" -> {
+                val clip = intent.getStringExtra("clip") ?: return
+                val start = intent.getFloatExtra("start", 0f).toDouble()
+                val text = intent.getStringExtra("text") ?: return
+                val pending = goAsync()
+                Thread { try { net.boswell.phone.process.ClipActions.editLine(context, clip, start, text); android.util.Log.i("Boswell", "debug edited $clip") } finally { pending.finish() } }.start()
+            }
             // am broadcast -a net.boswell.phone.debug.TRIGGERS_ON --ez on true
             "net.boswell.phone.debug.TRIGGERS_ON" -> {
                 net.boswell.phone.assistant.Triggers.setEnabled(context, intent.getBooleanExtra("on", true))
