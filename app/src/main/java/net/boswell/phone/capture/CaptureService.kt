@@ -111,7 +111,10 @@ class CaptureService : LifecycleService() {
                 try {
                     session(address)
                 } catch (e: CancellationException) {
-                    throw e
+                    // Only a real stop ends the loop; anything else that looks
+                    // like a cancellation (a stray timeout) is a failed attempt.
+                    if (!isActive) throw e
+                    CaptureRepository.log("link lost: ${e.message}")
                 } catch (e: Exception) {
                     CaptureRepository.log("link lost: ${e.message}")
                 } finally {
@@ -431,7 +434,9 @@ class CaptureService : LifecycleService() {
                 CaptureRepository.log("sync: $result")
                 if (clips > 0) net.boswell.phone.process.ProcessingWorker.enqueue(this@CaptureService)
             } catch (e: CancellationException) {
-                throw e
+                if (!isActive) throw e
+                result = "could not reach the Omi (${e.message})"
+                CaptureRepository.log("sync: $result")
             } catch (e: Exception) {
                 result = "could not reach the Omi (${e.message})"
                 CaptureRepository.log("sync: $result")

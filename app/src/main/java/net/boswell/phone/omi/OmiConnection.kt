@@ -13,7 +13,6 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeout
 import java.util.UUID
 
 class GattException(message: String) : Exception(message)
@@ -123,7 +122,13 @@ class OmiConnection(
                 }
                 if (!started) throw GattException("$what: refused by the stack")
                 @Suppress("UNCHECKED_CAST")
-                withTimeout(timeoutMs) { d.await() } as T
+                // A timeout here is a failed operation, not a cancellation: as a
+                // CancellationException it would silently end the caller's
+                // reconnect loop, which is exactly how capture once stalled.
+                val done = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) { d.await(); true }
+                    ?: throw GattException("$what: timed out after ${timeoutMs / 1000}s")
+                check(done)
+                d.getCompleted() as T
             } finally {
                 pending = null
             }
@@ -131,7 +136,8 @@ class OmiConnection(
 
     suspend fun connect(timeoutMs: Long = 30_000) {
         gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
-        withTimeout(timeoutMs) { connected.await() }
+        kotlinx.coroutines.withTimeoutOrNull(timeoutMs) { connected.await(); true }
+            ?: throw GattException("connect timed out after ${timeoutMs / 1000}s")
         op<Int>("discover services", 15_000) { it.discoverServices() }
         // Bigger MTU means whole frames per notification; the desktop never saw
         // a split frame on a CV 1, and this keeps it that way.
@@ -200,11 +206,11 @@ class OmiConnection(
         ensureStorage()
         while (storageMessages.tryReceive().isSuccess) { /* discard anything stale */ }
         write(OmiUuids.STORAGE, Offload.ringInfoCommand())
-        return withTimeout(timeoutMs) {
+        return kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
             var info: RingInfo? = null
             while (info == null) info = RingInfo.parse(storageMessages.receive())
             info
-        }
+        } ?: throw GattException("the device did not answer the ring query")
     }
 
     /** A batch that stopped part way, carrying the whole packets that did arrive. */
