@@ -85,6 +85,10 @@ class OmiConnection(
         override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) =
             finish(status, Unit)
 
+        override fun onPhyUpdate(g: BluetoothGatt, txPhy: Int, rxPhy: Int, status: Int) {
+            android.util.Log.i("Boswell", "PHY now tx $txPhy rx $rxPhy (1 = 1M, 2 = 2M, 3 = coded) status $status")
+        }
+
         override fun onReadRemoteRssi(g: BluetoothGatt, rssi: Int, status: Int) = finish(status, rssi)
 
         override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray) {
@@ -234,6 +238,8 @@ class OmiConnection(
             throw TransferInterrupted(whole(), "read request failed: ${e.message}")
         }
         val deadline = System.currentTimeMillis() + timeoutMs
+        val tAsk = System.currentTimeMillis()
+        var tFirst = 0L
         var begun = false
         while (true) {
             val left = deadline - System.currentTimeMillis()
@@ -249,10 +255,14 @@ class OmiConnection(
             if (!begun && msg.firstOrNull() != Offload.MSG_DATA) android.util.Log.i("Boswell", "storage reply 0x%02x (%d bytes)".format(msg.firstOrNull() ?: 0, msg.size))
             when (msg.firstOrNull()) {
                 Offload.MSG_BEGIN -> begun = true
-                Offload.MSG_DATA -> { begun = true; data.write(msg, 1, msg.size - 1) }
+                Offload.MSG_DATA -> { if (tFirst == 0L) tFirst = System.currentTimeMillis(); begun = true; data.write(msg, 1, msg.size - 1) }
                 Offload.MSG_DONE -> {
                     val (status, next) = Offload.parseDone(msg) ?: continue
                     if (status != 0 && data.size() == 0) throw GattException("device refused the read: ${Offload.STATUS[status] ?: status}")
+                    val now = System.currentTimeMillis()
+                    val xfer = now - (if (tFirst > 0) tFirst else tAsk)
+                    android.util.Log.i("Boswell", "batch %d kB: first data after %d ms, transfer %d ms (%.1f kB/s)".format(
+                        data.size() / 1000, (if (tFirst > 0) tFirst else now) - tAsk, xfer, data.size() / maxOf(xfer, 1L).toDouble()))
                     return whole() to next
                 }
                 Offload.MSG_ACK -> {

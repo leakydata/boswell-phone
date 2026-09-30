@@ -69,7 +69,9 @@ class OmiSync(private val spoolDir: File, private val deviceId: String) {
                 val got = raw.size / Offload.STORED_PACKET_BYTES
                 seq = if (next > seq) next else seq + got
                 took += got
+                val ta = System.currentTimeMillis()
                 conn.advance(seq)
+                android.util.Log.i("Boswell", "advance ${System.currentTimeMillis() - ta} ms")
                 val secs = (System.currentTimeMillis() - t0) / 1000.0
                 onProgress(SyncProgress(took, waiting, took * Offload.STORED_PACKET_BYTES / maxOf(secs, 0.01)))
             }
