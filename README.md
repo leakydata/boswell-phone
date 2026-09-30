@@ -27,7 +27,10 @@ desktop archive read-only and never touch a device.
 - **Nemotron runs on-device.** sherpa-onnx's int8 build of
   `nemotron-3.5-asr-streaming-0.6b` (1120 ms chunk, ~475 MB) runs at 0.22×
   realtime on 4 desktop threads, with accuracy about equal to the cloud version
-  (`tools/local_asr_bench.py`). Real phone speed not yet measured.
+  (`tools/local_asr_bench.py`). **On a Pixel 10 Pro XL (Tensor G5):** RTF 0.12
+  on 4 threads (~8× faster than realtime), 0.16 on 1 thread, 0.26 on 8 (the
+  little cores slow it down, so use 4). Decoding several streams in one batch is
+  faster still. Measured with sherpa-onnx's Android CLI binary over adb.
 - **The app ships with no models.** ASR, segmentation and `voiceprint.onnx`
   are optional in-app downloads. The app must work with none installed.
 
