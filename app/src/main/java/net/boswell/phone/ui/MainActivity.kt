@@ -17,12 +17,16 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        permissions.launch(
+        // On first run the setup's Permissions step asks, with an explanation;
+        // asking here too would put Android's prompts in front of the welcome
+        // screen. Afterwards this only re-asks for anything since revoked.
+        if (net.boswell.phone.setup.Setup.done(this)) permissions.launch(
             arrayOf(
                 Manifest.permission.BLUETOOTH_SCAN,
                 Manifest.permission.BLUETOOTH_CONNECT,
                 Manifest.permission.POST_NOTIFICATIONS,
-            )
+            ).filter { checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED }.toTypedArray()
+                .takeIf { it.isNotEmpty() } ?: return run { setContent { BoswellTheme { BoswellApp(vm, intent?.getStringExtra("open")) } } }
         )
         setContent { BoswellTheme { BoswellApp(vm, intent?.getStringExtra("open")) } }
     }
