@@ -67,7 +67,10 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
                     ProcessingRepository.state.value = ProcessingState(true, todo.size, done, wav.name)
                     try {
                         process(wav, asr, diarizer, store, out, tagger)
+                        // Deleted while it was being worked on: drop the result, leave no trace.
+                        if (!wav.exists()) File(out, wav.nameWithoutExtension + ".json").delete()
                     } catch (e: Exception) {
+                        if (!wav.exists()) { done++; continue }
                         // A clip that cannot be read or decoded is recorded as such
                         // rather than retried forever.
                         writeAtomically(File(out, wav.nameWithoutExtension + ".json"),

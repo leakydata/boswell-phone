@@ -27,6 +27,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -63,8 +67,13 @@ import java.time.LocalDate
 import java.time.ZoneId
 
 @Composable
-fun TodayScreen(vm: ArchiveViewModel, pad: PaddingValues, onOpen: (Long) -> Unit, onSearch: () -> Unit, onDevice: () -> Unit, onTodos: () -> Unit = {}) {
+fun TodayScreen(vm: ArchiveViewModel, pad: PaddingValues, onOpen: (Long) -> Unit, onSearch: () -> Unit, onDevice: () -> Unit,
+                onTodos: () -> Unit = {}, onRecordings: (LocalDate) -> Unit = {}) {
     val s by vm.day.collectAsStateWithLifecycle()
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var selected by remember(s.day) { mutableStateOf(setOf<Long>()) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    val selecting = selected.isNotEmpty()
     val proc by ProcessingRepository.state.collectAsStateWithLifecycle()
     val isToday = s.day == LocalDate.now()
     var dragged = remember { floatArrayOf(0f) }
@@ -80,7 +89,17 @@ fun TodayScreen(vm: ArchiveViewModel, pad: PaddingValues, onOpen: (Long) -> Unit
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = pad.calculateTopPadding() + 8.dp, bottom = pad.calculateBottomPadding() + 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        item {
+        if (selecting) item {
+            // Long-press selection: act on the chosen conversations.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { selected = emptySet() }) { Icon(Icons.Filled.Close, "cancel selection") }
+                Text("${selected.size} selected", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                if (selected.size == 1) androidx.compose.material3.TextButton(onClick = { vm.summarize(selected.first()); selected = emptySet()
+                    android.widget.Toast.makeText(ctx, "Summary coming to Ask", android.widget.Toast.LENGTH_SHORT).show() }) { Text("Summarize") }
+                androidx.compose.material3.TextButton(onClick = { vm.shareConversations(selected.toList()) { ctx.startActivity(it) } }) { Text("Share") }
+                androidx.compose.material3.TextButton(onClick = { confirmDelete = true }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            }
+        } else item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(Fmt.day(s.day), style = MaterialTheme.typography.headlineLarge)
@@ -96,7 +115,14 @@ fun TodayScreen(vm: ArchiveViewModel, pad: PaddingValues, onOpen: (Long) -> Unit
             }
         }
 
-        item { DayRibbon(s.ribbon, s.conversations, s.day, onOpen) }
+        item {
+            Column {
+                DayRibbon(s.ribbon, s.conversations, s.day, onOpen)
+                if (s.ribbon.isNotEmpty()) androidx.compose.material3.TextButton(onClick = { onRecordings(s.day) }, modifier = Modifier.padding(top = 2.dp)) {
+                    Text("All ${s.ribbon.size} recordings")
+                }
+            }
+        }
 
         item {
             val talk = s.conversations.sumOf { it.speechSeconds }
@@ -129,8 +155,20 @@ fun TodayScreen(vm: ArchiveViewModel, pad: PaddingValues, onOpen: (Long) -> Unit
 
         if (s.conversations.isEmpty() && !s.loading) item { EmptyDay(isToday, onDevice) }
 
-        items(s.conversations, key = { it.id }) { c -> ConversationCard(c, s.voices, onOpen) }
+        items(s.conversations, key = { it.id }) { c ->
+            ConversationCard(c, s.voices, selected = c.id in selected,
+                onClick = { if (selecting) selected = if (c.id in selected) selected - c.id else selected + c.id else onOpen(c.id) },
+                onLongClick = { selected = selected + c.id })
+        }
     }
+    if (confirmDelete) androidx.compose.material3.AlertDialog(
+        onDismissRequest = { confirmDelete = false },
+        title = { Text("Delete ${selected.size} conversation${if (selected.size == 1) "" else "s"}?") },
+        text = { Text("Their audio and transcripts are deleted from this phone for good. People you've named stay recognized.") },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = { vm.deleteConversations(selected.toList()); selected = emptySet(); confirmDelete = false }) {
+            Text("Delete", color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = { confirmDelete = false }) { Text("Keep") } },
+    )
 }
 
 @Composable
@@ -234,12 +272,13 @@ fun DayRibbon(clips: List<ClipRow>, conversations: List<Conversation>, day: Loca
 private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectTapGesturesCompat(onTap: (Float) -> Unit) =
     detectTapGestures { onTap(it.x) }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-fun ConversationCard(c: Conversation, voices: Map<String, Voice>, onOpen: (Long) -> Unit) {
+fun ConversationCard(c: Conversation, voices: Map<String, Voice>, selected: Boolean = false, onClick: () -> Unit, onLongClick: () -> Unit = {}) {
     Card(
-        onClick = { onOpen(c.id) },
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        modifier = Modifier.fillMaxWidth().clip(CardDefaults.shape).combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        colors = CardDefaults.cardColors(containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer),
+        border = if (selected) androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {

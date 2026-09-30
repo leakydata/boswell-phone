@@ -2,6 +2,8 @@ package net.boswell.phone.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -55,11 +57,14 @@ import net.boswell.phone.archive.LineRow
 import net.boswell.phone.sound.Sounds
 import net.boswell.phone.ui.theme.Voices
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack: () -> Unit, onPerson: (Long) -> Unit) {
     val s by vm.conv.collectAsStateWithLifecycle()
     var who by remember { mutableStateOf<String?>(null) }
+    var lineMenu by remember { mutableStateOf<LineRow?>(null) }
+    var confirmDelete by remember { mutableStateOf<List<String>?>(null) }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(id) { vm.openConversation(id) }
     DisposableEffect(Unit) { onDispose { vm.closeConversation() } }
     val list = rememberLazyListState()
@@ -80,6 +85,13 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
                         Text(if (c == null) "" else "${Fmt.time(c.started)} – ${Fmt.time(c.ended)}", style = MaterialTheme.typography.titleLarge)
                         if (c != null) Text("${Fmt.shortDay(java.time.Instant.ofEpochSecond(c.started.toLong()).atZone(java.time.ZoneId.systemDefault()).toLocalDate())} · ${Fmt.duration(c.ended - c.started)}",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                },
+                actions = {
+                    if (c != null) {
+                        TextButton(onClick = { vm.shareConversations(listOf(c.id)) { ctx.startActivity(it) } }) { Text("Share") }
+                        TextButton(onClick = { confirmDelete = s.lines.map { it.clip }.distinct().ifEmpty { listOf() } + listOf("#conversation") }) {
+                            Text("Delete", color = MaterialTheme.colorScheme.error) }
                     }
                 },
             )
@@ -118,10 +130,26 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
                 val newSpeaker = prev?.speaker != line.speaker || line.t0 - (prev?.t1 ?: 0.0) > 30
                 val merged = if (turn.size == 1) line else line.copy(text = turn.joinToString(" ") { it.text }, t1 = turn.last().t1)
                 Bubble(merged, s.voices[line.speaker], newSpeaker, turn.any { it.id == s.playingLine },
-                    onTap = { vm.playLine(line) }, onWho = { line.speaker?.let { who = it } })
+                    onTap = { vm.playLine(line) }, onWho = { line.speaker?.let { who = it } }, onLong = { lineMenu = merged })
             }
             if (s.lines.isEmpty() && c != null) item { Text("No words were transcribed in this conversation.", Modifier.padding(16.dp)) }
         }
+    }
+
+    lineMenu?.let { l -> LineSheet(vm, l, onDismiss = { lineMenu = null }, onDelete = { confirmDelete = listOf(l.clip); lineMenu = null }) }
+    confirmDelete?.let { clips ->
+        val whole = "#conversation" in clips
+        val targets = clips.filter { it != "#conversation" }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmDelete = null },
+            title = { Text(if (whole) "Delete this conversation?" else "Delete this 30-second clip?") },
+            text = { Text("The audio and transcript are deleted from this phone for good." + if (!whole) " Other clips in the conversation stay." else "") },
+            confirmButton = { TextButton(onClick = {
+                if (whole && c != null) { vm.deleteConversations(listOf(c.id)); onBack() } else vm.deleteClips(targets)
+                confirmDelete = null
+            }) { Text("Delete", color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Keep") } },
+        )
     }
 
     who?.let { key ->
@@ -129,8 +157,9 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun Bubble(line: LineRow, v: Voice?, header: Boolean, playing: Boolean, onTap: () -> Unit, onWho: () -> Unit) {
+private fun Bubble(line: LineRow, v: Voice?, header: Boolean, playing: Boolean, onTap: () -> Unit, onWho: () -> Unit, onLong: () -> Unit = {}) {
     val color = Voices.color(line.speaker)
     Column(Modifier.fillMaxWidth().padding(top = if (header) 10.dp else 0.dp)) {
         if (header) Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable(onClick = onWho).padding(bottom = 4.dp)) {
@@ -141,13 +170,35 @@ private fun Bubble(line: LineRow, v: Voice?, header: Boolean, playing: Boolean, 
             Text("  ${Fmt.time(line.t0)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Surface(
-            onClick = onTap,
+            modifier = Modifier.padding(start = 28.dp, end = 24.dp).clip(RoundedCornerShape(16.dp))
+                .combinedClickable(onClick = onTap, onLongClick = onLong),
             shape = RoundedCornerShape(topStart = if (header) 4.dp else 16.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp),
             color = if (v?.media == true) MaterialTheme.colorScheme.surfaceVariant else color.copy(alpha = if (playing) 0.35f else 0.14f),
             border = if (playing) BorderStroke(1.5.dp, color) else null,
-            modifier = Modifier.padding(start = 28.dp, end = 24.dp),
         ) {
             Text(line.text, Modifier.padding(horizontal = 14.dp, vertical = 9.dp), style = MaterialTheme.typography.bodyLarge)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LineSheet(vm: ArchiveViewModel, line: LineRow, onDismiss: () -> Unit, onDelete: () -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    fun toast(t: String) = android.widget.Toast.makeText(ctx, t, android.widget.Toast.LENGTH_SHORT).show()
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(horizontal = 12.dp).padding(bottom = 24.dp)) {
+            Text("\"${line.text}\"", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(12.dp), maxLines = 4)
+            @Composable fun action(label: String, danger: Boolean = false, go: () -> Unit) =
+                TextButton(onClick = { go(); onDismiss() }, modifier = Modifier.fillMaxWidth()) {
+                    Text(label, Modifier.fillMaxWidth(), color = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+                }
+            action("Copy text") { clipboard.setText(androidx.compose.ui.text.AnnotatedString(line.text)); toast("Copied") }
+            action("Make it a to-do") { vm.lineToTodo(line); toast("Added to your to-do list") }
+            action("Ask the assistant about it") { vm.askAbout(line); toast("The answer will appear in Ask") }
+            action("Transcribe this clip again") { vm.retranscribe(listOf(line.clip)); toast("Re-transcribing") }
+            action("Delete this 30-second clip", danger = true) { onDelete() }
         }
     }
 }

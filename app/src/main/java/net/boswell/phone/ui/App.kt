@@ -64,7 +64,8 @@ fun BoswellApp(device: MainViewModel, startTab: String? = null) {
     }) { pad ->
         NavHost(nav, startDestination = "today") {
             composable("today") {
-                TodayScreen(archive, pad, onOpen = { openConversation(it) }, onSearch = { nav.navigate("search") }, onDevice = { go("device") }, onTodos = { go("todo") })
+                TodayScreen(archive, pad, onOpen = { openConversation(it) }, onSearch = { nav.navigate("search") }, onDevice = { go("device") }, onTodos = { go("todo") },
+                    onRecordings = { d -> nav.navigate("recordings/${d.toEpochDay()}") })
             }
             composable("people") {
                 PeopleScreen(archive, pad, onPerson = { nav.navigate("person/$it") }, onOpenConversation = { openConversation(it) })
@@ -73,6 +74,10 @@ fun BoswellApp(device: MainViewModel, startTab: String? = null) {
             composable("todo") { TodoScreen(pad) }
             composable("triggers") { TriggersScreen(onBack = { nav.popBackStack() }) }
             composable("usage") { UsageScreen(onBack = { nav.popBackStack() }) }
+            composable("recordings/{day}", arguments = listOf(navArgument("day") { type = NavType.LongType })) { e ->
+                RecordingsScreen(archive, java.time.LocalDate.ofEpochDay(e.arguments!!.getLong("day")), onBack = { nav.popBackStack() },
+                    onOpen = { openConversation(it) })
+            }
             composable("device") {
                 val activity = androidx.compose.ui.platform.LocalContext.current as android.app.Activity
                 val launcher = androidx.activity.compose.rememberLauncherForActivityResult(

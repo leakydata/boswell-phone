@@ -27,6 +27,12 @@ class DebugReceiver : BroadcastReceiver() {
                 }
             }
             "net.boswell.phone.debug.SYNC" -> CaptureService.sync(context, address)
+            // am broadcast -a net.boswell.phone.debug.DELETE --es clip omi_123.wav
+            "net.boswell.phone.debug.DELETE" -> {
+                val clip = intent.getStringExtra("clip") ?: return
+                val pending = goAsync()
+                Thread { try { net.boswell.phone.process.ClipActions.delete(context, listOf(clip)); android.util.Log.i("Boswell", "debug deleted $clip") } finally { pending.finish() } }.start()
+            }
             // am broadcast -a net.boswell.phone.debug.TRIGGERS_ON --ez on true
             "net.boswell.phone.debug.TRIGGERS_ON" -> {
                 net.boswell.phone.assistant.Triggers.setEnabled(context, intent.getBooleanExtra("on", true))

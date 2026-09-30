@@ -210,6 +210,22 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
 
     private fun android.database.Cursor.str(i: Int): String? = if (isNull(i)) null else getString(i)
 
+    /**
+     * Forget what was learned automatically from deleted clips. Voiceprints
+     * someone confirmed or named by hand stay: deleting a recording is not a
+     * request to stop recognising a person.
+     */
+    fun forgetClips(clips: Collection<String>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            for (c in clips) db.execSQL("DELETE FROM voiceprints WHERE clip = ? AND origin = 'auto'", arrayOf(c))
+            // Unnamed voices left with nothing are gone entirely.
+            db.execSQL("DELETE FROM people WHERE name IS NULL AND id NOT IN (SELECT DISTINCT person_id FROM voiceprints)")
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
     fun nameOf(personId: Long): String? = readableDatabase.rawQuery("SELECT name FROM people WHERE id = ?", arrayOf(personId.toString())).use { c ->
         if (c.moveToFirst() && !c.isNull(0)) c.getString(0) else null
     }

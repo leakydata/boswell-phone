@@ -332,8 +332,113 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
 
     fun conversationStartOf(id: Long): Double? = archive.conversation(id)?.started
 
+    // ----------------------------------------------------------- clip actions
+
+    /** Transcript of conversations as plain text: "Name (3:14 PM): words". */
+    private fun transcriptText(ids: List<Long>): String {
+        val people = speakers.people().associateBy { it.id }
+        return ids.sortedBy { it }.joinToString("\n\n") { id ->
+            val c = archive.conversation(id)
+            val header = c?.let { "${Fmt.shortDay(archive.dayOf(it.started))} ${Fmt.time(it.started)} – ${Fmt.time(it.ended)}" } ?: ""
+            header + "\n" + archive.lines(id).joinToString("\n") { l -> "${l.speaker?.let { voice(it, people).name } ?: "?"} (${Fmt.time(l.t0)}): ${l.text}" }
+        }
+    }
+
+    fun shareConversations(ids: List<Long>, launch: (android.content.Intent) -> Unit) = viewModelScope.launch {
+        val intent = withContext(Dispatchers.IO) {
+            val clips = ids.flatMap { archive.clipsOf(it) }.sortedBy { it.started }.map { it.name }
+            net.boswell.phone.process.ClipActions.shareIntent(getApplication(), clips,
+                if (ids.size == 1) "Conversation ${archive.conversation(ids[0])?.let { Fmt.time(it.started) } ?: ""}" else "${ids.size} conversations",
+                transcriptText(ids))
+        }
+        launch(intent)
+    }
+
+    fun deleteConversations(ids: List<Long>) = act2 {
+        net.boswell.phone.process.ClipActions.delete(getApplication(), ids.flatMap { archive.clipsOf(it).map { c -> c.name } })
+    }
+
+    fun deleteClips(names: List<String>) = act2 { net.boswell.phone.process.ClipActions.delete(getApplication(), names) }
+
+    fun retranscribe(names: List<String>) = act2 { net.boswell.phone.process.ClipActions.retranscribe(getApplication(), names) }
+
+    fun shareClips(names: List<String>, launch: (android.content.Intent) -> Unit) = viewModelScope.launch {
+        val intent = withContext(Dispatchers.IO) {
+            val rows = names.mapNotNull { n -> archive.readableDatabase.rawQuery("SELECT started FROM clips WHERE name = ?", arrayOf(n)).use { c ->
+                if (c.moveToFirst()) n to c.getDouble(0) else null } }.sortedBy { it.second }
+            val text = rows.joinToString("\n") { (n, t) ->
+                val lines = archive.readableDatabase.rawQuery("SELECT text FROM lines WHERE clip = ? ORDER BY t0", arrayOf(n)).use { c ->
+                    buildList { while (c.moveToNext()) add(c.getString(0)) } }
+                "${Fmt.time(t)}: ${lines.joinToString(" ").ifEmpty { "(no speech)" }}"
+            }
+            net.boswell.phone.process.ClipActions.shareIntent(getApplication(), rows.map { it.first }, "${rows.size} recordings", text)
+        }
+        launch(intent)
+    }
+
+    /** Ask the assistant for a summary; it lands in the Ask feed and as a notification. */
+    fun summarize(id: Long) = viewModelScope.launch(Dispatchers.IO) {
+        val c = archive.conversation(id) ?: return@launch
+        val a = net.boswell.phone.assistant.Assistant(getApplication()).ask(
+            "Summarize conversation $id (${Fmt.time(c.started)}–${Fmt.time(c.ended)}): who talked, what about, and any decisions or things to follow up. Use read_conversation.", "typed")
+        net.boswell.phone.assistant.AssistantNotify.post(getApplication(), net.boswell.phone.assistant.AssistantNotify.ANSWERS, "Summary · ${Fmt.time(c.started)}", a.text)
+    }
+
+    fun lineToTodo(line: LineRow) = viewModelScope.launch(Dispatchers.IO) {
+        val t = net.boswell.phone.todo.TodoStore(getApplication())
+        try { t.add(line.text, null, null, "typed") } finally { t.close() }
+    }
+
+    fun askAbout(line: LineRow) = viewModelScope.launch(Dispatchers.IO) {
+        val a = net.boswell.phone.assistant.Assistant(getApplication()).ask(
+            "About this line, said at ${Fmt.time(line.t0)}: \"${line.text}\" — explain or add useful context, briefly. Use recent_lines or read_conversation if the surrounding conversation helps.", "typed")
+        net.boswell.phone.assistant.AssistantNotify.post(getApplication(), net.boswell.phone.assistant.AssistantNotify.ANSWERS, line.text.take(60), a.text)
+    }
+
+    // ------------------------------------------------------------- recordings
+
+    data class Recording(val clip: ClipRow, val text: String, val sounds: List<String>)
+
+    private val _recordings = MutableStateFlow<List<Recording>>(emptyList())
+    val recordings: StateFlow<List<Recording>> = _recordings.asStateFlow()
+
+    fun loadRecordings(d: LocalDate) = viewModelScope.launch {
+        _recordings.value = withContext(Dispatchers.IO) {
+            archive.clips(d).reversed().map { c ->
+                val text = archive.readableDatabase.rawQuery("SELECT text FROM lines WHERE clip = ? ORDER BY t0", arrayOf(c.name)).use { cur ->
+                    buildList { while (cur.moveToNext()) add(cur.getString(0)) } }.joinToString(" ")
+                val sounds = archive.readableDatabase.rawQuery("SELECT label FROM sounds WHERE clip = ? ORDER BY score DESC LIMIT 3", arrayOf(c.name)).use { cur ->
+                    buildList { while (cur.moveToNext()) add(net.boswell.phone.sound.Sounds.display(cur.getString(0))) } }.distinct()
+                Recording(c, text, sounds)
+            }
+        }
+    }
+
+    private var clipPlayer: android.media.MediaPlayer? = null
+    private val _playingClip = MutableStateFlow<String?>(null)
+    val playingClip: StateFlow<String?> = _playingClip.asStateFlow()
+
+    fun toggleClip(name: String) {
+        clipPlayer?.release(); clipPlayer = null
+        if (_playingClip.value == name) { _playingClip.value = null; return }
+        val f = File(CaptureService.clipsDir(getApplication()), name)
+        if (!f.exists()) return
+        clipPlayer = android.media.MediaPlayer().apply {
+            setDataSource(f.path); setOnCompletionListener { _playingClip.value = null }; prepare(); start()
+        }
+        _playingClip.value = name
+    }
+
+    private fun act2(block: () -> Unit) = viewModelScope.launch {
+        withContext(Dispatchers.IO) { block() }
+        loadDay(_day.value.day)
+        loadPeople()
+        loadRecordings(_day.value.day)
+    }
+
     override fun onCleared() {
         releasePlayer()
+        clipPlayer?.release()
         speakers.close()
         archive.close()
     }
