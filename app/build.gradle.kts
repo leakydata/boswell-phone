@@ -105,6 +105,8 @@ dependencies {
     implementation(files(sherpaAar))
     implementation(libs.onnxruntime.android)
     implementation(libs.androidx.work.runtime)
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.media3.exoplayer)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

@@ -57,6 +57,30 @@
    ]
   },
   {
+   "id": "sound-tags",
+   "name": "Sound tagging (CED-Mini, AudioSet)",
+   "purpose": "what else was audible: typing, TV, music, dogs\u2026",
+   "license": "Apache-2.0",
+   "source": "https://huggingface.co/mispeech/ced-mini via sherpa-onnx int8 export",
+   "files": [
+    {
+     "name": "ced-mini-audio-tagging.int8.onnx",
+     "size": 10451715,
+     "sha256": "ff29f39f9fbe637f72535160e9d006d61d872fdab0fce838672265b9b38cf946"
+    },
+    {
+     "name": "ced-mini-audio-tagging-labels.csv",
+     "size": 14675,
+     "sha256": "cdd1049833c4b86127c2773ac0d14a2754b6a6d0d1798002ed5c66e699708429"
+    },
+    {
+     "name": "LICENSE-ced-mini-Apache-2.0.txt",
+     "size": 11543,
+     "sha256": "df9ca8c63840166103c61f9785c07760ed83d2566a834be326fc244cf90bd483"
+    }
+   ]
+  },
+  {
    "id": "voiceprint",
    "name": "Voiceprint (WeSpeaker ResNet34-LM, desktop-Boswell compatible)",
    "purpose": "who they are",

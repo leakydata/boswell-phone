@@ -65,6 +65,9 @@ data class UiState(
     val modelsReady: Boolean = false,
     val wifiOnly: Boolean = true,
     val people: List<PersonRow> = emptyList(),
+    val usage: net.boswell.phone.archive.Archive.Usage? = null,
+    val autoClean: Boolean = false,
+    val batteryExempt: Boolean = true,
 )
 
 @SuppressLint("MissingPermission")   // the activity requests permissions before any of this runs
@@ -141,10 +144,49 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun connect() {
         val address = _ui.value.savedAddress ?: return
+        prefs.edit().putBoolean(net.boswell.phone.capture.BootReceiver.KEEP_RECORDING, true).apply()
         CaptureService.start(getApplication(), address)
     }
 
-    fun disconnect() = CaptureService.stop(getApplication())
+    fun disconnect() {
+        prefs.edit().putBoolean(net.boswell.phone.capture.BootReceiver.KEEP_RECORDING, false).apply()
+        CaptureService.stop(getApplication())
+    }
+
+    // --- Storage and reliability ---------------------------------------------
+
+    private val archive = net.boswell.phone.archive.Archive(app)
+
+    fun refreshStorage() {
+        viewModelScope.launch {
+            val u = withContext(Dispatchers.IO) {
+                archive.sync(speakers)
+                archive.usage(net.boswell.phone.process.CleanupWorker.DAYS)
+            }
+            val pm = getApplication<Application>().getSystemService(android.os.PowerManager::class.java)
+            _ui.update { it.copy(usage = u, autoClean = prefs.getBoolean(KEY_AUTO_CLEAN, false),
+                batteryExempt = pm.isIgnoringBatteryOptimizations(getApplication<Application>().packageName)) }
+        }
+    }
+
+    fun cleanNow() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                archive.deleteAudio(archive.quietCandidates(net.boswell.phone.process.CleanupWorker.DAYS).map { it.name })
+            }
+            refreshStorage()
+        }
+    }
+
+    fun setAutoClean(on: Boolean) {
+        prefs.edit().putBoolean(KEY_AUTO_CLEAN, on).apply()
+        net.boswell.phone.process.CleanupWorker.schedule(getApplication(), on)
+        _ui.update { it.copy(autoClean = on) }
+    }
+
+    fun batteryExemptionIntent(): android.content.Intent =
+        android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+            android.net.Uri.parse("package:" + getApplication<Application>().packageName))
 
     fun refreshRing() = CaptureService.refreshRing(getApplication())
 
@@ -253,9 +295,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshModels() {
         val rows = models.catalog.models.map { ModelRow(it, models.isInstalled(it.id), models.installedBytes(it.id)) }
         val ready = listOf(ModelCatalog.ASR, ModelCatalog.SEGMENTATION, ModelCatalog.VOICEPRINT).all(models::isInstalled)
-        val wasReady = _ui.value.modelsReady
+        val before = _ui.value.models.filter { it.installed }.map { it.spec.id }.toSet()
+        val after = rows.filter { it.installed }.map { it.spec.id }.toSet()
         _ui.update { it.copy(models = rows, modelsReady = ready) }
-        if (ready && !wasReady) ProcessingWorker.enqueue(getApplication())
+        // Any model finishing its download is new work: transcription once all
+        // three are in, sound tags for clips already transcribed, and so on.
+        if (ready && (after - before).isNotEmpty() && before.isNotEmpty()) ProcessingWorker.enqueue(getApplication())
+        else if (ready && before.isEmpty()) ProcessingWorker.enqueue(getApplication())
     }
 
     fun download(id: String) = ModelDownloadWorker.enqueue(getApplication(), id, _ui.value.wifiOnly)
@@ -278,10 +324,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         stopScan()
         player?.release()
         speakers.close()
+        archive.close()
     }
 
     companion object {
         private const val KEY_ADDRESS = "omi_address"
         private const val KEY_WIFI_ONLY = "wifi_only"
+        private const val KEY_AUTO_CLEAN = "auto_clean"
     }
 }

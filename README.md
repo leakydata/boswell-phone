@@ -177,3 +177,31 @@ record independently and can run alongside anything; the Omi cannot.
 - Do not assume the desktop's code can be lifted. Read it for *what was
   learned*, not for what to copy.
 - Do not start building until Nathan says so.
+
+## Milestone 3: a phone-first app (2026-09-30)
+
+Deliberately unlike the desktop in layout: it is for looking back at your
+day, not for operating a pipeline.
+
+- **Today:** swipe between days; a 24-hour ribbon (talk solid, typing/TV/other
+  sounds tinted, background faint); conversation cards with faces, first
+  lines, names and sound chips.
+- **Conversation:** chat-style bubbles per voice (one stable color per
+  person), tap a line to hear it, and a player across all its clips (Media3).
+  Tap a voice: "Sounds like X?" to confirm, pick someone, name them, or mark
+  it TV/media.
+- **People:** a "Who's this?" queue of recurring unnamed voices (hear, name,
+  it's TV, skip), known people, and a person page with their conversations
+  and "Not them" to take a wrongly named group back off (nothing is deleted).
+- **Search:** full-text across everything said (SQLite FTS4), by day.
+- **Device:** the Omi, battery-optimization exemption, models, storage and
+  diagnostics. Recording restarts after a reboot or an app update if it was on.
+- **Archive index** (`archive/Archive.kt`): rebuildable from the files.
+  Conversations are speech clips within 60 s of each other; voices keep one
+  identity across a conversation's clips (person id, else SAME_VOICE 0.60).
+- **Sound tagging:** CED-Mini (10 MB, Apache-2.0) with the desktop's windowing
+  and keep/empty rules. It agrees with the desktop's AST verdict on 92% of 150
+  clips (`tools/sound_compare.py`), but is less sensitive, so cleanup is
+  **off by default**. When switched on it removes only the audio of clips at
+  least a week old that have no speech and only background sound. The
+  timeline entry and tags are kept.

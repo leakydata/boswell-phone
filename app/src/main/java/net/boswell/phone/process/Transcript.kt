@@ -20,6 +20,10 @@ data class Transcript(
     val embeddings: Map<String, List<Float>>,
     val engine: String,
     @SerialName("process_ms") val processMs: Long,
+    /** Null until the clip has been listened to by the sound tagger. */
+    val sounds: List<net.boswell.phone.sound.SoundTag>? = null,
+    /** keep | empty (Sounds.verdict), with speech counted as keep. */
+    val verdict: String? = null,
 )
 
 @Serializable

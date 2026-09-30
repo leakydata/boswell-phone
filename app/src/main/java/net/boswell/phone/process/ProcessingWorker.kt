@@ -53,6 +53,10 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
         val out = transcriptsDir(applicationContext)
         val store = SpeakerStore(applicationContext)
         var done = 0
+        val tagger = if (models.isInstalled(net.boswell.phone.sound.SoundTagger.ID)) net.boswell.phone.sound.SoundTagger(models) else null
+        // Clips transcribed before tagging was installed get tags without being
+        // transcribed again.
+        if (tagger != null) backfillSounds(out, clips, tagger)
         LocalAsr(models).use { asr ->
             OrtModels(models.path(ModelCatalog.SEGMENTATION, ".onnx"), models.path(ModelCatalog.VOICEPRINT, "voiceprint.onnx")).use { ort ->
                 val diarizer = ort.diarizer()
@@ -62,7 +66,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
                     val wav = todo.firstOrNull() ?: break
                     ProcessingRepository.state.value = ProcessingState(true, todo.size, done, wav.name)
                     try {
-                        process(wav, asr, diarizer, store, out)
+                        process(wav, asr, diarizer, store, out, tagger)
                     } catch (e: Exception) {
                         // A clip that cannot be read or decoded is recorded as such
                         // rather than retried forever.
@@ -76,17 +80,38 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
             }
         }
         store.close()
+        tagger?.close()
         ProcessingRepository.state.value = ProcessingState(false, pending(clips, out).size, done)
         Result.success()
     }
 
-    private fun process(wav: File, asr: LocalAsr, diarizer: net.boswell.phone.diarize.Diarizer, store: SpeakerStore, out: File) {
+    private fun backfillSounds(out: File, clips: File, tagger: net.boswell.phone.sound.SoundTagger) {
+        val todo = out.listFiles { f -> f.extension == "json" }.orEmpty()
+            .filter { !it.readText().contains("\"sounds\":[") }
+        for (f in todo) {
+            if (isStopped) return
+            val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.getOrNull() ?: continue
+            val wav = File(clips, t.clip)
+            if (!wav.exists()) continue
+            val (pcm, _) = Wav.readPcm(wav)
+            val tags = tagger.tag(FloatArray(pcm.size) { pcm[it] / 32768f })
+            val updated = t.copy(sounds = tags, verdict = verdictFor(t.segments.isNotEmpty(), tags))
+            writeAtomically(f, TranscriptJson.json.encodeToString(Transcript.serializer(), updated).toByteArray())
+        }
+    }
+
+    private fun verdictFor(hasSpeech: Boolean, tags: List<net.boswell.phone.sound.SoundTag>): String =
+        if (hasSpeech || net.boswell.phone.sound.Sounds.verdict(tags) == net.boswell.phone.sound.Sounds.Verdict.KEEP) "keep" else "empty"
+
+    private fun process(wav: File, asr: LocalAsr, diarizer: net.boswell.phone.diarize.Diarizer, store: SpeakerStore, out: File,
+                        tagger: net.boswell.phone.sound.SoundTagger?) {
         val t0 = System.currentTimeMillis()
         val (pcm, _) = Wav.readPcm(wav)
         val audio = FloatArray(pcm.size) { pcm[it] / 32768f }
         val words = asr.transcribe(audio)
         val d = diarizer.run(audio)
         val segments = Lines.build(words, d.turns)
+        val tags = tagger?.tag(audio)
 
         val speakers = LinkedHashMap<String, SpeakerId>()
         val embeddings = LinkedHashMap<String, List<Float>>()
@@ -115,7 +140,9 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
             )
         }
         val t = Transcript(wav.name, System.currentTimeMillis() / 1000.0, segments, speakers, embeddings,
-            engine = "nemotron-3.5-asr-1120ms-int8 + pyannote-seg-3.0 + wespeaker-r34", processMs = System.currentTimeMillis() - t0)
+            engine = "nemotron-3.5-asr-1120ms-int8 + pyannote-seg-3.0 + wespeaker-r34" + (if (tags != null) " + ced-mini" else ""),
+            processMs = System.currentTimeMillis() - t0,
+            sounds = tags, verdict = tags?.let { verdictFor(segments.isNotEmpty(), it) })
         writeAtomically(File(out, wav.nameWithoutExtension + ".json"), TranscriptJson.json.encodeToString(Transcript.serializer(), t).toByteArray())
     }
 

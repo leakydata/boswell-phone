@@ -1,0 +1,223 @@
+package net.boswell.phone.ui
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
+import net.boswell.phone.capture.CaptureState
+import net.boswell.phone.capture.Link
+import net.boswell.phone.capture.Reading
+import net.boswell.phone.models.ModelProgressRepository
+import net.boswell.phone.process.CleanupWorker
+
+/** "12 s ago", ticking. Every device reading on screen says how old it is. */
+@Composable
+fun ago(atMillis: Long?): String {
+    val now = remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) { while (true) { delay(1_000); now.longValue = System.currentTimeMillis() } }
+    if (atMillis == null) return "never"
+    val s = ((now.longValue - atMillis) / 1000).coerceAtLeast(0)
+    return when {
+        s < 60 -> "${s}s ago"
+        s < 3600 -> "${s / 60}m ago"
+        else -> "${s / 3600}h ${(s % 3600) / 60}m ago"
+    }
+}
+
+@Composable
+private fun Row2(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun <T> ReadingRow(label: String, r: Reading<T>?, show: (T) -> String) =
+    Row2(label, if (r == null) "—" else "${show(r.value)} · ${ago(r.atMillis)}")
+
+@Composable
+private fun Section(title: String, content: @Composable () -> Unit) {
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            content()
+        }
+    }
+}
+
+@Composable
+fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: PaddingValues) {
+    val ctx = LocalContext.current
+    val progress by ModelProgressRepository.state.collectAsStateWithLifecycle()
+    var confirmClean by remember { mutableStateOf(false) }
+    var showLog by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { vm.refreshStorage(); vm.refreshModels() }
+
+    LazyColumn(
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = pad.calculateTopPadding() + 8.dp, bottom = pad.calculateBottomPadding() + 24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item { Text("Device", style = MaterialTheme.typography.headlineLarge) }
+
+        item {
+            Section("Omi") {
+                val last = cap.lastAudioMillis
+                val quiet = last == null || System.currentTimeMillis() - last > 4_000
+                Text(
+                    when (cap.link) {
+                        Link.IDLE -> "Not recording"
+                        Link.CONNECTING -> "Connecting…"
+                        Link.STREAMING -> if (quiet) "Connected · listening (the mic sleeps in silence)" else "Recording"
+                        Link.AWAY -> "Out of range or off · will keep trying"
+                    },
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                cap.device?.let { d -> Row2("Device", "${d.model ?: "Omi"} · firmware ${d.firmware ?: "?"}") }
+                    ?: ui.savedAddress?.let { Row2("Paired", it) }
+                ReadingRow("Battery", cap.battery) { "$it%" }
+                ReadingRow("Charging", cap.charging) { if (it) "yes" else "no" }
+                ReadingRow("Signal", cap.rssi) { "$it dBm" }
+                ReadingRow("Clock", cap.deviceClockSkewSeconds) { if (kotlin.math.abs(it) < 3) "in sync" else "off by ${it}s" }
+                ReadingRow("Stored on device", cap.ring) { r -> "≈ %.0f min".format(r.pending * (27 * 3600.0 / 1_115_064) / 60) }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (cap.link == Link.IDLE) {
+                        Button(onClick = vm::connect, enabled = ui.savedAddress != null) { Text("Start recording") }
+                        OutlinedButton(onClick = vm::scan, enabled = !ui.scanning) { Text(if (ui.scanning) "Looking…" else "Find Omi") }
+                    } else {
+                        OutlinedButton(onClick = vm::disconnect) { Text("Stop recording") }
+                        TextButton(onClick = vm::refreshRing, enabled = cap.link == Link.STREAMING) { Text("Check backlog") }
+                    }
+                }
+                for (d in ui.found) {
+                    Card(Modifier.fillMaxWidth().clickable { vm.choose(d.address) }) {
+                        Row(Modifier.padding(12.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("${d.name ?: "Omi"} · ${d.address}")
+                            Text("${d.advertisedRssi} dBm")
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!ui.batteryExempt) item {
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Keep recording in the background", style = MaterialTheme.typography.titleMedium)
+                    Text("Android may stop recording to save battery. Allow Boswell to run unrestricted so it keeps listening all day.",
+                        style = MaterialTheme.typography.bodyMedium)
+                    Button(onClick = { ctx.startActivity(vm.batteryExemptionIntent()); vm.refreshStorage() }) { Text("Allow") }
+                }
+            }
+        }
+
+        item {
+            Section("On-device models") {
+                Text("Everything runs on this phone. Models download from the boswell-phone GitHub release and are checked before use.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                for (m in ui.models) {
+                    val p = progress[m.spec.id]
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(m.spec.name, style = MaterialTheme.typography.bodyLarge)
+                                Text("${m.spec.purpose} · ${Fmt.bytes(m.spec.totalBytes)}", style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            when {
+                                m.installed -> TextButton(onClick = { vm.deleteModel(m.spec.id) }) { Text("Remove") }
+                                p?.running == true -> TextButton(onClick = { vm.cancelDownload(m.spec.id) }) { Text("Cancel") }
+                                else -> TextButton(onClick = { vm.download(m.spec.id) }) { Text("Get") }
+                            }
+                        }
+                        if (p?.running == true) LinearProgressIndicator(progress = { p.bytes.toFloat() / p.total }, modifier = Modifier.fillMaxWidth())
+                        p?.error?.takeIf { !m.installed && p.running.not() }?.let { Text("Last try: $it", style = MaterialTheme.typography.bodySmall) }
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(checked = ui.wifiOnly, onCheckedChange = vm::setWifiOnly)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Download on Wi-Fi only", Modifier.weight(1f))
+                    if (ui.models.any { !it.installed }) OutlinedButton(onClick = vm::downloadAll) { Text("Get all") }
+                }
+            }
+        }
+
+        item {
+            Section("Storage") {
+                val u = ui.usage
+                Row2("Recordings", if (u == null) "…" else "${u.clips} · ${Fmt.bytes(u.audioBytes)}")
+                if (u != null && u.quietClips > 0) {
+                    Text("${u.quietClips} clips older than ${CleanupWorker.DAYS} days held no speech and only background sound (${Fmt.bytes(u.quietBytes)}).",
+                        style = MaterialTheme.typography.bodyMedium)
+                    OutlinedButton(onClick = { confirmClean = true }) { Text("Free up ${Fmt.bytes(u.quietBytes)}") }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Clean up automatically", style = MaterialTheme.typography.bodyLarge)
+                        Text("Daily, delete the audio of week-old clips with no speech and only background. The day's timeline keeps them.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(checked = ui.autoClean, onCheckedChange = vm::setAutoClean)
+                }
+            }
+        }
+
+        item {
+            Section("Diagnostics") {
+                Row2("Last audio", ago(cap.lastAudioMillis))
+                Row2("Frames · unusable", "${cap.frames} · ${cap.dropped}")
+                Row2("Clips this session", "${cap.clipsWritten}")
+                Row2("Device restarts seen", "${cap.reboots}")
+                TextButton(onClick = { showLog = !showLog }) { Text(if (showLog) "Hide log" else "Show log") }
+            }
+        }
+        if (showLog) items(cap.log.asReversed().take(80)) { line ->
+            Text(line, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+        }
+    }
+
+    if (confirmClean) {
+        val u = ui.usage
+        AlertDialog(
+            onDismissRequest = { confirmClean = false },
+            title = { Text("Delete background-only audio?") },
+            text = { Text("${u?.quietClips ?: 0} clips' audio will be deleted permanently. Their place on the timeline and their sound tags stay.") },
+            confirmButton = { TextButton(onClick = { vm.cleanNow(); confirmClean = false }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { confirmClean = false }) { Text("Keep") } },
+        )
+    }
+}

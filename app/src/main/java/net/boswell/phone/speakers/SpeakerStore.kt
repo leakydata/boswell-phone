@@ -7,7 +7,18 @@ import android.database.sqlite.SQLiteOpenHelper
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-data class Person(val id: Long, val name: String?, val voiceprints: Int, val seconds: Double)
+data class Person(
+    val id: Long,
+    val name: String?,
+    val voiceprints: Int,
+    val seconds: Double,
+    /** person | media | ignored | null (not decided). Lives on the voice, not the clip. */
+    val kind: String?,
+    val lastHeard: Double?,
+)
+
+/** Voiceprints that arrived in a person together: one unnamed cluster that was named, or one sighting. */
+data class VoiceGroup(val key: Long, val voiceprints: Int, val seconds: Double, val clips: List<String>, val firstHeard: Double)
 
 /**
  * Speaker identity on the phone: the desktop's schema and rules.
@@ -21,7 +32,7 @@ data class Person(val id: Long, val name: String?, val voiceprints: Int, val sec
  *
  * Starts empty. Nothing is imported from the desktop.
  */
-class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", null, 1) {
+class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", null, 3) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""
@@ -43,9 +54,13 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
                 origin    TEXT NOT NULL,          -- manual | confirmed | auto
                 redundant INTEGER NOT NULL DEFAULT 0,
                 impure    INTEGER NOT NULL DEFAULT 0,
-                created   REAL
+                created   REAL,
+                -- The unnamed cluster these came from when a name was given,
+                -- so a wrong name can be taken back off exactly that group.
+                source_cluster INTEGER
             )""")
         db.execSQL("CREATE INDEX vp_person ON voiceprints(person_id)")
+        db.execSQL(MERGES)
         db.execSQL("""
             CREATE TABLE matches (
                 id            INTEGER PRIMARY KEY,
@@ -61,7 +76,10 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
             )""")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) db.execSQL("ALTER TABLE voiceprints ADD COLUMN source_cluster INTEGER")
+        if (oldVersion < 3) db.execSQL(MERGES)
+    }
 
     override fun onConfigure(db: SQLiteDatabase) = db.setForeignKeyConstraintsEnabled(true)
 
@@ -125,8 +143,13 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         }
         db.beginTransaction()
         try {
+            // Remember which cluster each voiceprint came from, once, so the
+            // name can be undone for exactly this group later.
+            db.execSQL("UPDATE voiceprints SET source_cluster = COALESCE(source_cluster, ?) WHERE person_id = ?", arrayOf<Any>(personId, personId))
             if (existing != null && existing != personId) {
                 db.execSQL("UPDATE voiceprints SET person_id = ? WHERE person_id = ?", arrayOf<Any>(existing, personId))
+                // Transcripts written earlier still say the old id; this is how they find the new one.
+                db.execSQL("INSERT OR REPLACE INTO merges(from_id, into_id) VALUES (?, ?)", arrayOf<Any>(personId, existing))
                 db.execSQL("DELETE FROM people WHERE id = ?", arrayOf<Any>(personId))
                 db.setTransactionSuccessful()
                 return existing
@@ -140,16 +163,82 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
     }
 
     fun people(): List<Person> = readableDatabase.rawQuery("""
-        SELECT p.id, p.name, COUNT(v.id), COALESCE(SUM(v.seconds), 0) FROM people p
-        LEFT JOIN voiceprints v ON v.person_id = p.id GROUP BY p.id ORDER BY p.name IS NULL, p.name, p.id""", null).use { c ->
-        buildList { while (c.moveToNext()) add(Person(c.getLong(0), if (c.isNull(1)) null else c.getString(1), c.getInt(2), c.getDouble(3))) }
+        SELECT p.id, p.name, COUNT(v.id), COALESCE(SUM(v.seconds), 0), p.kind, MAX(v.created) FROM people p
+        LEFT JOIN voiceprints v ON v.person_id = p.id GROUP BY p.id HAVING COUNT(v.id) > 0
+        ORDER BY p.name IS NULL, p.name, p.id""", null).use { c ->
+        buildList {
+            while (c.moveToNext()) add(Person(c.getLong(0), c.str(1), c.getInt(2), c.getDouble(3), c.str(4),
+                if (c.isNull(5)) null else c.getDouble(5)))
+        }
     }
+
+    fun person(id: Long): Person? = people().firstOrNull { it.id == id }
+
+    /** Mark a voice as a person, media (a screen talking) or ignored. A kind never stops a voice being collected. */
+    fun setKind(personId: Long, kind: String?) {
+        writableDatabase.execSQL("UPDATE people SET kind = ? WHERE id = ?", arrayOf<Any?>(kind, personId))
+    }
+
+    /** A person's voiceprints grouped by the cluster they were named from (or by clip, for single sightings). */
+    fun groups(personId: Long): List<VoiceGroup> = readableDatabase.rawQuery("""
+        SELECT COALESCE(source_cluster, -id), COUNT(*), COALESCE(SUM(seconds), 0), GROUP_CONCAT(clip, '|'), MIN(created)
+        FROM voiceprints WHERE person_id = ? GROUP BY COALESCE(source_cluster, -id) ORDER BY MIN(created) DESC""",
+        arrayOf(personId.toString())).use { c ->
+        buildList {
+            while (c.moveToNext()) add(VoiceGroup(c.getLong(0), c.getInt(1), c.getDouble(2),
+                (c.str(3) ?: "").split("|").filter { it.isNotEmpty() }.distinct(), c.getDouble(4)))
+        }
+    }
+
+    /**
+     * "That wasn't them": take one group back off a person into a new unnamed
+     * voice. Nothing is deleted, so a mistaken undo is just a rename away.
+     */
+    fun unnameGroup(personId: Long, groupKey: Long): Long {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val fresh = newPerson(null)
+            if (groupKey < 0) db.execSQL("UPDATE voiceprints SET person_id = ? WHERE id = ? AND person_id = ?", arrayOf<Any>(fresh, -groupKey, personId))
+            else db.execSQL("UPDATE voiceprints SET person_id = ?, source_cluster = NULL WHERE source_cluster = ? AND person_id = ?", arrayOf<Any>(fresh, groupKey, personId))
+            db.setTransactionSuccessful()
+            return fresh
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    private fun android.database.Cursor.str(i: Int): String? = if (isNull(i)) null else getString(i)
 
     fun nameOf(personId: Long): String? = readableDatabase.rawQuery("SELECT name FROM people WHERE id = ?", arrayOf(personId.toString())).use { c ->
         if (c.moveToFirst() && !c.isNull(0)) c.getString(0) else null
     }
 
+    /** Follow merges from an id a transcript recorded to the person it is now. */
+    fun resolve(personId: Long): Long {
+        var id = personId
+        repeat(32) {
+            val next = readableDatabase.rawQuery("SELECT into_id FROM merges WHERE from_id = ?", arrayOf(id.toString())).use { c ->
+                if (c.moveToFirst()) c.getLong(0) else null
+            } ?: return id
+            id = next
+        }
+        return id
+    }
+
+    /**
+     * Who a clip's voice is now. A voice filed as a voiceprint answers through
+     * that row, which follows naming and undo; a voice matched to a named
+     * person answers through the id recorded then, following any merge.
+     */
+    fun currentPerson(clip: String, label: String, recorded: Long?): Long? =
+        readableDatabase.rawQuery("SELECT person_id FROM voiceprints WHERE clip = ? AND speaker = ? LIMIT 1", arrayOf(clip, label)).use { c ->
+            if (c.moveToFirst()) c.getLong(0) else null
+        } ?: recorded?.let(::resolve)
+
     companion object {
+        private const val MERGES = "CREATE TABLE IF NOT EXISTS merges (from_id INTEGER PRIMARY KEY, into_id INTEGER NOT NULL)"
+
         fun pack(v: FloatArray): ByteArray = ByteBuffer.allocate(v.size * 4).order(ByteOrder.LITTLE_ENDIAN).apply { v.forEach { putFloat(it) } }.array()
         fun unpack(b: ByteArray): FloatArray { val bb = ByteBuffer.wrap(b).order(ByteOrder.LITTLE_ENDIAN); return FloatArray(b.size / 4) { bb.float } }
     }

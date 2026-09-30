@@ -38,6 +38,15 @@ MODELS = [
         "files": ["pyannote-segmentation-3.0.onnx", "LICENSE-pyannote-segmentation-3.0.txt"],
     },
     {
+        "id": "sound-tags",
+        "name": "Sound tagging (CED-Mini, AudioSet)",
+        "purpose": "what else was audible: typing, TV, music, dogs…",
+        "license": "Apache-2.0",
+        "source": "https://huggingface.co/mispeech/ced-mini via sherpa-onnx int8 export",
+        "files": ["ced-mini-audio-tagging.int8.onnx", "ced-mini-audio-tagging-labels.csv",
+                  "LICENSE-ced-mini-Apache-2.0.txt"],
+    },
+    {
         "id": "voiceprint",
         "name": "Voiceprint (WeSpeaker ResNet34-LM, desktop-Boswell compatible)",
         "purpose": "who they are",
