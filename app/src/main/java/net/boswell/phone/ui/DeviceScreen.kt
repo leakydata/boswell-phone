@@ -185,9 +185,13 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                     LaunchedEffect(cap.ledBrightness) {
                         if (lprefs.getInt("led_brightness", -1) < 0) cap.ledBrightness?.let { led = it }
                     }
+                    // Stops: off, 1% (barely visible), then every 10%.
+                    val stops = listOf(0, 1) + (10..100 step 10)
+                    val at = stops.indices.minBy { kotlin.math.abs(stops[it] - led) }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Light", Modifier.padding(end = 12.dp))
-                        androidx.compose.material3.Slider(value = led.toFloat(), onValueChange = { led = it.toInt() }, valueRange = 0f..100f, steps = 9,
+                        androidx.compose.material3.Slider(value = at.toFloat(), onValueChange = { led = stops[Math.round(it)] },
+                            valueRange = 0f..(stops.size - 1).toFloat(), steps = stops.size - 2,
                             onValueChangeFinished = {
                                 lprefs.edit().putInt("led_brightness", led).apply()
                                 net.boswell.phone.capture.CaptureService.applyLedNow(lctx)
