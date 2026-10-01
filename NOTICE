@@ -1,0 +1,20 @@
+Boswell Phone
+Copyright 2026 Nathan Jones (https://github.com/leakydata)
+
+This product includes software developed as part of the Boswell Phone
+project: https://github.com/leakydata/boswell-phone
+
+If you redistribute this software or a work derived from it, Apache
+License 2.0 section 4(d) requires keeping this NOTICE (in your NOTICE
+file, documentation, or wherever such third-party notices normally
+appear), so the credit travels with it. Please also link back to the
+project page above.
+
+Third-party components:
+  - sherpa-onnx (Apache-2.0), https://github.com/k2-fsa/sherpa-onnx
+  - ONNX Runtime (MIT), https://github.com/microsoft/onnxruntime
+  - Concentus (BSD-3-Clause), https://github.com/lostromb/concentus
+  - AndroidX / Jetpack Compose / Media3 (Apache-2.0)
+
+Models are not included; they are downloaded separately under their own
+licenses (see README: Credits).

@@ -12,6 +12,7 @@ and sound tagging all running on the phone itself.
 ![Kotlin](https://img.shields.io/badge/Kotlin-Compose-7f52ff?logo=kotlin&logoColor=white)
 ![On-device AI](https://img.shields.io/badge/AI-on--device-0a7ea4)
 ![Models](https://img.shields.io/badge/models-optional%20download-555)
+![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 
 </div>
 
@@ -209,4 +210,9 @@ Boswell Phone is an independent project, not affiliated with Omi / Based Hardwar
 
 ## License
 
-Not yet chosen. Until a license is added, all rights are reserved.
+[Apache License 2.0](LICENSE) — use it, change it, share it, build products on it,
+commercial or not. **Credit is required:** if you distribute Boswell Phone or anything
+built from it, keep the copyright notice and include the [NOTICE](NOTICE) file, which
+names this project. A link back here is appreciated.
+
+Copyright 2026 Nathan Jones ([@leakydata](https://github.com/leakydata)).
