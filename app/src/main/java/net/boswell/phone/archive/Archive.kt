@@ -42,7 +42,7 @@ data class SearchHit(val line: LineRow, val conversation: Long?, val snippet: St
  * CONVERSATION_GAP of the previous one ending: the desktop's measured value,
  * after 300 s turned an evening into one 183-minute "conversation".
  */
-class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive.db", null, 2) {
+class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive.db", null, 3) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE clips (
@@ -190,7 +190,10 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
             linkSpeakers(db, group.map { it.name }, speakers)
 
             val talk = HashMap<String, Double>()
-            db.rawQuery("SELECT conv_key, SUM(seconds) FROM clip_speakers WHERE clip IN (${group.joinToString(",") { "?" }}) AND conv_key IS NOT NULL GROUP BY conv_key",
+            // Only voices that said something transcribed: a cough or a second of TV
+            // gets a voice of its own but no line, and could never be named from the conversation.
+            db.rawQuery("SELECT conv_key, SUM(seconds) FROM clip_speakers cs WHERE clip IN (${group.joinToString(",") { "?" }}) AND conv_key IS NOT NULL " +
+                "AND EXISTS (SELECT 1 FROM lines l WHERE l.clip = cs.clip AND l.label = cs.label) GROUP BY conv_key",
                 group.map { it.name }.toTypedArray()).use { c -> while (c.moveToNext()) talk[c.getString(0)] = c.getDouble(1) }
             val snippet = db.rawQuery("SELECT text FROM lines WHERE clip IN (${group.joinToString(",") { "?" }}) ORDER BY t0 LIMIT 3",
                 group.map { it.name }.toTypedArray()).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }.joinToString(" ")
