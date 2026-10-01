@@ -13,6 +13,7 @@ and sound tagging all running on the phone itself.
 ![On-device AI](https://img.shields.io/badge/AI-on--device-0a7ea4)
 ![Models](https://img.shields.io/badge/models-optional%20download-555)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
+[![Release](https://img.shields.io/github/v/release/leakydata/boswell-phone?include_prereleases&label=download)](https://github.com/leakydata/boswell-phone/releases/latest)
 
 </div>
 
@@ -136,7 +137,18 @@ The full story — including the dead ends — is in [`docs/DEVLOG.md`](docs/DEV
 **You need:** an Android 13+ phone (arm64), an **Omi CV 1**, and — only for the
 assistant or cloud transcription — an [OpenRouter](https://openrouter.ai) API key.
 
-1. **Build and install** (see below), open Boswell, and follow the setup: permissions,
+### Install
+
+**[⬇ Download the latest APK](https://github.com/leakydata/boswell-phone/releases/latest)**
+(about 90 MB), open it on your phone, and allow installing from your browser or file
+manager when Android asks. Play Protect may warn about an app it hasn't seen before;
+choose *Install anyway*. Updates install over the top, keeping your data.
+
+Or build it yourself (see [Building](#building)).
+
+### First run
+
+1. Open Boswell and follow the setup: permissions,
    find your Omi, choose Live or Sync, download the models (~510 MB, once), read a short
    passage so it learns your voice, and optionally add your OpenRouter key.
 2. **Wear the Omi.** Conversations show up on **Today**; name the voices you know in
@@ -153,7 +165,11 @@ are checked against their SHA-256, and can be removed any time.
 ```bash
 # JDK 21 and the Android SDK (compileSdk 37); the sherpa-onnx AAR is fetched by Gradle
 JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./gradlew :app:assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb install -r app/build/outputs/apk/debug/app-debug.apk   # installs beside the release, as net.boswell.phone.debug
+
+# A signed release reads its keystore from ~/.gradle/gradle.properties
+# (BOSWELL_KEYSTORE, BOSWELL_KEY_ALIAS, BOSWELL_STORE_PASSWORD, BOSWELL_KEY_PASSWORD).
+./gradlew :app:assembleRelease
 
 ./gradlew :app:testDebugUnitTest          # 70+ unit tests, no device needed
 ```
@@ -187,7 +203,6 @@ docs/          DEVLOG · OMI-PROTOCOL · LESSONS · REFERENCE-CODEBASE
 
 ## Roadmap
 
-- A signed release build and an APK on the releases page
 - Email (reading needs Google sign-in), more wearables, a desktop ↔ phone merge
 - On-device Parakeet, once its contextual biasing works reliably in sherpa-onnx
 

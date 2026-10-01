@@ -31,13 +31,32 @@ android {
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
+    // Release signing: the keystore and its passwords live outside the repo, in
+    // ~/.gradle/gradle.properties (BOSWELL_KEYSTORE, BOSWELL_KEY_ALIAS,
+    // BOSWELL_STORE_PASSWORD, BOSWELL_KEY_PASSWORD). Without them a release
+    // build is simply unsigned. Keep the keystore safe: an installed app only
+    // accepts updates signed with the same key.
+    signingConfigs {
+        val ks = providers.gradleProperty("BOSWELL_KEYSTORE").orNull
+        if (ks != null) create("release") {
+            storeFile = File(ks)
+            storePassword = providers.gradleProperty("BOSWELL_STORE_PASSWORD").get()
+            keyAlias = providers.gradleProperty("BOSWELL_KEY_ALIAS").get()
+            keyPassword = providers.gradleProperty("BOSWELL_KEY_PASSWORD").get()
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
         }
         release {
+            // Off for now: the size is the speech engine's native libraries, which
+            // R8 can't shrink, and keep rules for sherpa-onnx's JNI would need
+            // testing on a device first.
             isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 
