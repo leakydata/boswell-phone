@@ -58,4 +58,12 @@ class MatchingTest {
         val nearStranger = Matching.Reference(3, 9, v(0.5f, 0.86f, 0f))  // as like the voice as I am
         assertEquals(Matching.Decision.UNCERTAIN, Matching.match(voice, listOf(me), listOf(nearStranger)).decision)
     }
+
+    @Test fun `an unnamed voice closer than the owner never undoes a clear match`() {
+        fun v(vararg x: Float) = Matching.unit(floatArrayOf(*x))
+        val me = Matching.Reference(1, 1, v(1f, 0f, 0f))
+        val voice = v(0.86f, 0.51f, 0f)                                   // 0.86 like me: clears 0.75 alone
+        val fragment = Matching.Reference(2, 9, v(0.9f, 0.43f, 0f))       // an unnamed voice even closer
+        assertEquals(Matching.Decision.MATCHED, Matching.match(voice, listOf(me), listOf(fragment)).decision)
+    }
 }

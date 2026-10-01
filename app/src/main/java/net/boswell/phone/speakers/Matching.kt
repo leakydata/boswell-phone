@@ -68,10 +68,18 @@ object Matching {
         // 0.75 applied and most of the owner's own speech stayed "uncertain";
         // counting unnamed voices lets "clear of the field" apply as it does on
         // the desktop. They are only ever competition, never the answer.
-        val fieldBest = field.maxOfOrNull { dot(v, it.vec) }
-        val runnerUp = listOfNotNull(ranked.getOrNull(1)?.score, fieldBest).maxOrNull()
-        val margin = runnerUp?.let { top.score - it }
-        return Result(decide(top.score, margin), ranked.take(3), top.score, margin)
+        // The field only ever adds a match: a voice that clears the bar among
+        // named people stays matched even if some unnamed voice (often another
+        // fragment of the same person) is closer -- that once filed the
+        // owner's own "Hey Boswell" (0.86 like them) under an unnamed voice.
+        val namedMargin = ranked.getOrNull(1)?.let { top.score - it.score }
+        val alone = decide(top.score, namedMargin)
+        if (alone == Decision.MATCHED || field.isEmpty()) return Result(alone, ranked.take(3), top.score, namedMargin)
+        val fieldBest = field.maxOf { dot(v, it.vec) }
+        val margin = top.score - maxOf(ranked.getOrNull(1)?.score ?: -1.0, fieldBest)
+        val withField = decide(top.score, margin)
+        return if (withField == Decision.MATCHED) Result(withField, ranked.take(3), top.score, margin)
+            else Result(alone, ranked.take(3), top.score, namedMargin)
     }
 
     /** The unnamed cluster this voice most resembles, if it clears CLUSTER_MIN. */

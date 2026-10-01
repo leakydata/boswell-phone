@@ -31,7 +31,12 @@ class TriggerEngine(private val context: Context) {
                 val person = label?.let { speakers.currentPerson(t.clip, it, t.speakers[it]?.personId) }
                 for (trig in triggers) {
                     val phrase = Triggers.match(trig, seg.text) ?: continue
-                    if (trig.ownerOnly && (owner == null || person != owner)) continue
+                    // "Only my voice": the owner, or a voice whose best guess is the owner
+                    // (saying the phrase is itself a strong hint) -- a filed-but-unsure
+                    // owner voice once made "Hey Boswell" do nothing.
+                    val guess = label?.let { t.speakers[it] }?.takeIf { it.score >= net.boswell.phone.speakers.Matching.MATCH_LOW }
+                        ?.candidates?.firstOrNull()?.personId?.let(speakers::resolve)
+                    if (trig.ownerOnly && (owner == null || (person != owner && guess != owner))) continue
                     if (!store.claimTrigger(t.clip, seg.start, trig.id)) continue
                     val around = t.segments.subList((i - 2).coerceAtLeast(0), (i + 3).coerceAtMost(t.segments.size))
                         .joinToString("\n") { s -> (if (s === seg) "> " else "  ") + s.text }
