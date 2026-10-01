@@ -126,11 +126,18 @@ class CaptureService : LifecycleService() {
         }
         captureJob = lifecycleScope.launch {
             var backoffMs = BACKOFF_MIN_MS
+            // After a direct attempt fails, wait for the Omi to come back instead:
+            // Android's auto-connect watches for it in the controller at almost no
+            // cost and connects the moment it advertises. Spaced-out retries (up to
+            // 2 min, each with a 30 s timeout) once left someone back in range for
+            // three minutes before it noticed.
+            var waitForReturn = false
             while (isActive) {
                 streamingSince = null
                 var drain = false
+                val attemptStarted = System.currentTimeMillis()
                 try {
-                    session(address)
+                    session(address, waitForReturn)
                 } catch (e: OnCharger) {
                     drain = true
                 } catch (e: CancellationException) {
@@ -150,21 +157,26 @@ class CaptureService : LifecycleService() {
                     backoffMs = BACKOFF_MIN_MS
                     continue
                 }
-                // A session that streamed for a while earns a fast retry; one
-                // that never got going backs off, so an absent device is not
-                // hammered all night.
                 val streamedFor = streamingSince?.let { System.currentTimeMillis() - it } ?: 0L
-                backoffMs = if (streamedFor > 60_000) BACKOFF_MIN_MS else (backoffMs * 2).coerceAtMost(BACKOFF_MAX_MS)
-                val retryAt = System.currentTimeMillis() + backoffMs
-                CaptureRepository.update { it.copy(link = Link.AWAY, nextRetryMillis = retryAt) }
-                notify("Omi away — retrying in ${backoffMs / 1000}s")
+                val lasted = System.currentTimeMillis() - attemptStarted
+                if (streamedFor > 60_000) {
+                    // It was working: one quick direct try, then wait for it.
+                    backoffMs = BACKOFF_MIN_MS; waitForReturn = false
+                } else {
+                    waitForReturn = true
+                    // Spaced retries only when attempts fail at once (Bluetooth off,
+                    // the stack refusing): auto-connect does the waiting otherwise.
+                    backoffMs = if (lasted < 3_000) (backoffMs * 2).coerceAtMost(BACKOFF_MAX_MS) else 2_000L
+                }
+                CaptureRepository.update { it.copy(link = Link.AWAY, nextRetryMillis = null) }
+                notify(if (waitForReturn) "Omi away — connects as soon as it's back in range" else "Omi away — reconnecting")
                 delay(backoffMs)
             }
         }
     }
 
     /** One connection, from connect to loss. Always ends by throwing. */
-    private suspend fun session(address: String) {
+    private suspend fun session(address: String, waitForReturn: Boolean = false) {
         val adapter = getSystemService(BluetoothManager::class.java).adapter
         val device = adapter.getRemoteDevice(address)
         CaptureRepository.update { it.copy(link = Link.CONNECTING, nextRetryMillis = null) }
@@ -175,7 +187,13 @@ class CaptureService : LifecycleService() {
             if (packets.trySend(data).isFailure) CaptureRepository.update { it.copy(dropped = it.dropped + 1) }
         }, onButton = { code -> lifecycleScope.launch { onButton(code) } })
         connection = conn
-        conn.connect()
+        if (waitForReturn) {
+            CaptureRepository.update { it.copy(link = Link.AWAY) }
+            CaptureRepository.log("waiting for the Omi to come back in range")
+        }
+        // Auto-connect waits (up to 20 min, then the request is renewed) and fires
+        // when the Omi is back; a direct attempt gives up after 30 s.
+        conn.connect(timeoutMs = if (waitForReturn) 20 * 60_000L else 30_000L, autoConnect = waitForReturn)
 
         val codec = runCatching { conn.read(OmiUuids.CODEC)[0].toInt() and 0xff }.getOrNull()
         val frameSamples = OmiUuids.CODEC_FRAME_SAMPLES[codec] ?: 320

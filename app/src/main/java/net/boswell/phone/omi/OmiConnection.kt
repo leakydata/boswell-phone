@@ -150,8 +150,8 @@ class OmiConnection(
             }
         }
 
-    suspend fun connect(timeoutMs: Long = 30_000) {
-        gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
+    suspend fun connect(timeoutMs: Long = 30_000, autoConnect: Boolean = false) {
+        gatt = device.connectGatt(context, autoConnect, callback, BluetoothDevice.TRANSPORT_LE)
         kotlinx.coroutines.withTimeoutOrNull(timeoutMs) { connected.await(); true }
             ?: throw GattException("connect timed out after ${timeoutMs / 1000}s")
         op<Int>("discover services", "discover", 15_000) { it.discoverServices() }
