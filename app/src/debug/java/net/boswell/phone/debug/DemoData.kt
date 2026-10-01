@@ -87,9 +87,12 @@ object DemoData {
             // About three lines per 30-second clip, as on a real day.
             for ((k, chunk) in talk.lines.chunked(3).withIndex()) {
                 val name = "omi_${t.toLong()}.wav"
+                // Full 30-second clips, the lines spread through them with pauses between.
+                val seconds = 30.0
+                val talkTime = chunk.sumOf { 2.0 + it.text.length / 12.0 }
+                val gap = ((seconds - 2 - talkTime) / chunk.size).coerceAtLeast(0.5)
                 var at = 1.0
-                val segs = chunk.map { l -> val d = 2.0 + l.text.length / 14.0; Segment(at, at + d, "SPEAKER_0${people.indexOf(l.who)}", l.text).also { at += d + 0.6 } }
-                val seconds = at.coerceAtLeast(20.0) + 2
+                val segs = chunk.map { l -> val d = 2.0 + l.text.length / 12.0; Segment(at, at + d, "SPEAKER_0${people.indexOf(l.who)}", l.text).also { at += d + gap } }
                 val labels = chunk.map { it.who }.distinct()
                 val tr = Transcript(name, t + seconds + 5, segs,
                     labels.associate { who -> "SPEAKER_0${people.indexOf(who)}" to SpeakerId(who.takeIf { it != "?" }, 0.86, "match", 0.4,
@@ -113,11 +116,13 @@ object DemoData {
         LifeStore(c).use { it.addFact("Sam Rivera", "Sam's sister's birthday is on the 12th"); it.addFact("Priya Shah", "Priya is running the client demo on Thursday") }
         AssistantStore(c).use { s ->
             s.addExchange("typed", "What did I promise Priya?",
-                "You told Priya you'd send her the battery life chart by tomorrow before noon, for the client deck [L9]. You also said you'd have ten working boards by Wednesday afternoon [L4].", 0.0011)
+                "You told Priya you'd send her the battery life chart by tomorrow before noon, for the client deck [L15]. You also said you'd have ten working boards by Wednesday afternoon [L4].", 0.0011)
             s.addExchange("omi", "When am I meeting Sam on Saturday?",
-                "Eight in the morning at the trailhead, if it's dry, and Sam asked you to bring the long rope [L8].", 0.0006)
+                "Eight in the morning at the trailhead, if it's dry, and Sam asked you to bring the long rope [L10].", 0.0006)
         }
-        c.getSharedPreferences("boswell", Context.MODE_PRIVATE).edit().putBoolean("setup_done", true).apply()
+        // A placeholder so the Ask screen looks set up; nothing is asked unless someone types.
+        net.boswell.phone.assistant.Secrets.put(c, net.boswell.phone.assistant.Secrets.OPENROUTER, "sk-demo-placeholder")
+        c.getSharedPreferences("boswell", Context.MODE_PRIVATE).edit().putBoolean("setup_done", true).commit()
         return "seeded a demo day: ${day.size} conversations"
     }
 }

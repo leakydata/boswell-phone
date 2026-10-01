@@ -19,6 +19,15 @@ and sound tagging all running on the phone itself.
 
 ---
 
+<p align="center">
+  <img src="docs/screenshots/today.png" width="19%" alt="Today: the day's conversations, who was in them, and what else was heard">
+  <img src="docs/screenshots/conversation.png" width="19%" alt="A conversation, line by line, by speaker">
+  <img src="docs/screenshots/ask.png" width="19%" alt="Ask: answers that cite and play the moment">
+  <img src="docs/screenshots/people.png" width="19%" alt="People: voices it knows, and voices to name">
+  <img src="docs/screenshots/todo.png" width="19%" alt="To-do: including promises noticed in what was said">
+</p>
+<p align="center"><sub>A made-up day, for illustration.</sub></p>
+
 > *James Boswell followed Samuel Johnson around London for twenty years, writing down
 > what he said. This one fits in a pocket.*
 

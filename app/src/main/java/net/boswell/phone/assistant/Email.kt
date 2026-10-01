@@ -126,7 +126,7 @@ object Email {
     }.getOrElse { e ->
         val m = (e.message ?: e.javaClass.simpleName).lowercase()
         when {
-            "authenticat" in m || "invalid credentials" in m || "login" in m -> "The password was refused. Use an app password (see below), not your usual one."
+            "authenticat" in m || "invalid credentials" in m || "login" in m -> "The password was refused. Use an app password (see the tip above), not your usual one."
             "unknownhost" in m || "unable to resolve" in m -> "Couldn't find the mail server. Check the server names."
             "timed out" in m || "timeout" in m -> "The mail server didn't answer. Check the server names and ports, and the connection."
             else -> "Couldn't sign in: ${e.message}"
