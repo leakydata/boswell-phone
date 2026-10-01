@@ -405,6 +405,26 @@ class CaptureService : LifecycleService() {
             if (capture) "Say what to remember. Tap once when you're done." else "Ask your question. Tap again when you're done.", LISTENING_ID)
         lifecycleScope.launch(kotlinx.coroutines.Dispatchers.Default) {
             val asr = async { net.boswell.phone.asr.LocalAsr(models) }
+            // The speech model decides when the question is over (loudness can't
+            // tell a finished question from a noisy room): every half second it
+            // looks at the last 6 s. Measured on five real questions: all whole,
+            // each ended 0.8-1.6 s after the last word.
+            val listener = launch(kotlinx.coroutines.Dispatchers.Default) {
+                if (!models.isInstalled(net.boswell.phone.models.ModelCatalog.SEGMENTATION) ||
+                    !models.isInstalled(net.boswell.phone.models.ModelCatalog.VOICEPRINT)) return@launch
+                runCatching {
+                    net.boswell.phone.diarize.OrtModels(models.path(net.boswell.phone.models.ModelCatalog.SEGMENTATION, ".onnx"),
+                        models.path(net.boswell.phone.models.ModelCatalog.VOICEPRINT, "voiceprint.onnx")).use { m ->
+                        val d = m.diarizer()
+                        q.modelListening = true
+                        while (!q.done) {
+                            delay(500)
+                            val t = q.tail(6.0)
+                            if (t.size >= 8_000) q.heard(d.speechSpans(t), t.size / 16_000.0)
+                        }
+                    }
+                }.onFailure { q.modelListening = false; CaptureRepository.log("question: speech model unavailable (${it.message})") }
+            }
             val started = System.currentTimeMillis()
             var longestGap = 0L
             while (!q.done) {
@@ -416,7 +436,8 @@ class CaptureService : LifecycleService() {
                 if (System.currentTimeMillis() - started > 25_000) q.limit()
                 q.finishAt?.let { if (System.currentTimeMillis() >= it) q.finish() }
             }
-            CaptureRepository.log("question ended by ${q.endedBy ?: "?"} after %.1f s of audio; longest gap in the stream %.1f s".format(q.seconds, longestGap / 1000.0))
+            listener.cancel()
+            CaptureRepository.log("question ended by ${q.endedBy ?: "?"}${if (q.modelListening) " (speech model)" else ""} after %.1f s of audio; longest gap in the stream %.1f s".format(q.seconds, longestGap / 1000.0))
             question = null
             CaptureRepository.update { it.copy(asking = "thinking") }
             net.boswell.phone.assistant.AssistantNotify.cancel(this@CaptureService, LISTENING_ID)

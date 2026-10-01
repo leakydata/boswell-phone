@@ -12,15 +12,15 @@ class QuestionReplayTest {
         org.junit.Assume.assumeTrue(dir != null)
         // clip, when speech began, when it ended (from the transcript lines)
         val cases = listOf(Triple("omi_1790820570", 17.1, 22.0), Triple("omi_1790820601", 22.6, 25.7),
-            Triple("omi_1790820786", 16.0, 20.7), Triple("omi_1790821092", 2.9, 4.6))
+            Triple("omi_1790820786", 16.0, 20.7), Triple("omi_1790821092", 2.9, 4.6), Triple("omi_1790821736", 5.1, 10.9))
         for ((c, a, b) in cases) {
             val pcm = OggOpus.readPcm(File(dir, "$c.ogg"))
             val q = QuestionCapture()
             var i = ((a - 0.3) * 16_000).toInt().coerceAtLeast(0)
             while (!q.done && i + 320 <= pcm.size) { q.add(pcm.copyOfRange(i, i + 320)); i += 320 }
             val end = i / 16_000.0
-            println("REPLAY $c: speech %.1f-%.1f s, question ended at %.1f s (%s)".format(a, b, end,
-                if (end < b) "CUT %.1f s early".format(b - end) else "got it all"))
+            println("REPLAY $c: speech %.1f-%.1f s, question ended at %.1f s by %s (%s)".format(a, b, end, q.endedBy,
+                if (end < b) "CUT %.1f s early".format(b - end) else "got it all, %.1f s after speech".format(end - b)))
         }
     }
 
@@ -52,6 +52,30 @@ class QuestionReplayTest {
             while (!q.done && i + 320 <= pcm.size) { q.add(pcm.copyOfRange(i, i + 320)); i += 320 }
             val end = i / 16_000.0
             println("OLD $c: speech %.1f-%.1f s, ended at %.1f s (%s)".format(a, b, end, if (end < b) "CUT %.1f s early".format(b - end) else "got it all"))
+        }
+    }
+
+    /** With the speech model deciding the end, as on the phone: every 0.5 s it looks at the last 6 s. -Ddiar.models too. */
+    @Test fun replayModel() {
+        val dir = System.getProperty("diar.qdir")?.let { File(it) }
+        val models = System.getProperty("diar.models")?.let { File(it) }
+        org.junit.Assume.assumeTrue(dir != null && models != null)
+        val cases = listOf(Triple("omi_1790820570", 17.1, 22.0), Triple("omi_1790820601", 22.6, 25.7),
+            Triple("omi_1790820786", 16.0, 20.7), Triple("omi_1790821092", 2.9, 4.6), Triple("omi_1790821736", 5.1, 10.9))
+        net.boswell.phone.diarize.OrtModels(File(models, "pyannote-segmentation-3.0.onnx").path, File(models, "voiceprint.onnx").path).use { m ->
+            val d = net.boswell.phone.diarize.Diarizer(segment = m::segment, embed = m::voiceprint)
+            for ((c, a, b) in cases) {
+                val pcm = OggOpus.readPcm(File(dir, "$c.ogg"))
+                val q = QuestionCapture(); q.modelListening = true
+                var i = ((a - 0.3) * 16_000).toInt().coerceAtLeast(0); var n = 0
+                while (!q.done && i + 320 <= pcm.size) {
+                    q.add(pcm.copyOfRange(i, i + 320)); i += 320; n++
+                    if (n % 25 == 0) { val t = q.tail(6.0); q.heard(d.speechSpans(t), t.size / 16_000.0) }
+                }
+                val end = i / 16_000.0
+                println("MODEL $c: speech %.1f-%.1f s, ended at %.1f s by %s (%s)".format(a, b, end, q.endedBy,
+                    if (end < b) "CUT %.1f s early".format(b - end) else "got it all, %.1f s after speech".format(end - b)))
+            }
         }
     }
 }
