@@ -55,11 +55,26 @@ class CaptureService : LifecycleService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
-        when (intent?.action) {
+        if (intent == null) {
+            // Restarted by Android after the process died (a crash, or memory
+            // reclaimed): carry on in whatever mode was chosen. Without this a
+            // crash ended Live mode silently and it stayed off.
+            val address = net.boswell.phone.sync.Modes.address(this)
+            if (net.boswell.phone.sync.Modes.mode(this) == net.boswell.phone.sync.Mode.LIVE && address != null) {
+                CaptureRepository.log("restarted after the app was stopped")
+                goForeground("Connecting to Omi…")
+                startCapture(address)
+                return START_STICKY
+            }
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        when (intent.action) {
             ACTION_START -> {
                 val address = intent.getStringExtra(EXTRA_ADDRESS) ?: return START_NOT_STICKY
                 goForeground("Connecting to Omi…")
                 startCapture(address)
+                return START_STICKY       // live: come back if the process dies
             }
             ACTION_STOP -> lifecycleScope.launch { stopCapture("stopped by user"); stopSelf() }
             ACTION_SYNC -> {

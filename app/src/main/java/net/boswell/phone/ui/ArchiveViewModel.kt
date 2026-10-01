@@ -588,10 +588,11 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        // The databases stay open: work started on the IO dispatcher can still be
+        // reading after the screen is gone, and closing them under it crashed the
+        // app (and Live capture with it). An open SQLite helper costs nothing.
         releasePlayer()
         clipPlayer?.release()
         voicePlayer?.release()
-        speakers.close()
-        archive.close()
     }
 }

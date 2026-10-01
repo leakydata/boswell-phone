@@ -93,6 +93,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val json = Json { ignoreUnknownKeys = true }
 
     init {
+        // Opening the app brings Live capture back if it should be running and isn't.
+        run {
+            val ctx = getApplication<Application>()
+            val address = net.boswell.phone.sync.Modes.address(ctx)
+            if (net.boswell.phone.sync.Modes.mode(ctx) == net.boswell.phone.sync.Mode.LIVE && address != null &&
+                CaptureRepository.state.value.link == net.boswell.phone.capture.Link.IDLE) {
+                runCatching { CaptureService.start(ctx, address) }
+            }
+        }
         // Older clips become compact copies; quiet ones lose their sound, per the setting.
         net.boswell.phone.process.CleanupWorker.runNow(getApplication())
         net.boswell.phone.process.CleanupWorker.schedule(getApplication(), true)
@@ -387,10 +396,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        // The databases stay open: work started on the IO dispatcher can still be
+        // reading after the screen is gone, and closing them under it crashed the
+        // app (and Live capture with it). An open SQLite helper costs nothing.
         stopScan()
         player?.release()
-        speakers.close()
-        archive.close()
     }
 
     companion object {
