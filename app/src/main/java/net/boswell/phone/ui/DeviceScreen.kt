@@ -249,14 +249,6 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                     }
                     Text("View", color = MaterialTheme.colorScheme.primary)
                 }
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable(onClick = onCompare)) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Compare transcription with the cloud", style = MaterialTheme.typography.bodyLarge)
-                        Text("See how the phone's transcripts stack up against a cloud engine on your own clips",
-                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Text("Open", color = MaterialTheme.colorScheme.primary)
-                }
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable(onClick = onTriggers)) {
                     Column(Modifier.weight(1f)) {
                         Text("Voice triggers", style = MaterialTheme.typography.bodyLarge)
@@ -363,6 +355,48 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
         }
 
         item {
+            Section("Transcription") {
+                val tctx = LocalContext.current
+                val T = net.boswell.phone.asr.Transcription
+                var cloudOn by remember { mutableStateOf(T.cloud(tctx)) }
+                var cap by remember { mutableStateOf(T.dailyCap(tctx)) }
+                var spent by remember { mutableStateOf(0.0) }
+                val hasKey = remember { net.boswell.phone.assistant.Secrets.has(tctx, net.boswell.phone.assistant.Secrets.OPENROUTER) }
+                LaunchedEffect(cloudOn) {
+                    spent = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        val st = net.boswell.phone.assistant.AssistantStore(tctx); try { st.spentToday(T.PURPOSE) } finally { st.close() }
+                    }
+                }
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    SegmentedButton(selected = !cloudOn, onClick = { cloudOn = false; T.setCloud(tctx, false) },
+                        shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("On this phone") }
+                    SegmentedButton(selected = cloudOn, enabled = hasKey, onClick = { cloudOn = true; T.setCloud(tctx, true) },
+                        shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Cloud") }
+                }
+                Text(if (cloudOn) "Words come from ${T.ENGINE.label} in the cloud: more accurate in testing, about $0.09 per hour of speech. " +
+                        "The audio of clips with speech goes to OpenRouter; who's speaking is still worked out on this phone. " +
+                        "If the cloud can't be reached, or today's limit is reached, the phone transcribes instead."
+                    else "Private: audio never leaves the phone. To fix a clip the phone got wrong, select it in Recordings and choose More → Redo in the cloud." +
+                        if (!hasKey) " Cloud transcription needs an OpenRouter key (Assistant, above)." else "",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (hasKey) Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Daily limit", Modifier.padding(end = 8.dp))
+                    for (v in listOf(0.25, 0.5, 1.0, 2.0)) {
+                        FilterChip(selected = cap == v, onClick = { cap = v; T.setDailyCap(tctx, v) },
+                            label = { Text("$" + if (v < 1) "%.2f".format(v) else "%.0f".format(v)) }, modifier = Modifier.padding(end = 4.dp))
+                    }
+                }
+                if (hasKey) Text("Spent on cloud transcription today: $%.3f".format(spent), style = MaterialTheme.typography.bodySmall)
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable(onClick = onCompare)) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Compare with the cloud", style = MaterialTheme.typography.bodyLarge)
+                        Text("See how the phone's transcripts stack up against a cloud engine on your own clips",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Text("Open", color = MaterialTheme.colorScheme.primary)
+                }
+            }
+
             Section("On-device models") {
                 Text("Everything runs on this phone. Models download from the boswell-phone GitHub release and are checked before use.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

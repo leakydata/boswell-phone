@@ -105,7 +105,7 @@ fun SetupScreen(vm: MainViewModel, onPair: () -> Unit, onFinish: () -> Unit, voi
                     Step.WELCOME -> {
                         Title("Welcome to Boswell")
                         Body("Boswell turns what your Omi hears into a record of your day: conversations, who said what, and the things you said you'd do.")
-                        Body("Transcribing, recognizing voices and sorting it all happens on this phone. Nothing is sent anywhere unless you switch on the assistant later, and then only text.")
+                        Body("Transcribing, recognizing voices and sorting it all happens on this phone. Nothing is sent anywhere unless you switch on the assistant (text only) or cloud transcription later.")
                         Body("Setup takes a couple of minutes. Every step can be skipped and changed later.")
                     }
                     Step.PERMISSIONS -> Permissions()

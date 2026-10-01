@@ -136,7 +136,8 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
             writeAtomically(File(out, wav.nameWithoutExtension + ".json"), TranscriptJson.json.encodeToString(Transcript.serializer(), t).toByteArray())
             return
         }
-        val words = asr.transcribe(audio)
+        val cloud = cloudWords(wav)
+        val words = cloud ?: asr.transcribe(audio)
         val d = diarizer.run(audio)
         val segments = Lines.build(words, d.turns)
         val tags = tagger?.tag(audio)
@@ -168,7 +169,8 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
             )
         }
         val t = Transcript(wav.name, System.currentTimeMillis() / 1000.0, segments, speakers, embeddings,
-            engine = "nemotron-3.5-asr-1120ms-int8 + pyannote-seg-3.0 + wespeaker-r34" + (if (tags != null) " + ced-mini" else ""),
+            engine = (if (cloud != null) "${net.boswell.phone.asr.Transcription.ENGINE.id} (cloud)" else "nemotron-3.5-asr-1120ms-int8") +
+                " + pyannote-seg-3.0 + wespeaker-r34" + (if (tags != null) " + ced-mini" else ""),
             processMs = System.currentTimeMillis() - t0,
             sounds = tags, verdict = tags?.let { verdictFor(segments.isNotEmpty(), it) })
         writeAtomically(File(out, wav.nameWithoutExtension + ".json"), TranscriptJson.json.encodeToString(Transcript.serializer(), t).toByteArray())
@@ -178,6 +180,36 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
                 File(wav.parentFile, wav.nameWithoutExtension + ".json").readText()).started
         }.getOrNull()
         if (started != null) runCatching { net.boswell.phone.assistant.TriggerEngine(applicationContext).run(t, started) }
+    }
+
+    /**
+     * The words from the cloud, when this clip should go there and can: null
+     * means transcribe on the phone (not wanted, no key, over the day's cap,
+     * or the call failed -- nothing waits on the network).
+     */
+    private fun cloudWords(wav: File): List<net.boswell.phone.asr.Word>? {
+        val ctx = applicationContext
+        val t = net.boswell.phone.asr.Transcription
+        if (!t.wantsCloud(ctx, wav.name)) return null
+        t.handled(ctx, wav.name)
+        val key = net.boswell.phone.assistant.Secrets.get(ctx, net.boswell.phone.assistant.Secrets.OPENROUTER) ?: return null
+        val store = net.boswell.phone.assistant.AssistantStore(ctx)
+        try {
+            if (store.spentToday(t.PURPOSE) >= t.dailyCap(ctx)) {
+                ProcessingRepository.state.value = ProcessingRepository.state.value.copy(lastError = "cloud transcription paused: today's limit reached")
+                return null
+            }
+            val empty = kotlinx.serialization.json.JsonObject(emptyMap())
+            return runCatching { net.boswell.phone.asr.CloudAsr.transcribeWords(key, t.ENGINE, wav) }.fold(
+                { (words, cost) ->
+                    store.logCall(t.PURPOSE, t.ENGINE.id, net.boswell.phone.assistant.LlmReply(null, emptyList(), empty, cost, 0, 0))
+                    words
+                },
+                { e ->
+                    store.logCall(t.PURPOSE, t.ENGINE.id, null, e.message ?: e.toString())
+                    null
+                })
+        } finally { store.close() }
     }
 
     private fun foreground(text: String): ForegroundInfo {

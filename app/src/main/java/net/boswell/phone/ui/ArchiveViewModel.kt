@@ -414,6 +414,12 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
 
     fun retranscribe(names: List<String>) = act2 { net.boswell.phone.process.ClipActions.retranscribe(getApplication(), names) }
 
+    /** Transcribe these again in the cloud (Parakeet), whatever the transcription setting. */
+    fun retranscribeCloud(names: List<String>) = act2 {
+        net.boswell.phone.asr.Transcription.requestCloud(getApplication(), names)
+        net.boswell.phone.process.ClipActions.retranscribe(getApplication(), names)
+    }
+
     fun shareClips(names: List<String>, launch: (android.content.Intent) -> Unit) = viewModelScope.launch {
         val intent = withContext(Dispatchers.IO) {
             val rows = names.mapNotNull { n -> archive.readableDatabase.rawQuery("SELECT started FROM clips WHERE name = ?", arrayOf(n)).use { c ->

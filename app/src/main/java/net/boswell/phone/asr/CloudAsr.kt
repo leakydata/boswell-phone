@@ -73,6 +73,56 @@ object CloudAsr {
         }
     }
 
+    /**
+     * Words with their times, for transcription proper: the cloud supplies
+     * the words, and the phone still decides who spoke them (the times are
+     * what line the two up). Returns the words and what the call cost.
+     */
+    fun transcribeWords(apiKey: String, engine: Engine, wav: File): Pair<List<Word>, Double> {
+        val body = buildJsonObject {
+            put("model", engine.id)
+            put("input_audio", buildJsonObject {
+                put("data", Base64.getEncoder().encodeToString(wav.readBytes()))
+                put("format", "wav")
+            })
+            put("language", "en")
+            put("response_format", "verbose_json")
+            put("timestamp_granularities", kotlinx.serialization.json.JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive("word"))))
+        }
+        val conn = (URI(URL).toURL().openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"; doOutput = true
+            connectTimeout = 15_000; readTimeout = 120_000
+            setRequestProperty("Authorization", "Bearer $apiKey")
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("X-Title", "Boswell Phone")
+        }
+        try {
+            conn.outputStream.use { it.write(body.toString().toByteArray()) }
+            val code = conn.responseCode
+            val text = (if (code in 200..299) conn.inputStream else conn.errorStream)?.bufferedReader()?.readText() ?: ""
+            if (code !in 200..299) throw CloudException("HTTP $code: ${text.take(200)}")
+            val j = json.parseToJsonElement(text).jsonObject
+            j["error"]?.let { throw CloudException(it.toString().take(200)) }
+            val words = (j["words"] as? kotlinx.serialization.json.JsonArray ?: throw CloudException("no word timings in reply")).mapNotNull { w ->
+                val o = w.jsonObject
+                val t = o["word"]?.jsonPrimitive?.content?.trim().orEmpty()
+                val a = o["start"]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
+                val b = o["end"]?.jsonPrimitive?.doubleOrNull ?: a
+                if (t.isEmpty()) null else Word(t, a, maxOf(b, a))
+            }
+            // Parakeet often reports a word as a single instant (start == end),
+            // which overlaps no speaker turn. Like Words.fromTokens for the phone's
+            // recognizer: a word runs on to the next one's start, at most a second.
+            val spread = words.mapIndexed { i, w ->
+                val next = words.getOrNull(i + 1)?.start ?: (w.start + 1.0)
+                w.copy(end = maxOf(w.end, minOf(next, w.start + 1.0)))
+            }
+            return spread to (j["usage"]?.jsonObject?.get("cost")?.jsonPrimitive?.doubleOrNull ?: 0.0)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
     // ------------------------------------------------------------ comparing
 
     /** Lowercase letters, digits and apostrophes: punctuation and case are not disagreements. */

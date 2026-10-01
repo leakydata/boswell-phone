@@ -74,8 +74,16 @@ fun RecordingsScreen(vm: ArchiveViewModel, day: LocalDate, onBack: () -> Unit, o
             actions = {
                 if (selecting) {
                     TextButton(onClick = { vm.shareClips(selected.toList()) { ctx.startActivity(it) } }) { Text("Share") }
-                    TextButton(onClick = { vm.retranscribe(selected.toList()); selected = emptySet() }) { Text("Redo") }
-                    TextButton(onClick = { onCompare(selected.toList()); selected = emptySet() }) { Text("Compare") }
+                    var more by remember { mutableStateOf(false) }
+                    TextButton(onClick = { more = true }) { Text("More") }
+                    androidx.compose.material3.DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
+                        androidx.compose.material3.DropdownMenuItem(text = { Text("Redo on the phone") },
+                            onClick = { more = false; vm.retranscribe(selected.toList()); selected = emptySet() })
+                        androidx.compose.material3.DropdownMenuItem(text = { Text("Redo in the cloud") },
+                            onClick = { more = false; vm.retranscribeCloud(selected.toList()); selected = emptySet() })
+                        androidx.compose.material3.DropdownMenuItem(text = { Text("Compare with the cloud") },
+                            onClick = { more = false; onCompare(selected.toList()); selected = emptySet() })
+                    }
                     TextButton(onClick = { confirm = true }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
                 } else if (recs.isNotEmpty()) {
                     TextButton(onClick = { selected = recs.filter { !it.clip.speech && it.clip.name in transcribed }.map { it.clip.name }.toSet() }) { Text("Select no-speech") }

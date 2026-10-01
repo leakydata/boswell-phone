@@ -20,6 +20,7 @@
                 <action android:name="net.boswell.phone.debug.FEED" />
                 <action android:name="net.boswell.phone.debug.BATTERY" />
                 <action android:name="net.boswell.phone.debug.RECOVER" />
+                <action android:name="net.boswell.phone.debug.CLOUD_REDO" />
             </intent-filter>
         </receiver>
     </application>

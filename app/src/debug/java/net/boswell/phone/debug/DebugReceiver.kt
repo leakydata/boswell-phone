@@ -47,6 +47,12 @@ class DebugReceiver : BroadcastReceiver() {
                 val st = net.boswell.phone.speakers.SpeakerStore(context)
                 try { android.util.Log.i("Boswell", "named -> ${st.name(intent.getLongExtra("id", -1), intent.getStringExtra("name") ?: return)}") } finally { st.close() }
             }
+            // am broadcast -a net.boswell.phone.debug.CLOUD_REDO --es clip omi_1.wav   (Recordings: More -> Redo in the cloud)
+            "net.boswell.phone.debug.CLOUD_REDO" -> {
+                val clip = intent.getStringExtra("clip") ?: return
+                net.boswell.phone.asr.Transcription.requestCloud(context, listOf(clip))
+                net.boswell.phone.process.ClipActions.retranscribe(context, listOf(clip))
+            }
             // am broadcast -a net.boswell.phone.debug.RECOVER
             // Rebuild clips missing from the clips folder out of the kept spool files, never touching existing ones.
             "net.boswell.phone.debug.RECOVER" -> {
