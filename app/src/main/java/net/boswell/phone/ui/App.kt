@@ -96,12 +96,16 @@ fun BoswellApp(device: MainViewModel, startTab: String? = null) {
             composable("todo") { TodoScreen(pad) }
             composable("triggers") { TriggersScreen(onBack = { nav.popBackStack() }) }
             composable("usage") { UsageScreen(onBack = { nav.popBackStack() }) }
+            composable("compare?clips={clips}", arguments = listOf(navArgument("clips") { type = NavType.StringType; nullable = true; defaultValue = null })) { e ->
+                CompareScreen(e.arguments?.getString("clips")?.split(",")?.filter { it.isNotBlank() }, onBack = { nav.popBackStack() })
+            }
             composable("recordings/{day}", arguments = listOf(navArgument("day") { type = NavType.LongType })) { e ->
                 RecordingsScreen(archive, java.time.LocalDate.ofEpochDay(e.arguments!!.getLong("day")), onBack = { nav.popBackStack() },
-                    onOpen = { openConversation(it) })
+                    onOpen = { openConversation(it) }, onCompare = { nav.navigate("compare?clips=${it.joinToString(",")}") })
             }
             composable("device") {
                 DeviceScreen(ui, cap, device, pad, onTriggers = { nav.navigate("triggers") }, onUsage = { nav.navigate("usage") },
+                    onCompare = { nav.navigate("compare") },
                     onPair = pair, onSetup = { net.boswell.phone.setup.Setup.setDone(ctx, false); setupDone = false })
             }
             composable(

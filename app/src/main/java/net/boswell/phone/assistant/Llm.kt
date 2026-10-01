@@ -27,7 +27,8 @@ class LlmException(message: String) : Exception(message)
 /**
  * The OpenAI-compatible chat-completions API, which OpenRouter speaks -- and
  * which OpenAI itself speaks, so a second provider is a base URL and a key.
- * Text only: audio never leaves the phone.
+ * Text only: the one place audio can leave the phone is a transcription
+ * comparison someone asks for (asr/CloudAsr).
  */
 class Llm(private val apiKey: String, private val model: String, private val baseUrl: String = OPENROUTER_URL) {
 

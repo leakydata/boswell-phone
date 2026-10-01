@@ -28,6 +28,7 @@ ENGINES = {
     "whisper-turbo": "openai/whisper-large-v3-turbo",
     "nemotron-cloud": "nvidia/nemotron-3.5-asr-streaming-multilingual-0.6b",
     "nova-3": "deepgram/nova-3",
+    "parakeet-v3": "nvidia/parakeet-tdt-0.6b-v3",
 }
 
 

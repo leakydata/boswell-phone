@@ -90,7 +90,8 @@ private fun Section(title: String, content: @Composable () -> Unit) {
 
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: PaddingValues, onTriggers: () -> Unit, onUsage: () -> Unit, onPair: () -> Unit, onSetup: () -> Unit = {}) {
+fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: PaddingValues, onTriggers: () -> Unit, onUsage: () -> Unit, onPair: () -> Unit, onSetup: () -> Unit = {},
+                 onCompare: () -> Unit = {}) {
     val ctx = LocalContext.current
     val progress by ModelProgressRepository.state.collectAsStateWithLifecycle()
     var confirmClean by remember { mutableStateOf(false) }
@@ -247,6 +248,14 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Text("View", color = MaterialTheme.colorScheme.primary)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable(onClick = onCompare)) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Compare transcription with the cloud", style = MaterialTheme.typography.bodyLarge)
+                        Text("See how the phone's transcripts stack up against a cloud engine on your own clips",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Text("Open", color = MaterialTheme.colorScheme.primary)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable(onClick = onTriggers)) {
                     Column(Modifier.weight(1f)) {

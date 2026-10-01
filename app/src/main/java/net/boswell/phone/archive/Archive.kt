@@ -251,6 +251,27 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
         return out
     }
 
+    /**
+     * The phone's own words for a clip, as the recognizer wrote them (before
+     * any hand edits), with when the clip started.
+     */
+    fun asrText(clip: String): String = readableDatabase.rawQuery(
+        "SELECT COALESCE(original, text) FROM lines WHERE clip = ? ORDER BY t0", arrayOf(clip)).use { c ->
+        buildList { while (c.moveToNext()) add(c.getString(0)) }.joinToString(" ")
+    }
+
+    /** The most recent clips the phone heard at least [minWords] words in, newest first. */
+    fun recentSpeechClips(limit: Int, minWords: Int = 8): List<String> = readableDatabase.rawQuery("""
+        SELECT l.clip, SUM(LENGTH(COALESCE(l.original, l.text)) - LENGTH(REPLACE(COALESCE(l.original, l.text), ' ', '')) + 1) AS words
+        FROM lines l JOIN clips c ON c.name = l.clip WHERE c.audio = 1
+        GROUP BY l.clip HAVING words >= CAST(? AS INTEGER) ORDER BY MAX(l.t0) DESC LIMIT CAST(? AS INTEGER)""", arrayOf(minWords.toString(), limit.toString())).use { c ->
+        buildList { while (c.moveToNext()) add(c.getString(0)) }
+    }
+
+    fun clipStarted(clip: String): Double? = readableDatabase.rawQuery("SELECT started FROM clips WHERE name = ?", arrayOf(clip)).use { c ->
+        if (c.moveToFirst()) c.getDouble(0) else null
+    }
+
     fun days(): List<Pair<LocalDate, Int>> = readableDatabase.rawQuery(
         "SELECT day, COUNT(*) FROM conversations GROUP BY day ORDER BY day DESC", null).use { c ->
         buildList { while (c.moveToNext()) add(LocalDate.parse(c.getString(0)) to c.getInt(1)) }

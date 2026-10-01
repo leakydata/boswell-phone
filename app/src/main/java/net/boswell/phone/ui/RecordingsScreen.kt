@@ -49,7 +49,7 @@ import java.time.LocalDate
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun RecordingsScreen(vm: ArchiveViewModel, day: LocalDate, onBack: () -> Unit, onOpen: (Long) -> Unit) {
+fun RecordingsScreen(vm: ArchiveViewModel, day: LocalDate, onBack: () -> Unit, onOpen: (Long) -> Unit, onCompare: (List<String>) -> Unit = {}) {
     val ctx = LocalContext.current
     val recs by vm.recordings.collectAsStateWithLifecycle()
     val playing by vm.playingClip.collectAsStateWithLifecycle()
@@ -75,6 +75,7 @@ fun RecordingsScreen(vm: ArchiveViewModel, day: LocalDate, onBack: () -> Unit, o
                 if (selecting) {
                     TextButton(onClick = { vm.shareClips(selected.toList()) { ctx.startActivity(it) } }) { Text("Share") }
                     TextButton(onClick = { vm.retranscribe(selected.toList()); selected = emptySet() }) { Text("Redo") }
+                    TextButton(onClick = { onCompare(selected.toList()); selected = emptySet() }) { Text("Compare") }
                     TextButton(onClick = { confirm = true }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
                 } else if (recs.isNotEmpty()) {
                     TextButton(onClick = { selected = recs.filter { !it.clip.speech && it.clip.name in transcribed }.map { it.clip.name }.toSet() }) { Text("Select no-speech") }
