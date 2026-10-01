@@ -30,12 +30,22 @@ class QuestionCaptureTest {
         assertFalse(q.speechStarted)
     }
 
-    @Test fun `the stream stopping after speech ends it`() {
+    @Test fun `the stream stopping after speech and a moment of quiet ends it`() {
         val q = QuestionCapture()
         repeat(10) { q.add(quiet()) }
         repeat(50) { q.add(voice(it)) }
+        repeat(15) { q.add(quiet()) }        // the mic sends a little quiet before it sleeps
         q.idle()
         assertTrue(q.done)
+        assertEquals("stream stopped", q.endedBy)
+    }
+
+    @Test fun `a stall mid-word does not end it`() {
+        val q = QuestionCapture()
+        repeat(10) { q.add(quiet()) }
+        repeat(50) { q.add(voice(it)) }
+        q.idle()                              // audio stopped arriving while still loud
+        assertFalse(q.done)
     }
 
     @Test fun `the stream stopping before speech does not`() {

@@ -28,6 +28,9 @@ class QuestionCapture(
         private set
     var done = false
         private set
+    /** Why it ended: pause, stream stopped, tap, no speech, or too long -- logged to tell them apart. */
+    var endedBy: String? = null
+        private set
 
     fun add(pcm: ShortArray) {
         if (done) return
@@ -43,16 +46,29 @@ class QuestionCapture(
         if (speaking) { speechStarted = true; quietRun = 0; peak = maxOf(peak, r) }
         else if (speechStarted && r < maxOf(noise * 2, peak * 0.15)) quietRun++
         when {
-            speechStarted && quietRun >= pauseFrames -> done = true
-            !speechStarted && frames.size >= maxWaitFrames -> done = true
-            frames.size >= maxFrames -> done = true
+            speechStarted && quietRun >= pauseFrames -> end("pause")
+            !speechStarted && frames.size >= maxWaitFrames -> end("no speech")
+            frames.size >= maxFrames -> end("too long")
         }
     }
 
-    /** The stream went quiet (the mic sleeps in silence): after speech, that is the end. */
-    fun idle() { if (speechStarted) done = true }
+    /**
+     * The stream stopped for a while (the mic sleeps in silence). That ends
+     * the question only if what came just before was already quiet: a stall
+     * mid-word (a Bluetooth hiccup, the buzz as you start) once ended
+     * questions while people were still talking.
+     */
+    fun idle() { if (speechStarted && quietRun >= 10) end("stream stopped") }
 
-    fun finish() { done = true }
+    fun finish() = end("tap")
+    fun limit() = end("25 s limit")
+
+    /** A second tap: finish once the audio still on its way over Bluetooth has arrived. */
+    @Volatile var finishAt: Long? = null
+
+    private fun end(why: String) { if (!done) { done = true; endedBy = why } }
+
+    val seconds: Double get() = frames.sumOf { it.size } / 16_000.0
 
     fun audio(): FloatArray {
         val n = frames.sumOf { it.size }

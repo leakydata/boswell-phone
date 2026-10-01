@@ -115,6 +115,10 @@ object AssistantPrefs {
     fun cloudQuestions(c: Context) = p(c).getBoolean("cloud_questions", true)
     fun setCloudQuestions(c: Context, on: Boolean) = p(c).edit().putBoolean("cloud_questions", on).apply()
 
+    /** "New topic": earlier exchanges stop being carried into new questions from this moment. */
+    fun topicSince(c: Context): Double = p(c).getLong("topic_since", 0L).toDouble()
+    fun newTopic(c: Context) = p(c).edit().putLong("topic_since", System.currentTimeMillis() / 1000).apply()
+
     fun watcher(c: Context) = p(c).getBoolean("watcher", false)
     fun setWatcher(c: Context, on: Boolean) = p(c).edit().putBoolean("watcher", on).apply()
 

@@ -367,7 +367,7 @@ class CaptureService : LifecycleService() {
         when (code) {
             1 -> {
                 val q = question
-                if (q != null) q.finish()      // a second tap ends the question
+                if (q != null) q.finishAt = System.currentTimeMillis() + 700   // a second tap ends it, once the last words arrive
                 else startQuestion(capture = false)
             }
             2 -> when (net.boswell.phone.assistant.AssistantPrefs.doubleTap(this)) {
@@ -406,12 +406,17 @@ class CaptureService : LifecycleService() {
         lifecycleScope.launch(kotlinx.coroutines.Dispatchers.Default) {
             val asr = async { net.boswell.phone.asr.LocalAsr(models) }
             val started = System.currentTimeMillis()
+            var longestGap = 0L
             while (!q.done) {
                 delay(100)
                 val last = CaptureRepository.state.value.lastAudioMillis ?: 0L
-                if (System.currentTimeMillis() - maxOf(last, started) > 2_000) q.idle()
-                if (System.currentTimeMillis() - started > 25_000) q.finish()
+                val gap = System.currentTimeMillis() - maxOf(last, started)
+                longestGap = maxOf(longestGap, gap)
+                if (gap > 2_000) q.idle()
+                if (System.currentTimeMillis() - started > 25_000) q.limit()
+                q.finishAt?.let { if (System.currentTimeMillis() >= it) q.finish() }
             }
+            CaptureRepository.log("question ended by ${q.endedBy ?: "?"} after %.1f s of audio; longest gap in the stream %.1f s".format(q.seconds, longestGap / 1000.0))
             question = null
             CaptureRepository.update { it.copy(asking = "thinking") }
             net.boswell.phone.assistant.AssistantNotify.cancel(this@CaptureService, LISTENING_ID)

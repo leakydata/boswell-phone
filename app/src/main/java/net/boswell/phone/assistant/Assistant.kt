@@ -77,8 +77,20 @@ class Assistant(private val context: Context) {
                     "\n\nThis came from a voice trigger. " + (saidAt?.let { "The words were said at ${Instant.ofEpochSecond(it.toLong()).atZone(zone).format(clock)}; read relative times (\"in an hour\", \"tomorrow\") from then. " } ?: "") +
                         "Your job: $i\nIf the words are not really a request of that kind (a phrase used in passing), call no tools and reply exactly NONE."
                 } ?: "")),
-                Llm.user(question),
             )
+            // Follow-ups: the last few questions and answers of this chat, if
+            // recent and since "New topic", so "and tomorrow?" means something.
+            if (source == "typed" || source == "button") {
+                val since = maxOf(System.currentTimeMillis() / 1000.0 - FOLLOW_UP_SECONDS, AssistantPrefs.topicSince(context))
+                for (e in store.exchanges(FOLLOW_UPS * 2).filter { it.at >= since && !it.error && it.question != null && (it.source == "typed" || it.source == "button") }
+                    .take(FOLLOW_UPS).reversed()) {
+                    messages += Llm.user(e.question!!)
+                    messages += kotlinx.serialization.json.buildJsonObject {
+                        put("role", kotlinx.serialization.json.JsonPrimitive("assistant")); put("content", kotlinx.serialization.json.JsonPrimitive(e.answer))
+                    }
+                }
+            }
+            messages += Llm.user(question)
             repeat(MAX_ROUNDS) {
                 val reply = try {
                     llm.chat(messages, tools(forCapture = fileOnly))
@@ -225,6 +237,10 @@ class Assistant(private val context: Context) {
     }
 
     companion object {
+        /** How long a chat stays one conversation, and how many earlier turns it carries. */
+        const val FOLLOW_UP_SECONDS = 15 * 60
+        const val FOLLOW_UPS = 4
+
         const val MAX_ROUNDS = 6
         /** Double tap: file what was said, don't chat. */
         const val CAPTURE = "capture"

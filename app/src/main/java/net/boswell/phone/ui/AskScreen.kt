@@ -49,7 +49,7 @@ import net.boswell.phone.assistant.Exchange
 import net.boswell.phone.capture.CaptureRepository
 
 data class AskState(val exchanges: List<Exchange> = emptyList(), val thinking: Boolean = false, val ready: Boolean = false,
-                    val spentToday: Double = 0.0, val budget: Double = 0.5)
+                    val spentToday: Double = 0.0, val budget: Double = 0.5, val freshTopic: Boolean = false)
 
 class AskViewModel(app: Application) : AndroidViewModel(app) {
     val state = MutableStateFlow(AskState())
@@ -68,7 +68,13 @@ class AskViewModel(app: Application) : AndroidViewModel(app) {
             budget = AssistantPrefs.budget(getApplication()))
     }
 
+    fun newTopic() {
+        AssistantPrefs.newTopic(getApplication())
+        state.value = state.value.copy(freshTopic = true)
+    }
+
     fun ask(q: String) = viewModelScope.launch {
+        state.value = state.value.copy(freshTopic = false)
         state.value = state.value.copy(thinking = true)
         withContext(Dispatchers.IO) { Assistant(getApplication()).ask(q, "typed") }
         state.value = state.value.copy(thinking = false)
@@ -103,7 +109,14 @@ fun AskScreen(pad: PaddingValues, onSetup: () -> Unit, onUsage: () -> Unit = {})
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     if (!s.ready) androidx.compose.material3.TextButton(onClick = onSetup) { Text("Set up the assistant") }
-                    else androidx.compose.material3.TextButton(onClick = onUsage) { Text("AI usage") }
+                    else {
+                        Text("Follow-up questions within 15 minutes carry on the same conversation. Start a new topic to begin fresh.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row {
+                            androidx.compose.material3.TextButton(onClick = { vm.newTopic() }) { Text(if (s.freshTopic) "New topic started ✓" else "New topic") }
+                            androidx.compose.material3.TextButton(onClick = onUsage) { Text("AI usage") }
+                        }
+                    }
                 }
             }
         }
