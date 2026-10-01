@@ -81,9 +81,10 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
                     try {
                         process(wav, asr, diarizer, store, out, tagger)
                         // Deleted while it was being worked on: drop the result, leave no trace.
-                        if (!wav.exists()) File(out, wav.nameWithoutExtension + ".json").delete()
+                        if (!net.boswell.phone.audio.ClipAudio.exists(clips, wav.name)) File(out, wav.nameWithoutExtension + ".json").delete()
+                        else afterTranscript(clips, wav.name, File(out, wav.nameWithoutExtension + ".json"))
                     } catch (e: Exception) {
-                        if (!wav.exists()) { done++; continue }
+                        if (!net.boswell.phone.audio.ClipAudio.exists(clips, wav.name)) { done++; continue }
                         // A clip that cannot be read or decoded is recorded as such
                         // rather than retried forever.
                         writeAtomically(File(out, wav.nameWithoutExtension + ".json"),
@@ -110,9 +111,8 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
         for (f in todo) {
             if (isStopped) return
             val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.getOrNull() ?: continue
-            val wav = File(clips, t.clip)
-            if (!wav.exists()) continue
-            val (pcm, _) = Wav.readPcm(wav)
+            if (!net.boswell.phone.audio.ClipAudio.exists(clips, t.clip)) continue
+            val pcm = net.boswell.phone.audio.ClipAudio.readPcm(clips, t.clip)
             val tags = tagger.tag(FloatArray(pcm.size) { pcm[it] / 32768f })
             val updated = t.copy(sounds = tags, verdict = verdictFor(t.segments.isNotEmpty(), tags))
             writeAtomically(f, TranscriptJson.json.encodeToString(Transcript.serializer(), updated).toByteArray())
@@ -128,7 +128,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
     private fun process(wav: File, asr: LocalAsr, diarizer: net.boswell.phone.diarize.Diarizer, store: SpeakerStore, out: File,
                         tagger: net.boswell.phone.sound.SoundTagger?) {
         val t0 = System.currentTimeMillis()
-        val (pcm, _) = Wav.readPcm(wav)
+        val pcm = net.boswell.phone.audio.ClipAudio.readPcm(wav.parentFile!!, wav.name)
         val audio = FloatArray(pcm.size) { pcm[it] / 32768f }
         if (diarizer.speechSeconds(audio) <= net.boswell.phone.diarize.Diarizer.SPEECH_MIN_S) {
             // Nobody speaking: record that without running the recognizer.
@@ -139,7 +139,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
             writeAtomically(File(out, wav.nameWithoutExtension + ".json"), TranscriptJson.json.encodeToString(Transcript.serializer(), t).toByteArray())
             return
         }
-        val cloud = cloudWords(wav)
+        val cloud = cloudWords(wav, pcm, diarizer)
         val heard = cloud ?: asr.transcribe(audio)
         val words = net.boswell.phone.asr.Vocabulary.apply(heard, vocabulary)
         val d = diarizer.run(audio)
@@ -196,7 +196,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
      * means transcribe on the phone (not wanted, no key, over the day's cap,
      * or the call failed -- nothing waits on the network).
      */
-    private fun cloudWords(wav: File): List<net.boswell.phone.asr.Word>? {
+    private fun cloudWords(wav: File, pcm: ShortArray, diarizer: net.boswell.phone.diarize.Diarizer): List<net.boswell.phone.asr.Word>? {
         val ctx = applicationContext
         val t = net.boswell.phone.asr.Transcription
         if (!t.wantsCloud(ctx, wav.name)) return null
@@ -209,7 +209,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
                 return null
             }
             val empty = kotlinx.serialization.json.JsonObject(emptyMap())
-            return runCatching { net.boswell.phone.asr.CloudAsr.transcribeWords(key, t.ENGINE, wav) }.fold(
+            return runCatching { net.boswell.phone.asr.SpeechOnly.transcribe(key, t.ENGINE, pcm, diarizer, applicationContext.cacheDir) }.fold(
                 { (words, cost) ->
                     store.logCall(t.PURPOSE, t.ENGINE.id, net.boswell.phone.assistant.LlmReply(null, emptyList(), empty, cost, 0, 0))
                     words
@@ -219,6 +219,18 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
                     null
                 })
         } finally { store.close() }
+    }
+
+    /**
+     * A transcribed clip's sound: nothing worth keeping (no speech, and the
+     * sound tagger heard only background) goes right away if that's the
+     * setting; anything else is kept as its compact copy.
+     */
+    private fun afterTranscript(clips: File, name: String, transcript: File) {
+        val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), transcript.readText()) }.getOrNull()
+        val quiet = t != null && t.segments.isEmpty() && t.verdict == "empty"
+        if (quiet && CleanupWorker.days(applicationContext) == 0) net.boswell.phone.audio.ClipAudio.delete(clips, name)
+        else runCatching { net.boswell.phone.audio.ClipAudio.compact(clips, name) }
     }
 
     private fun foreground(text: String): ForegroundInfo {
@@ -234,9 +246,15 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
 
         fun transcriptsDir(context: Context) = File(context.filesDir, "transcripts").apply { mkdirs() }
 
+        /**
+         * Clips with sound and no transcript. A clip is named by its WAV name
+         * whether the sound is still that WAV or already its compact copy
+         * (a clip sent back for transcribing again).
+         */
         fun pending(clips: File, out: File): List<File> =
-            clips.listFiles { f -> f.extension == "wav" }.orEmpty()
-                .filter { !File(out, it.nameWithoutExtension + ".json").exists() }
+            clips.listFiles { f -> f.extension == "json" }.orEmpty()
+                .map { File(clips, it.nameWithoutExtension + ".wav") }
+                .filter { !File(out, it.nameWithoutExtension + ".json").exists() && net.boswell.phone.audio.ClipAudio.exists(clips, it.name) }
                 .map { it to isDownload(it) }
                 .sortedWith(compareBy<Pair<File, Boolean>> { it.second }.thenByDescending { it.first.name })
                 .map { it.first }

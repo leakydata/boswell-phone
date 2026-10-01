@@ -67,6 +67,8 @@ data class UiState(
     val people: List<PersonRow> = emptyList(),
     val usage: net.boswell.phone.archive.Archive.Usage? = null,
     val autoClean: Boolean = false,
+    /** Quiet clips lose their audio after this many days: 0 right away, -1 never. */
+    val quietDays: Int = 0,
     val batteryExempt: Boolean = true,
     val mode: net.boswell.phone.sync.Mode = net.boswell.phone.sync.Mode.OFF,
     val syncMinutes: Int = 60,
@@ -91,6 +93,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val json = Json { ignoreUnknownKeys = true }
 
     init {
+        // Older clips become compact copies; quiet ones lose their sound, per the setting.
+        net.boswell.phone.process.CleanupWorker.runNow(getApplication())
+        net.boswell.phone.process.CleanupWorker.schedule(getApplication(), true)
         refreshAll()
         viewModelScope.launch { capture.distinctUntilChangedBy { it.clipsWritten }.collect { refreshClips() } }
         viewModelScope.launch { ProcessingRepository.state.distinctUntilChangedBy { it.done to it.running }.collect { refreshClips(); refreshPeople() } }
@@ -217,10 +222,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val u = withContext(Dispatchers.IO) {
                 archive.sync(speakers)
-                archive.usage(net.boswell.phone.process.CleanupWorker.DAYS)
+                archive.usage(net.boswell.phone.process.CleanupWorker.days(getApplication()).coerceAtLeast(0))
             }
             val pm = getApplication<Application>().getSystemService(android.os.PowerManager::class.java)
-            _ui.update { it.copy(usage = u, autoClean = prefs.getBoolean(KEY_AUTO_CLEAN, false),
+            _ui.update { it.copy(usage = u, autoClean = net.boswell.phone.process.CleanupWorker.days(getApplication()) >= 0, quietDays = net.boswell.phone.process.CleanupWorker.days(getApplication()),
                 batteryExempt = pm.isIgnoringBatteryOptimizations(getApplication<Application>().packageName)) }
         }
     }
@@ -228,10 +233,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun cleanNow() {
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                archive.deleteAudio(archive.quietCandidates(net.boswell.phone.process.CleanupWorker.DAYS).map { it.name })
+                archive.deleteAudio(archive.quietCandidates(net.boswell.phone.process.CleanupWorker.days(getApplication()).coerceAtLeast(0)).map { it.name })
             }
             refreshStorage()
         }
+    }
+
+    fun setQuietDays(d: Int) {
+        net.boswell.phone.process.CleanupWorker.setDays(getApplication(), d)
+        _ui.update { it.copy(quietDays = d, autoClean = d >= 0) }
+        refreshStorage()
     }
 
     fun setAutoClean(on: Boolean) {
@@ -265,14 +276,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val tdir = ProcessingWorker.transcriptsDir(getApplication())
         val names = HashMap<Long, String?>()
         fun nameOf(pid: Long) = names.getOrPut(pid) { speakers.nameOf(pid) }
-        return dir.listFiles { f -> f.extension == "wav" }.orEmpty().map { wav ->
+        return dir.listFiles { f -> f.extension == "json" }.orEmpty().map { File(dir, it.nameWithoutExtension + ".wav") }.map { wav ->
             val times = runCatching {
                 json.decodeFromString(ClipTimes.serializer(), File(dir, wav.nameWithoutExtension + ".json").readText())
             }.getOrNull()
             ClipEntry(
                 file = wav,
-                seconds = times?.seconds ?: ((wav.length() - 44) / 32_000.0),
-                endedMillis = ((times?.ended ?: (wav.lastModified() / 1000.0)) * 1000).toLong(),
+                seconds = times?.seconds ?: 0.0,
+                endedMillis = ((times?.ended ?: (File(dir, wav.nameWithoutExtension + ".json").lastModified() / 1000.0)) * 1000).toLong(),
                 timeKnown = times?.timeKnown ?: false,
                 transcript = File(tdir, wav.nameWithoutExtension + ".json").takeIf { it.exists() }?.let { f ->
                     val text = f.readText()
@@ -338,7 +349,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         ?: return@firstNotNullOfOrNull null
                     val label = t.speakers.entries.firstOrNull { it.value.personId == personId }?.key ?: return@firstNotNullOfOrNull null
                     val start = t.segments.firstOrNull { it.speaker == label }?.start ?: 0.0
-                    File(clipsDir, t.clip) to start
+                    (net.boswell.phone.audio.ClipAudio.file(clipsDir, t.clip) ?: return@firstNotNullOfOrNull null) to start
                 }
             } ?: return@launch
             togglePlay(hit.first, hit.second.coerceAtLeast(0.01))

@@ -5,6 +5,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -447,7 +448,7 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                 val u = ui.usage
                 Row2("Recordings", if (u == null) "…" else "${u.clips} · ${Fmt.bytes(u.audioBytes)}")
                 if (u != null && u.quietClips > 0) {
-                    Text("${u.quietClips} clips older than ${CleanupWorker.DAYS} days held no speech and only background sound (${Fmt.bytes(u.quietBytes)}).",
+                    Text("${u.quietClips} clips held no speech and only background sound (${Fmt.bytes(u.quietBytes)}).",
                         style = MaterialTheme.typography.bodyMedium)
                     OutlinedButton(onClick = { confirmClean = true }) { Text("Free up ${Fmt.bytes(u.quietBytes)}") }
                 }
@@ -464,13 +465,15 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                         net.boswell.phone.process.ProcessingWorker.enqueue(ctx)
                     })
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Clean up automatically", style = MaterialTheme.typography.bodyLarge)
-                        Text("Daily, delete the audio of week-old clips with no speech and only background. The day's timeline keeps them.",
-                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Delete the sound of quiet clips", style = MaterialTheme.typography.bodyLarge)
+                Text("Clips with no speech where only background was heard. The day's timeline keeps them; only the sound goes. " +
+                    "Clips with speech are kept compressed, about a tenth of their original size.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(Modifier.horizontalScroll(rememberScrollState())) {
+                    for ((d, label) in listOf(0 to "Right away", 1 to "After a day", 7 to "After a week", -1 to "Never")) {
+                        FilterChip(selected = ui.quietDays == d, onClick = { vm.setQuietDays(d) }, label = { Text(label) },
+                            modifier = Modifier.padding(end = 4.dp))
                     }
-                    Switch(checked = ui.autoClean, onCheckedChange = vm::setAutoClean)
                 }
             }
         }

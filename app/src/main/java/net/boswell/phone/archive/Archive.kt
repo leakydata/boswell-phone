@@ -102,7 +102,10 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
             for ((name, side) in sidecars) {
                 val t = File(tDir, side.nameWithoutExtension + ".json")
                 val wav = File(clipsDir, name)
-                val stamp = maxOf(side.lastModified(), if (t.exists()) t.lastModified() else 0L) + (if (wav.exists()) 0 else 1)
+                // The sound moving from WAV to its compact copy changes the size the index shows.
+                val sound = net.boswell.phone.audio.ClipAudio.file(clipsDir, name)
+                val stamp = maxOf(side.lastModified(), if (t.exists()) t.lastModified() else 0L) +
+                    (if (sound == null) 1 else if (sound.extension == "ogg") 2 else 0)
                 if (known[name] == stamp) continue
                 index(db, name, side, t, wav, stamp)
                 changed = true
@@ -134,7 +137,8 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
             put("time_known", if (times.timeKnown) 1 else 0)
             put("speech", if (t?.segments?.isNotEmpty() == true) 1 else 0)
             put("verdict", t?.verdict ?: if (t == null) null else if (t.segments.isNotEmpty()) "keep" else null)
-            put("audio", if (wav.exists()) 1 else 0); put("bytes", if (wav.exists()) wav.length() else 0L)
+            val sound = net.boswell.phone.audio.ClipAudio.file(wav.parentFile!!, name)
+            put("audio", if (sound != null) 1 else 0); put("bytes", sound?.length() ?: 0L)
             put("top_sound", top?.label); put("indexed_mtime", stamp)
         })
         t ?: return
@@ -393,7 +397,7 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
     /** Delete audio only; the sidecar, transcript and tags stay, so the day's record keeps the clip. */
     fun deleteAudio(names: List<String>) {
         val dir = CaptureService.clipsDir(context)
-        for (n in names) File(dir, n).delete()
+        for (n in names) net.boswell.phone.audio.ClipAudio.delete(dir, n)
     }
 
     companion object {

@@ -211,7 +211,7 @@ class CaptureService : LifecycleService() {
                 }
                 question?.add(pcm)
                 net.boswell.phone.setup.Enrollment.feed(pcm)
-                val written = clip.add(run.extended, pcm)
+                val written = clip.add(run.extended, pcm, p.opus)
                 val now = System.currentTimeMillis()
                 CaptureRepository.update {
                     it.copy(

@@ -70,7 +70,7 @@ class DebugReceiver : BroadcastReceiver() {
                                 .drain(copy, java.io.File(work, "scratch"), arrivedEpoch = sp.lastModified() / 1000.0)
                             for (w in out.listFiles { f -> f.extension == "wav" }.orEmpty()) {
                                 val j = java.io.File(out, w.nameWithoutExtension + ".json")
-                                if (java.io.File(clipsDir, w.name).exists() || java.io.File(clipsDir, j.name).exists()) { present++; continue }
+                                if (net.boswell.phone.audio.ClipAudio.exists(clipsDir, w.name) || java.io.File(clipsDir, j.name).exists()) { present++; continue }
                                 w.copyTo(java.io.File(clipsDir, w.name)); j.copyTo(java.io.File(clipsDir, j.name)); restored++
                             }
                         }
@@ -92,7 +92,7 @@ class DebugReceiver : BroadcastReceiver() {
                 val pending = goAsync()
                 Thread {
                     try {
-                        val (pcm, _) = net.boswell.phone.audio.Wav.readPcm(f)
+                        val pcm = net.boswell.phone.audio.ClipAudio.readPcm(f.parentFile!!, f.name)
                         var i = 0
                         while (i + 320 <= pcm.size) {
                             net.boswell.phone.setup.Enrollment.feed(pcm.copyOfRange(i, i + 320))

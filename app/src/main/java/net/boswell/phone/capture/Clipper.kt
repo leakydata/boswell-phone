@@ -43,6 +43,8 @@ class Clipper(
     private val now: () -> Double = { System.currentTimeMillis() / 1000.0 },
 ) {
     private val chunks = ArrayList<ShortArray>()
+    /** The Opus frames behind [chunks], for the compact copy; null once any frame came without one. */
+    private var opus: ArrayList<ByteArray>? = ArrayList()
     private var have = 0
     private var firstMs: Long? = null
     private var lastMs: Long? = null
@@ -55,7 +57,8 @@ class Clipper(
     val heldSeconds: Double get() = have / sampleRate.toDouble()
 
     /** Add one decoded frame. Returns the clip written if this filled one. */
-    fun add(extendedCounter: Long, pcm: ShortArray): File? {
+    fun add(extendedCounter: Long, pcm: ShortArray, frame: ByteArray? = null): File? {
+        if (frame == null) opus = null else opus?.add(frame)
         val ms = extendedCounter * frameMs
         if (firstMs == null) firstMs = ms
         lastMs = ms
@@ -77,6 +80,8 @@ class Clipper(
         val ended = now()
         val wav = uniqueName(ended.toLong())
         Wav.write(wav, audio, sampleRate)
+        // The compact copy kept after transcription: the Omi's own frames, not re-encoded.
+        opus?.let { frames -> runCatching { net.boswell.phone.audio.ClipAudio.writeCompact(dir, wav.name, frames) } }
         val times = ClipTimes(
             started = ended - seconds, ended = ended, seconds = seconds, source = "omi",
             firstMs = firstMs, lastMs = lastMs, bootId = bootId, deviceId = deviceId,
@@ -85,6 +90,7 @@ class Clipper(
         writeAtomically(File(dir, wav.nameWithoutExtension + ".json"), json.encodeToString(ClipTimes.serializer(), times).toByteArray())
 
         chunks.clear()
+        opus = ArrayList()
         have = 0
         frames = 0
         firstMs = null

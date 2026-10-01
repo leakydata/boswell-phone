@@ -42,24 +42,26 @@ class SpoolDrainer(
         var undatedPackets = 0
 
         val pcm = ArrayList<ShortArray>()
+        // The Opus frames behind [pcm], kept as they came for the clip's compact copy.
+        val opus = ArrayList<ByteArray>()
         var have = 0
         var firstTs = 0L
         var lastTs = 0L
-        val undated = ArrayList<ShortArray>()
+        val undated = ArrayList<Pair<ShortArray, ByteArray>>()
 
         fun flush() {
             if (have == 0) return
             val audio = join(pcm, have)
             val seconds = have / sr.toDouble()
             clips += write(firstTs.toDouble(), firstTs + seconds, audio, timeKnown = true,
-                firstMs = firstTs * 1000, lastMs = lastTs * 1000, frameCount = pcm.size)
-            pcm.clear(); have = 0
+                firstMs = firstTs * 1000, lastMs = lastTs * 1000, frameCount = pcm.size, packets = opus.toList())
+            pcm.clear(); opus.clear(); have = 0
         }
 
         for (i in 0 until n) {
             val p = StoredPacket.parse(blob.copyOfRange(i * Offload.STORED_PACKET_BYTES, (i + 1) * Offload.STORED_PACKET_BYTES)) ?: continue
             if (p.frames.isEmpty()) continue
-            val decoded = p.frames.mapNotNull { f -> runCatching { decoder.decode(f) }.getOrNull().also { if (it == null) bad++ } }
+            val decoded = p.frames.mapNotNull { f -> runCatching { decoder.decode(f) }.getOrNull()?.let { it to f }.also { if (it == null) bad++ } }
             frames += decoded.size
             if (p.timestamp == 0L) {
                 // Stored before the device had a clock: placed by arrival, and said so.
@@ -73,20 +75,28 @@ class SpoolDrainer(
             }
             if (have == 0) firstTs = p.timestamp
             lastTs = p.timestamp
-            for (d in decoded) { pcm += d; have += d.size }
+            for ((d, f) in decoded) { pcm += d; opus += f; have += d.size }
             if (have >= clipSeconds * sr) flush()
         }
         flush()
 
         // Undated audio, cut into ordinary clips that end at arrival and run in order.
         if (undated.isNotEmpty()) {
-            val audio = join(undated, undated.sumOf { it.size })
+            // Whole frames per clip, so each clip's compact copy holds exactly its own frames.
             val step = clipSeconds * sr
-            val chunks = (audio.indices step step).map { audio.copyOfRange(it, minOf(it + step, audio.size)) }
+            val chunks = mutableListOf<List<Pair<ShortArray, ByteArray>>>()
+            var cur = mutableListOf<Pair<ShortArray, ByteArray>>(); var size = 0
+            for (fr in undated) {
+                cur += fr; size += fr.first.size
+                if (size >= step) { chunks += cur; cur = mutableListOf(); size = 0 }
+            }
+            if (cur.isNotEmpty()) chunks += cur
             var end = arrivedEpoch
             for (chunk in chunks.reversed()) {
-                val secs = chunk.size / sr.toDouble()
-                clips += write(end - secs, end, chunk, timeKnown = false, firstMs = null, lastMs = null, frameCount = chunk.size / 320)
+                val audio = join(chunk.map { it.first }, chunk.sumOf { it.first.size })
+                val secs = audio.size / sr.toDouble()
+                clips += write(end - secs, end, audio, timeKnown = false, firstMs = null, lastMs = null, frameCount = chunk.size,
+                    packets = chunk.map { it.second })
                 end -= secs
             }
         }
@@ -109,11 +119,14 @@ class SpoolDrainer(
         return out
     }
 
-    private fun write(started: Double, ended: Double, audio: ShortArray, timeKnown: Boolean, firstMs: Long?, lastMs: Long?, frameCount: Int): File {
+    private fun write(started: Double, ended: Double, audio: ShortArray, timeKnown: Boolean, firstMs: Long?, lastMs: Long?, frameCount: Int,
+                      packets: List<ByteArray>? = null): File {
         var wav = File(clipsDir, "omi_${ended.toLong()}.wav")
         var k = 1
         while (wav.exists()) wav = File(clipsDir, "omi_${ended.toLong()}-${k++}.wav")
         Wav.write(wav, audio, sr)
+        // The compact copy kept after transcription: the device's own frames, not re-encoded.
+        packets?.let { runCatching { net.boswell.phone.audio.ClipAudio.writeCompact(clipsDir, wav.name, it) } }
         val times = ClipTimes(
             started = started, ended = ended, seconds = audio.size / sr.toDouble(), source = "omi-card",
             firstMs = firstMs, lastMs = lastMs, bootId = 1, deviceId = deviceId,

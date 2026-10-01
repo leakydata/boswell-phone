@@ -93,8 +93,13 @@ class CompareViewModel(app: Application) : AndroidViewModel(app) {
         rows.map { row ->
             async {
                 gate.withPermit {
-                    val f = File(CaptureService.clipsDir(app), row.clip)
-                    val done = runCatching { CloudAsr.transcribe(key, engine, f) }.fold(
+                    val done = runCatching {
+                        val f = File.createTempFile("compare", ".wav", app.cacheDir)
+                        try {
+                            net.boswell.phone.audio.Wav.write(f, net.boswell.phone.audio.ClipAudio.readPcm(CaptureService.clipsDir(app), row.clip), 16_000)
+                            CloudAsr.transcribe(key, engine, f)
+                        } finally { f.delete() }
+                    }.fold(
                         { r -> row.copy(cloud = r.text, seconds = r.seconds, cost = r.cost) },
                         { e -> row.copy(cloud = "", error = e.message ?: e.toString()) })
                     val store = AssistantStore(app)

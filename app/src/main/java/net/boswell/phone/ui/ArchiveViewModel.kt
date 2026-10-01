@@ -53,6 +53,8 @@ data class ConversationState(
     val playing: Boolean = false,
     val position: Double = 0.0,
     val length: Double = 0.0,
+    /** Jump over stretches without speech longer than PAUSE_SKIP_S while playing. */
+    val skipPauses: Boolean = true,
 )
 
 data class PeopleState(val queue: List<Person> = emptyList(), val named: List<Person> = emptyList(), val media: List<Person> = emptyList())
@@ -61,6 +63,9 @@ data class PersonState(val person: Person? = null, val conversations: List<Conve
 
 /** A little air either side of a voice's part, so words aren't clipped. */
 private const val PAD_S = 0.15
+
+/** Pauses at least this long are skipped in conversation playback. */
+private const val PAUSE_SKIP_S = 3.0
 
 class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     private val archive = Archive(app)
@@ -196,7 +201,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         playerClips = clips
         val dir = CaptureService.clipsDir(getApplication())
         val p = ExoPlayer.Builder(getApplication()).build()
-        p.setMediaItems(clips.map { MediaItem.fromUri(File(dir, it.name).toURI().toString()) })
+        p.setMediaItems(clips.map { MediaItem.fromUri((net.boswell.phone.audio.ClipAudio.file(dir, it.name) ?: File(dir, it.name)).toURI().toString()) })
         p.prepare()
         p.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) = _conv.update { it.copy(playing = isPlaying) }
@@ -213,8 +218,35 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
                 val abs = clip.started + pl.currentPosition / 1000.0
                 val line = _conv.value.lines.lastOrNull { it.clip == clip.name && it.t0 <= abs + 0.05 }
                 _conv.update { it.copy(position = before + pl.currentPosition / 1000.0, playingLine = if (pl.isPlaying) line?.id else it.playingLine) }
+                if (pl.isPlaying && _conv.value.skipPauses) skipPause(pl, idx, clip, pl.currentPosition / 1000.0)
             }
         }
+    }
+
+    fun setSkipPauses(on: Boolean) = _conv.update { it.copy(skipPauses = on) }
+
+    /**
+     * In a stretch with nobody speaking (the transcript's lines are the
+     * speech, so typing or a TV with no words counts as a pause too) longer
+     * than PAUSE_SKIP_S, jump to just before the next line -- in this clip or
+     * the next. Nothing is cut from the recording; this only moves the player.
+     */
+    private fun skipPause(pl: ExoPlayer, idx: Int, clip: net.boswell.phone.archive.ClipRow, at: Double) {
+        val lines = _conv.value.lines
+        val here = lines.filter { it.clip == clip.name }.map { it.offset to it.offset + (it.t1 - it.t0) }
+        if (here.any { (a, b) -> at >= a - 0.3 && at <= b + 0.3 }) return
+        val prevEnd = here.filter { it.second <= at }.maxOfOrNull { it.second } ?: 0.0
+        val next = here.filter { it.first > at }.minOfOrNull { it.first }
+        if (next != null) {
+            if (next - prevEnd >= PAUSE_SKIP_S && next - at > 1.0) pl.seekTo(idx, ((next - 0.5) * 1000).toLong())
+            return
+        }
+        // Nothing more said in this clip: on to the next clip's first words.
+        val len = clip.ended - clip.started
+        if (len - prevEnd < PAUSE_SKIP_S || idx + 1 >= playerClips.size) return
+        val nc = playerClips[idx + 1]
+        val first = lines.filter { it.clip == nc.name }.minOfOrNull { it.offset } ?: 0.0
+        pl.seekTo(idx + 1, ((first - 0.5).coerceAtLeast(0.0) * 1000).toLong())
     }
 
     fun playLine(line: LineRow) {
@@ -515,8 +547,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         voicePlayer?.release(); voicePlayer = null
         _playingClip.value = null
         if (wasPlaying) return
-        val f = File(CaptureService.clipsDir(getApplication()), clip)
-        if (!f.exists()) return
+        val f = net.boswell.phone.audio.ClipAudio.file(CaptureService.clipsDir(getApplication()), clip) ?: return
         val spans = archive.spansOf(clip, label)
         android.util.Log.i("Boswell", "playing $label of $clip: " + spans.joinToString { "%.1f-%.1f s".format(it.first, it.second) })
         if (spans.isEmpty()) { toggleClip(clip); return }
@@ -542,8 +573,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         voicePlayer?.release(); voicePlayer = null
         clipPlayer?.release(); clipPlayer = null
         if (_playingClip.value == name) { _playingClip.value = null; return }
-        val f = File(CaptureService.clipsDir(getApplication()), name)
-        if (!f.exists()) return
+        val f = net.boswell.phone.audio.ClipAudio.file(CaptureService.clipsDir(getApplication()), name) ?: return
         clipPlayer = android.media.MediaPlayer().apply {
             setDataSource(f.path); setOnCompletionListener { _playingClip.value = null }; prepare(); start()
         }

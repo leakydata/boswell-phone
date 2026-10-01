@@ -21,7 +21,7 @@ object ClipActions {
         val tdir = ProcessingWorker.transcriptsDir(context)
         for (name in clips) {
             val base = name.removeSuffix(".wav")
-            File(cdir, "$base.wav").delete()
+            net.boswell.phone.audio.ClipAudio.delete(cdir, "$base.wav")
             File(cdir, "$base.json").delete()
             File(tdir, "$base.json").delete()
         }
@@ -81,7 +81,7 @@ object ClipActions {
      */
     fun shareIntent(context: Context, clips: List<String>, title: String, transcript: String): Intent {
         val cdir = CaptureService.clipsDir(context)
-        val parts = clips.map { File(cdir, it) }.filter { it.exists() }.map { Wav.readPcm(it).first }
+        val parts = clips.filter { net.boswell.phone.audio.ClipAudio.exists(cdir, it) }.map { net.boswell.phone.audio.ClipAudio.readPcm(cdir, it) }
         val intent = Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_SUBJECT, title).putExtra(Intent.EXTRA_TEXT, transcript)
         if (parts.isEmpty()) return Intent.createChooser(intent.setType("text/plain"), "Share")
         val out = File(File(context.cacheDir, "share").apply { mkdirs(); listFiles()?.forEach { it.delete() } },

@@ -263,6 +263,8 @@ private fun PlayerBar(s: ConversationState, vm: ArchiveViewModel) {
                 Spacer(Modifier.width(8.dp))
                 Text("${Fmt.clock(s.position)} / ${Fmt.clock(s.length)}", style = MaterialTheme.typography.labelMedium)
             }
+            androidx.compose.material3.FilterChip(selected = s.skipPauses, onClick = { vm.setSkipPauses(!s.skipPauses) },
+                label = { Text("Skip pauses") })
         }
     }
 }

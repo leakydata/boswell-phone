@@ -142,8 +142,11 @@ class Diarizer(
      * (tools/speech_check.py): at [SPEECH_MIN_S] it set aside 49 of the 51
      * that transcription found empty and none that had words.
      */
-    fun speechSeconds(audio: FloatArray): Double {
-        var total = 0.0
+    fun speechSeconds(audio: FloatArray): Double = speechSpans(audio).sumOf { it.second - it.first }
+
+    /** Where anyone speaks, as (start, end) seconds, by segmentation alone (one pass of 10 s windows). */
+    fun speechSpans(audio: FloatArray): List<Pair<Double, Double>> {
+        val out = mutableListOf<Pair<Double, Double>>()
         var st = 0
         do {
             val n = min(WINDOW, audio.size - st)
@@ -151,10 +154,15 @@ class Diarizer(
             audio.copyInto(w, 0, st, st + n)
             val act = activity(segment(w))
             val frames = min(act.size, n / RF_SHIFT + 1)
-            for (f in 0 until frames) if (act[f].any { it }) total += FRAME_S
+            val base = st / SR.toDouble()
+            for (f in 0 until frames) if (act[f].any { it }) {
+                val a = base + f * FRAME_S; val b = a + FRAME_S
+                val last = out.lastOrNull()
+                if (last != null && a - last.second < 1e-6) out[out.lastIndex] = last.first to b else out += a to b
+            }
             st += WINDOW
         } while (st < audio.size)
-        return total
+        return out
     }
 
     /** Powerset argmax per frame -> which of the 3 local speakers are active. */
