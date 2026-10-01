@@ -126,6 +126,16 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
     ) { pad ->
         LazyColumn(state = list, contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = pad.calculateTopPadding() + 4.dp, bottom = pad.calculateBottomPadding() + 16.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            // Whose words these are: the phone's, the cloud's (Parakeet), or some of each after a Redo.
+            val clipsAll = s.lines.map { it.clip }.distinct()
+            val cloudClips = s.lines.filter { it.cloud }.map { it.clip }.distinct().size
+            if (clipsAll.isNotEmpty()) item {
+                Text(when (cloudClips) {
+                    0 -> "Transcribed on the phone"
+                    clipsAll.size -> "Transcribed in the cloud (Parakeet)"
+                    else -> "$cloudClips of ${clipsAll.size} recordings transcribed in the cloud (Parakeet), the rest on the phone"
+                }, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 6.dp))
+            }
             item {
                 @OptIn(ExperimentalLayoutApi::class)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(bottom = 8.dp)) {
@@ -194,7 +204,7 @@ private fun Bubble(line: LineRow, v: Voice?, header: Boolean, playing: Boolean, 
             Spacer(Modifier.width(6.dp))
             Text(v?.name ?: "Unattributed", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold,
                 color = if (v?.named == true) color else MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("  ${Fmt.time(line.t0)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("  ${Fmt.time(line.t0)}" + if (line.cloud) " · cloud" else "", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Surface(
             modifier = Modifier.padding(start = 28.dp, end = 24.dp).clip(RoundedCornerShape(16.dp))
