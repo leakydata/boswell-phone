@@ -6,14 +6,16 @@ import kotlin.math.sqrt
  * Collects what is said after a button tap, and decides when the question is
  * over.
  *
- * No VAD model: the room's own level is learned from the first few frames,
- * speech is anything well above it, and the question ends after a pause of
- * [pauseFrames] once speech has started. The Omi's mic sleeps in silence, so
+ * No VAD model: the room's own level is learned from the quietest of the
+ * first few frames (someone may start talking the instant they tap), speech
+ * is anything well above it, and the question ends after a pause of
+ * [pauseFrames] once speech has started -- 2 s, because people pause
+ * mid-question and 1.2 s cut questions off ("I don't have any"). The Omi's mic sleeps in silence, so
  * the stream simply stopping (see [idle]) also ends it. A second tap ends it
  * at once. Nothing said within [maxWaitFrames] means no question.
  */
 class QuestionCapture(
-    private val pauseFrames: Int = 60,        // 1.2 s of 20 ms frames
+    private val pauseFrames: Int = 100,       // 2 s of 20 ms frames
     private val maxWaitFrames: Int = 300,     // 6 s to start talking
     private val maxFrames: Int = 1000,        // 20 s at most
 ) {
@@ -32,9 +34,12 @@ class QuestionCapture(
         frames += pcm
         val r = rms(pcm)
         if (noiseN < 10) {
-            noise = if (noise < 0) r else (noise * noiseN + r) / (noiseN + 1); noiseN++
+            noise = if (noise < 0) r else minOf(noise, r); noiseN++
         }
-        val speaking = r > maxOf(noise * 3, 0.012)
+        // The Omi records quietly (a voice reading aloud sat near 0.006 rms), so
+        // the bar is relative to the room with only a small floor; 0.012 missed
+        // soft speech.
+        val speaking = r > maxOf(noise * 3, 0.004)
         if (speaking) { speechStarted = true; quietRun = 0; peak = maxOf(peak, r) }
         else if (speechStarted && r < maxOf(noise * 2, peak * 0.15)) quietRun++
         when {

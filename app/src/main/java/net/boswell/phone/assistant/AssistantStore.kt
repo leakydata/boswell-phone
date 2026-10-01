@@ -111,6 +111,10 @@ object AssistantPrefs {
     fun ttsVoice(c: Context): String? = p(c).getString("tts_voice", null)
     fun setTtsVoice(c: Context, name: String?) = p(c).edit().putString("tts_voice", name).apply()
 
+    /** Button questions transcribed by Parakeet in the cloud (the phone if it can't). On unless turned off. */
+    fun cloudQuestions(c: Context) = p(c).getBoolean("cloud_questions", true)
+    fun setCloudQuestions(c: Context, on: Boolean) = p(c).edit().putBoolean("cloud_questions", on).apply()
+
     fun watcher(c: Context) = p(c).getBoolean("watcher", false)
     fun setWatcher(c: Context, on: Boolean) = p(c).edit().putBoolean("watcher", on).apply()
 

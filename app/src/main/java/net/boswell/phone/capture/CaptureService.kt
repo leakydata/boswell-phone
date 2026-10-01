@@ -329,6 +329,30 @@ class CaptureService : LifecycleService() {
     private var watching: Job? = null
     private val watcher by lazy { net.boswell.phone.assistant.Watcher(this) }
 
+    /**
+     * A button question's words from Parakeet in the cloud, or null to use the
+     * phone: no key, turned off, no network, a slow answer (8 s) or an error.
+     */
+    private fun cloudQuestion(audio: FloatArray): String? {
+        if (!net.boswell.phone.assistant.AssistantPrefs.cloudQuestions(this)) return null
+        val key = net.boswell.phone.assistant.Secrets.get(this, net.boswell.phone.assistant.Secrets.OPENROUTER) ?: return null
+        val f = File.createTempFile("question", ".wav", cacheDir)
+        val store = net.boswell.phone.assistant.AssistantStore(this)
+        try {
+            net.boswell.phone.audio.Wav.write(f, ShortArray(audio.size) { (audio[it] * 32767f).toInt().coerceIn(-32768, 32767).toShort() }, 16_000)
+            val engine = net.boswell.phone.asr.CloudAsr.Engine.PARAKEET
+            val (words, cost) = net.boswell.phone.asr.CloudAsr.transcribeWords(key, engine, f, timeoutMs = 8_000)
+            store.logCall("question", engine.id, net.boswell.phone.assistant.LlmReply(null, emptyList(), kotlinx.serialization.json.JsonObject(emptyMap()), cost, 0, 0))
+            return words.joinToString(" ") { it.text }.trim().ifEmpty { null }
+        } catch (e: Exception) {
+            store.logCall("question", "cloud", null, e.message ?: e.toString())
+            CaptureRepository.log("question: cloud unavailable (${e.message}), using the phone")
+            return null
+        } finally {
+            f.delete(); store.close()
+        }
+    }
+
     /** A short buzz on the Omi, if it has a motor. Best effort: feedback, never a failure. */
     private fun buzz(level: Int) {
         val c = connection ?: return
@@ -385,13 +409,16 @@ class CaptureService : LifecycleService() {
             while (!q.done) {
                 delay(100)
                 val last = CaptureRepository.state.value.lastAudioMillis ?: 0L
-                if (System.currentTimeMillis() - maxOf(last, started) > 1_000) q.idle()
+                if (System.currentTimeMillis() - maxOf(last, started) > 2_000) q.idle()
                 if (System.currentTimeMillis() - started > 25_000) q.finish()
             }
             question = null
             CaptureRepository.update { it.copy(asking = "thinking") }
             net.boswell.phone.assistant.AssistantNotify.cancel(this@CaptureService, LISTENING_ID)
-            val text = asr.await().use { it.transcribe(q.audio()) }.joinToString(" ") { it.text }.trim()
+            val audio = q.audio()
+            // Cloud first when allowed (short questions are where the phone's
+            // recognizer slips most); the phone whenever the cloud can't answer.
+            val text = cloudQuestion(audio) ?: asr.await().use { it.transcribe(audio) }.joinToString(" ") { it.text }.trim()
             if (text.isEmpty()) {
                 buzz(3)
                 net.boswell.phone.assistant.AssistantNotify.post(this@CaptureService, net.boswell.phone.assistant.AssistantNotify.ANSWERS, "Didn't catch that", "Tap the Omi and try again.")

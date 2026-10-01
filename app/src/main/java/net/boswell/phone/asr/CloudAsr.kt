@@ -78,7 +78,7 @@ object CloudAsr {
      * the words, and the phone still decides who spoke them (the times are
      * what line the two up). Returns the words and what the call cost.
      */
-    fun transcribeWords(apiKey: String, engine: Engine, wav: File): Pair<List<Word>, Double> {
+    fun transcribeWords(apiKey: String, engine: Engine, wav: File, timeoutMs: Int = 120_000): Pair<List<Word>, Double> {
         val body = buildJsonObject {
             put("model", engine.id)
             put("input_audio", buildJsonObject {
@@ -91,7 +91,7 @@ object CloudAsr {
         }
         val conn = (URI(URL).toURL().openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"; doOutput = true
-            connectTimeout = 15_000; readTimeout = 120_000
+            connectTimeout = minOf(15_000, timeoutMs); readTimeout = timeoutMs
             setRequestProperty("Authorization", "Bearer $apiKey")
             setRequestProperty("Content-Type", "application/json")
             setRequestProperty("X-Title", "Boswell Phone")

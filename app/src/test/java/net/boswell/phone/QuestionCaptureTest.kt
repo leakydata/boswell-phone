@@ -16,11 +16,11 @@ class QuestionCaptureTest {
         repeat(15) { q.add(quiet()) }
         repeat(100) { q.add(voice(it)) }
         assertTrue(q.speechStarted)
-        repeat(59) { q.add(quiet()) }
+        repeat(99) { q.add(quiet()) }          // a 2 s pause mid-question doesn't end it...
         assertFalse(q.done)
-        q.add(quiet())
+        q.add(quiet())                          // ...one past 2 s does
         assertTrue(q.done)
-        assertEquals((15 + 100 + 60) * 320, q.audio().size)
+        assertEquals((15 + 100 + 100) * 320, q.audio().size)
     }
 
     @Test fun `silence alone is no question`() {
@@ -43,5 +43,12 @@ class QuestionCaptureTest {
         repeat(10) { q.add(quiet()) }
         q.idle()
         assertFalse(q.done)
+    }
+
+    @Test fun `soft speech at the Omi's level still counts`() {
+        val q = QuestionCapture()
+        repeat(15) { q.add(ShortArray(320) { ((it % 7 - 3) * 0.0006 * 32768).toInt().toShort() }) }   // room ~0.0012
+        repeat(50) { k -> q.add(ShortArray(320) { (kotlin.math.sin((k * 320 + it) * 0.09) * 0.008 * 32768).toInt().toShort() }) } // ~0.0057 rms
+        assertTrue(q.speechStarted)
     }
 }

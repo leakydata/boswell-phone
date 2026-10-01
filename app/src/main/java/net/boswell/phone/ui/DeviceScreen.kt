@@ -252,6 +252,16 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                     }
                     Text("View", color = MaterialTheme.colorScheme.primary)
                 }
+                var cloudQ by remember { mutableStateOf(net.boswell.phone.assistant.AssistantPrefs.cloudQuestions(ctx2)) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Understand questions in the cloud", style = MaterialTheme.typography.bodyLarge)
+                        Text("Button questions are transcribed by Parakeet, which hears short questions more accurately than the phone. " +
+                            "Their audio goes to OpenRouter (the text already does). If it can't be reached, the phone transcribes instead.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(checked = cloudQ, onCheckedChange = { cloudQ = it; net.boswell.phone.assistant.AssistantPrefs.setCloudQuestions(ctx2, it) })
+                }
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable(onClick = onTriggers)) {
                     Column(Modifier.weight(1f)) {
                         Text("Voice triggers", style = MaterialTheme.typography.bodyLarge)
