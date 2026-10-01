@@ -173,6 +173,15 @@ dead device is invisible to every alarm, because it looks exactly like one that
 is out of range. Any status display should make battery age and charge
 prominent.
 
+### A decoder error is a measurement, not noise to suppress
+
+0.16% of downloaded frames would not decode, and it was tempting to call that
+radio damage and move on. Every failure was the last frame of a full packet;
+the cause was a one-byte-early bounds check in the firmware's storage writer,
+and for each frame that failed, nearly another decoded "successfully" into 20 ms
+of garbage. A rate of failures that is small but perfectly regular is a bug
+with a shape, and the shape points at the line.
+
 ---
 
 ## An architectural question worth reopening

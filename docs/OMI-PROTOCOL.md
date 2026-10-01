@@ -20,7 +20,7 @@ when something here is ambiguous.
 |---|---|
 | `19b10001-…` | audio stream (notify) |
 | `19b10002-…` | codec id (read) |
-| `19b10011-…` | LED brightness, read/write |
+| `19b10011-…` | LED brightness, one byte 0–100 (0 = off), read/write, kept in the Omi's flash |
 | `19b10012-…` | microphone gain, read/write |
 | `19b10013-…` | 1 while charging |
 | `19b10021-…` | capability bits |
@@ -69,7 +69,19 @@ Status codes: `0` ok, `6` invalid command, `9` storage not ready,
 ```
 
 Padding after the last frame is **not** a frame — a length byte of zero ends
-the packet. Audio is 16 kHz. Codec id **21 = Opus at 20 ms frames** (CV 1,
+the packet.
+
+**A frame that would end exactly at byte 444 is never real.** The firmware's
+`write_to_storage()` (`lib/core/transport.c`) checks `buffer_offset +
+packet_size > MAX_WRITE_SIZE - 1`, one byte early, so an exact fit is handled
+as an overflow: it writes that frame's length byte, leaves the rest of the
+buffer as stale bytes from an earlier packet, and starts the next packet with
+the real frame. Skip it. Measured on 112,567 stored packets: all 1,514
+exact-fit "frames" were these ghosts, each repeated whole in the next packet;
+815 failed to decode and 673 decoded into 20 ms of noise. With the skip, 0 of
+500,758 frames fail (`tools/spool_doctor.py`).
+
+Audio is 16 kHz. Codec id **21 = Opus at 20 ms frames** (CV 1,
 320 samples); **20 = Opus at 10 ms** (devkit, 160 samples). The numbering is by
 frame length, not by codec.
 

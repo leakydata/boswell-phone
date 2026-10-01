@@ -269,3 +269,22 @@ remembers each No.
 on its charger (setting, on by default), and the Omi's clock is set on every
 connection: without a valid clock its firmware stores nothing. Battery
 warnings for the Omi and phone offer a switch to Sync mode when very low.
+
+## Milestone 6: the release, and loose ends (2026-09-30 to 2026-10-01)
+
+- **Signed releases** on GitHub (Apache-2.0 with a NOTICE that requires
+  credit). Every release is signed with the same key, so updates install over
+  the top.
+- **Reconnects as soon as the Omi is back.** After one quick retry, the phone
+  waits with Android's auto-connect instead of ever-longer retries: about 10 s
+  after walking back into range, not minutes.
+- **The firmware's ghost frame.** Frames that wouldn't decode, all at the end
+  of full stored packets, came from an off-by-one in the Omi's storage writer
+  (see OMI-PROTOCOL.md). Skipping them took failures from 815 to 0, and
+  removed 673 twenty-millisecond noise blips. Desktop Boswell had the same
+  issue and got the same fix.
+- **Light brightness** in Device -> Omi: off, 1%, then every 10%, written to
+  the Omi (which keeps it) and read back.
+- **Conversation cards** show only voices that said something: coughs and
+  seconds of TV had their own unnameable "?" circles.
+

@@ -42,6 +42,9 @@ one day merge.
   stored while you were out of range, then goes back to live.
 - Recordings land **in the order they happened**, by the Omi's own clock, however late
   they download. Live capture restarts itself if Android ever stops the app.
+- **Reconnects by itself** within seconds of coming back into range.
+- **The Omi's light** can be dimmed to 1% or turned off, for when a glowing badge
+  isn't welcome.
 
 ### 📝 Transcription — on the phone, or in the cloud if you'd rather
 - **NVIDIA Nemotron 3.5 ASR** runs on the phone, ~8× faster than real time.
@@ -129,6 +132,7 @@ Every number below came from a script in [`tools/`](tools) run against real reco
 | Speech-only cloud transcription | **80%** cheaper on a mostly-quiet clip, same words and times |
 | End of a spoken question | **0.8–1.6 s** after the last word (speech model, not loudness) |
 | Model download | **682 → 468 MB** for the recognizer, gzip-verified on the phone |
+| Downloaded audio frames | **815 → 0** undecodable, after finding an off-by-one in the Omi's firmware |
 
 The full story — including the dead ends — is in [`docs/DEVLOG.md`](docs/DEVLOG.md).
 
@@ -171,7 +175,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk   # installs beside the
 # (BOSWELL_KEYSTORE, BOSWELL_KEY_ALIAS, BOSWELL_STORE_PASSWORD, BOSWELL_KEY_PASSWORD).
 ./gradlew :app:assembleRelease
 
-./gradlew :app:testDebugUnitTest          # 70+ unit tests, no device needed
+./gradlew :app:testDebugUnitTest          # 75 unit tests, no device needed
 ```
 
 The measurement scripts in `tools/` are a [uv](https://docs.astral.sh/uv/) project:
@@ -197,7 +201,7 @@ docs/          DEVLOG · OMI-PROTOCOL · LESSONS · REFERENCE-CODEBASE
 ```
 
 - [`docs/OMI-PROTOCOL.md`](docs/OMI-PROTOCOL.md) — the Omi's Bluetooth protocol, exact
-  and hard-won.
+  and hard-won, including a firmware storage bug and how to read around it.
 - [`docs/LESSONS.md`](docs/LESSONS.md) — numbers measured on a real archive, and
   failures that looked like health.
 
