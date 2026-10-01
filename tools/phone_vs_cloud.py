@@ -20,7 +20,29 @@ from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 
-from asr_bench import api_key, norm_words, transcribe, wer
+import asr_bench
+from asr_bench import api_key, norm_words, wer
+
+# Engines that only answer plain "json" (no word timings).
+PLAIN_JSON = {"openai/gpt-transcribe"}
+
+
+def transcribe(client, key, model, wav, timeout=300):
+    if model not in PLAIN_JSON:
+        return asr_bench.transcribe(client, key, model, wav, timeout=timeout)
+    import base64
+    body = {"model": model, "language": "en", "response_format": "json",
+            "input_audio": {"data": base64.b64encode(open(wav, "rb").read()).decode(), "format": "wav"}}
+    t0 = time.monotonic()
+    try:
+        r = client.post(asr_bench.URL, json=body, headers={"Authorization": f"Bearer {key}"}, timeout=timeout)
+    except httpx.TransportError as e:
+        return 0, time.monotonic() - t0, {"error": {"message": f"{type(e).__name__} after {timeout}s"}}
+    dt = time.monotonic() - t0
+    try:
+        return r.status_code, dt, r.json()
+    except ValueError:
+        return r.status_code, dt, {"_raw": r.text[:2000]}
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "results", "cloud")
@@ -29,6 +51,7 @@ ENGINES = {
     "nemotron-cloud": "nvidia/nemotron-3.5-asr-streaming-multilingual-0.6b",
     "nova-3": "deepgram/nova-3",
     "parakeet-v3": "nvidia/parakeet-tdt-0.6b-v3",
+    "gpt-transcribe": "openai/gpt-transcribe",
 }
 
 
