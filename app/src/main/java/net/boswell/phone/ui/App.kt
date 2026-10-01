@@ -105,6 +105,7 @@ fun BoswellApp(device: MainViewModel, startTab: String? = null) {
                     onMoment = { conv, line -> openConversation(conv, line, play = true) }, onLogs = { nav.navigate("memory") })
             }
             composable("logs") { LogsScreen(onBack = { nav.popBackStack() }) }
+            composable("texting") { TextingScreen(onBack = { nav.popBackStack() }) }
             composable("memory") { MemoryScreen(onBack = { nav.popBackStack() }, onLogs = { nav.navigate("logs") }) }
             composable("todo") { TodoScreen(pad) }
             composable("triggers") { TriggersScreen(onBack = { nav.popBackStack() }) }
@@ -118,7 +119,7 @@ fun BoswellApp(device: MainViewModel, startTab: String? = null) {
             }
             composable("device") {
                 DeviceScreen(ui, cap, device, pad, onTriggers = { nav.navigate("triggers") }, onUsage = { nav.navigate("usage") },
-                    onCompare = { nav.navigate("compare") },
+                    onCompare = { nav.navigate("compare") }, onTexting = { nav.navigate("texting") },
                     onPair = pair, onSetup = { net.boswell.phone.setup.Setup.setDone(ctx, false); setupDone = false })
             }
             composable(

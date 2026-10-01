@@ -63,7 +63,11 @@ class Assistant(private val context: Context) {
      * Answer one question. [source] is how it was asked (typed, button, …).
      * Up to six rounds of tool use, then a short answer suited to a notification.
      */
+    /** The person's own words being answered: texting confirms against these, never the model's. */
+    private var currentQuestion: String? = null
+
     fun ask(question: String, source: String, instruction: String? = null, saidAt: Double? = null, fileOnly: Boolean = source == CAPTURE, display: String? = null): Answer {
+        currentQuestion = if (source == "typed" || source == "button") question else null
         val key = Secrets.get(context, Secrets.OPENROUTER) ?: return Answer("Add an OpenRouter key under Device → Assistant first.", 0.0, true)
         val model = AssistantPrefs.model(context)
         val llm = Llm(key, model)
@@ -147,7 +151,7 @@ class Assistant(private val context: Context) {
             appendLine("Answers appear as a phone notification: be direct and brief, one to three sentences, unless asked for detail. Say so plainly when the record does not contain the answer; do not invent what was said. Transcripts are machine-made and may contain errors.")
             appendLine("For general questions (a film, a fact, how something works), answer from what you know; use web_search when it needs current information. Don't say you have no answer just because it isn't in the record.")
             appendLine("Every line you're given carries a moment label like [L123]. When you quote or refer to something specific that was said, put its label right after it (e.g. Sam said the budget is due Friday [L123]): the app turns labels into a link that plays that moment. Never invent labels.")
-            appendLine("You can also: set timers and alarms; draft a text or email (it is only a draft the user sends themselves -- say so); look things up on the web for current information (weather, news, hours); remember facts about people when the user shares them, and recall them; keep quick logs (medication, expenses, parking, habits) and read them back; give talk stats; pull out numbers, emails, links and addresses that were said; translate what someone said. Named lists (\"read later\", \"gift ideas\", shopping) are to-do categories: add with add_todo and read with list_todos.")
+            appendLine("You can also: set timers and alarms; draft a text or email (it is only a draft the user sends themselves -- say so); read and send texts with the contacts the user chose (send_text only holds the text: tell them to tap Send or say yes, and call confirm_send only after they do; for anyone else, offer a draft); look things up on the web for current information (weather, news, hours); remember facts about people when the user shares them, and recall them; keep quick logs (medication, expenses, parking, habits) and read them back; give talk stats; pull out numbers, emails, links and addresses that were said; translate what someone said. Named lists (\"read later\", \"gift ideas\", shopping) are to-do categories: add with add_todo and read with list_todos.")
             appendLine()
             appendLine("What was said in the last 10 minutes:")
             append(recent.ifBlank { "(nothing)" })
@@ -243,7 +247,7 @@ class Assistant(private val context: Context) {
                     onSuccess = { "added to the calendar \"${net.boswell.phone.todo.Calendar.chosen(context)?.name}\": $title at ${at(start)}" },
                     onFailure = { "not added: ${it.message}" })
             }
-            in MoreTools(context).names -> MoreTools(context).run(call.name, args, archive, speakers)
+            in MoreTools(context).names -> MoreTools(context, currentQuestion).run(call.name, args, archive, speakers)
             else -> "unknown tool ${call.name}"
         }
     }

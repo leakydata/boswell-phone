@@ -19,7 +19,7 @@ import java.time.format.DateTimeFormatter
  * drafts, the web, and quick logs. Nothing here sends anything on its own: a
  * message is a draft the person opens and sends themselves.
  */
-class MoreTools(private val context: Context) {
+class MoreTools(private val context: Context, private val userWords: String? = null) {
     private val zone = ZoneId.systemDefault()
     private val t = DateTimeFormatter.ofPattern("EEE MMM d h:mm a")
     private fun at(epoch: Double) = Instant.ofEpochSecond(epoch.toLong()).atZone(zone).format(t)
@@ -47,11 +47,16 @@ class MoreTools(private val context: Context) {
                 "amount" to ("number" to "a number if there is one, e.g. 42.50 (optional)")), listOf("kind")),
         Llm.tool("read_log", "Read back log entries, optionally of one kind and over the last N days, with totals of amounts.",
             mapOf("kind" to ("string" to "optional"), "days" to ("integer" to "default 7"))),
+        Llm.tool("read_texts", "Text messages to and from the contacts the user chose for texting (only those), newest last.",
+            mapOf("contact" to ("string" to "a name or number (optional: all chosen contacts)"), "hours" to ("integer" to "how far back, default 48"))),
+        Llm.tool("send_text", "Prepare a text to one of the user's chosen contacts. It is held, not sent, until the user confirms (taps Send, or says yes).",
+            mapOf("to" to ("string" to "contact name or number"), "text" to ("string" to "the message")), listOf("to", "text")),
+        Llm.tool("confirm_send", "Send the text held by send_text, only when the user has just said to send it (yes / send it / go ahead).", emptyMap()),
         Llm.tool("calendar_events", "The user's calendar events over a range of days (all their visible calendars).",
             mapOf("date" to ("string" to "first day, YYYY-MM-DD or 'today' / 'tomorrow'"), "days" to ("integer" to "how many days, default 1"))),
     )
 
-    val names = setOf("find_details", "talk_stats", "remember_fact", "facts_about", "set_timer", "set_alarm", "draft_message", "web_search", "log_entry", "read_log", "calendar_events")
+    val names = setOf("find_details", "talk_stats", "remember_fact", "facts_about", "set_timer", "set_alarm", "draft_message", "web_search", "log_entry", "read_log", "calendar_events", "read_texts", "send_text", "confirm_send")
 
     fun run(name: String, args: JsonObject, archive: Archive, speakers: SpeakerStore): String {
         fun str(k: String) = args[k]?.jsonPrimitive?.contentOrNull
@@ -86,6 +91,9 @@ class MoreTools(private val context: Context) {
                     "${at(e.at)} ${e.kind}" + (e.note?.let { ": $it" } ?: "") + (e.amount?.let { " (${"%.2f".format(it)})" } ?: "")
                 } + entries.mapNotNull { it.amount }.takeIf { it.isNotEmpty() }?.let { "\ntotal of amounts: ${"%.2f".format(it.sum())}" }.orEmpty()
             }
+            "read_texts" -> Texting.read(context, str("contact"), (int("hours") ?: 48).coerceIn(1, 24 * 30))
+            "send_text" -> Texting.prepare(context, str("to") ?: return "missing recipient", str("text") ?: return "missing text")
+            "confirm_send" -> Texting.confirm(context, userWords)
             "calendar_events" -> {
                 val first = when (val d = str("date")?.lowercase()) {
                     null, "today" -> java.time.LocalDate.now(); "tomorrow" -> java.time.LocalDate.now().plusDays(1)

@@ -94,7 +94,7 @@ private fun Section(title: String, content: @Composable () -> Unit) {
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: PaddingValues, onTriggers: () -> Unit, onUsage: () -> Unit, onPair: () -> Unit, onSetup: () -> Unit = {},
-                 onCompare: () -> Unit = {}) {
+                 onCompare: () -> Unit = {}, onTexting: () -> Unit = {}) {
     val ctx = LocalContext.current
     val progress by ModelProgressRepository.state.collectAsStateWithLifecycle()
     var confirmClean by remember { mutableStateOf(false) }
@@ -263,6 +263,16 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                     Switch(checked = cloudQ, onCheckedChange = { cloudQ = it; net.boswell.phone.assistant.AssistantPrefs.setCloudQuestions(ctx2, it) })
                 }
                 AssistantRoutines()
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable(onClick = onTexting)) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Texting", style = MaterialTheme.typography.bodyLarge)
+                        val tc = net.boswell.phone.assistant.Texting.contacts(ctx2).size
+                        Text(if (net.boswell.phone.assistant.Texting.enabled(ctx2)) "On · $tc contact${if (tc == 1) "" else "s"} · texts are sent only after you confirm"
+                            else "Off · let it read and send texts with people you choose",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Text("Edit", color = MaterialTheme.colorScheme.primary)
+                }
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable(onClick = onTriggers)) {
                     Column(Modifier.weight(1f)) {
                         Text("Voice triggers", style = MaterialTheme.typography.bodyLarge)
