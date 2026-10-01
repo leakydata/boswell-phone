@@ -218,13 +218,13 @@ private fun Models(vm: MainViewModel, ui: net.boswell.phone.ui.UiState) {
     val progress by ModelProgressRepository.state.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { vm.refreshModels() }
     Title("Download the on-phone models")
-    Body("Transcription, voices and sounds are recognized on this phone. That takes about ${Fmt.bytes(ui.models.sumOf { it.spec.totalBytes })} of models, downloaded once.")
+    Body("Transcription, voices and sounds are recognized on this phone. That takes about ${Fmt.bytes(ui.models.sumOf { it.spec.downloadBytes })} of downloads, once.")
     for (m in ui.models) {
         val p = progress[m.spec.id]
         Column {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(m.spec.purpose.replaceFirstChar { it.uppercase() }, Modifier.weight(1f))
-                Text(if (m.installed) "✓" else Fmt.bytes(m.spec.totalBytes), color = if (m.installed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(if (m.installed) "✓" else Fmt.bytes(m.spec.downloadBytes), color = if (m.installed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (p?.running == true) LinearProgressIndicator(progress = { p.bytes.toFloat() / p.total }, modifier = Modifier.fillMaxWidth())
             p?.error?.takeIf { !m.installed && !p.running }?.let { Text("Retrying: $it", style = MaterialTheme.typography.bodySmall) }

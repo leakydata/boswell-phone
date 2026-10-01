@@ -6,8 +6,15 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
 
+/** A gzip-compressed copy of a file on the release, to download in its place. */
 @Serializable
-data class ModelFile(val name: String, val size: Long, val sha256: String)
+data class PackedFile(val name: String, val size: Long, val sha256: String)
+
+@Serializable
+data class ModelFile(val name: String, val size: Long, val sha256: String, val gz: PackedFile? = null) {
+    /** What actually crosses the network. */
+    val downloadSize: Long get() = gz?.size ?: size
+}
 
 @Serializable
 data class ModelSpec(
@@ -19,6 +26,7 @@ data class ModelSpec(
     val files: List<ModelFile>,
 ) {
     val totalBytes: Long get() = files.sumOf { it.size }
+    val downloadBytes: Long get() = files.sumOf { it.downloadSize }
 }
 
 @Serializable
@@ -63,8 +71,14 @@ class ModelStore(context: Context, val catalog: ModelCatalog = ModelCatalog.load
         catalog.byId(id).files.sumOf { f ->
             val done = file(f.name)
             val part = File(dir, f.name + ".part")
+            val gz = f.gz?.let { File(dir, it.name) }
+            val gzPart = f.gz?.let { File(dir, it.name + ".part") }
+            // Compressed bytes count in proportion, so progress stays in installed size.
+            fun scaled(n: Long) = f.gz?.let { n * f.size / it.size } ?: n
             when {
                 done.exists() -> done.length()
+                gz?.exists() == true -> f.size
+                gzPart?.exists() == true -> scaled(gzPart.length())
                 part.exists() -> part.length()
                 else -> 0L
             }

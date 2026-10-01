@@ -406,7 +406,7 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text(m.spec.name, style = MaterialTheme.typography.bodyLarge)
-                                Text("${m.spec.purpose} · ${Fmt.bytes(m.spec.totalBytes)}", style = MaterialTheme.typography.bodySmall,
+                                Text("${m.spec.purpose} · ${Fmt.bytes(if (m.installed) m.spec.totalBytes else m.spec.downloadBytes)}${if (m.installed) "" else " download"}", style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             when {

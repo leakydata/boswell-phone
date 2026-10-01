@@ -12,6 +12,7 @@ one against the SHA-256 recorded here before using it.
 
 import argparse
 import hashlib
+import subprocess
 import json
 import os
 
@@ -65,6 +66,21 @@ def sha256(path):
     return h.hexdigest()
 
 
+def pack(path, min_size=5_000_000, min_saving=0.10):
+    """A gzip copy beside a big file when it saves enough to be worth unpacking
+    on the phone (the int8 ASR encoder: 627 -> 429 MB). Deterministic (-n), so
+    rebuilding a release leaves existing assets byte-identical."""
+    if os.path.getsize(path) < min_size:
+        return None
+    gz = path + ".gz"
+    if not os.path.exists(gz) or os.path.getmtime(gz) < os.path.getmtime(path):
+        subprocess.run(["gzip", "-9", "-n", "-k", "-f", path], check=True)
+    if os.path.getsize(gz) > os.path.getsize(path) * (1 - min_saving):
+        os.remove(gz)
+        return None
+    return gz
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tag", default="models-v1")
@@ -80,7 +96,11 @@ def main():
         files = []
         for name in m["files"]:
             p = os.path.join(d, name)
-            files.append({"name": name, "size": os.path.getsize(p), "sha256": sha256(p)})
+            entry = {"name": name, "size": os.path.getsize(p), "sha256": sha256(p)}
+            gz = pack(p)
+            if gz:
+                entry["gz"] = {"name": os.path.basename(gz), "size": os.path.getsize(gz), "sha256": sha256(gz)}
+            files.append(entry)
         catalog["models"].append({**{k: v for k, v in m.items() if k != "files"}, "files": files})
     out = json.dumps(catalog, indent=1)
     open(os.path.join(d, "models.json"), "w").write(out + "\n")
@@ -88,7 +108,8 @@ def main():
     os.makedirs(os.path.dirname(asset), exist_ok=True)
     open(asset, "w").write(out + "\n")
     for m in catalog["models"]:
-        print(f"{m['id']:20s} {sum(f['size'] for f in m['files']) / 1e6:7.1f} MB  {len(m['files'])} files")
+        print(f"{m['id']:20s} {sum(f['size'] for f in m['files']) / 1e6:7.1f} MB, download "
+              f"{sum(f.get('gz', f)['size'] for f in m['files']) / 1e6:7.1f} MB  {len(m['files'])} files")
 
 
 if __name__ == "__main__":

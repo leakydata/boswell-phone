@@ -13,17 +13,32 @@
     {
      "name": "nemotron-asr-1120ms-encoder.int8.onnx",
      "size": 657601521,
-     "sha256": "2fff2166acaa535bd969fb223c1f0783d71029f143cb298bc54c2afe85abf772"
+     "sha256": "2fff2166acaa535bd969fb223c1f0783d71029f143cb298bc54c2afe85abf772",
+     "gz": {
+      "name": "nemotron-asr-1120ms-encoder.int8.onnx.gz",
+      "size": 450750817,
+      "sha256": "e305dbb09851c94da84e3433db47952a1a5521fbd17ee9d68c6c2e0775f4e9ed"
+     }
     },
     {
      "name": "nemotron-asr-1120ms-decoder.int8.onnx",
      "size": 14978075,
-     "sha256": "19f9c98fc6d0a2c33a65a43b36fdb2e914c26c0aa9764be3aebc502a1e982fb0"
+     "sha256": "19f9c98fc6d0a2c33a65a43b36fdb2e914c26c0aa9764be3aebc502a1e982fb0",
+     "gz": {
+      "name": "nemotron-asr-1120ms-decoder.int8.onnx.gz",
+      "size": 11426751,
+      "sha256": "3df8a985a4203cff3a3e95f3d2b58e4316daebc4b1967093d1dbd4777209e2b1"
+     }
     },
     {
      "name": "nemotron-asr-1120ms-joiner.int8.onnx",
      "size": 9504438,
-     "sha256": "4101c7c679a0bc30483794b27a059e34e79232aa2068d78d51231a22c8b0d7ce"
+     "sha256": "4101c7c679a0bc30483794b27a059e34e79232aa2068d78d51231a22c8b0d7ce",
+     "gz": {
+      "name": "nemotron-asr-1120ms-joiner.int8.onnx.gz",
+      "size": 5784653,
+      "sha256": "d51e68cfebfa1e7607255059cb6292e79c7f64ba564bdaeb9c89030a629e259a"
+     }
     },
     {
      "name": "nemotron-asr-1120ms-tokens.txt",
@@ -66,7 +81,12 @@
     {
      "name": "ced-mini-audio-tagging.int8.onnx",
      "size": 10451715,
-     "sha256": "ff29f39f9fbe637f72535160e9d006d61d872fdab0fce838672265b9b38cf946"
+     "sha256": "ff29f39f9fbe637f72535160e9d006d61d872fdab0fce838672265b9b38cf946",
+     "gz": {
+      "name": "ced-mini-audio-tagging.int8.onnx.gz",
+      "size": 7590484,
+      "sha256": "281143bc0cf0232092f1d15e5113dafea3b4ac9ee8ab1ca329017308478c70cc"
+     }
     },
     {
      "name": "ced-mini-audio-tagging-labels.csv",
