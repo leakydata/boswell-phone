@@ -143,6 +143,19 @@ private val ADDRESS = Regex("""\b\d{1,6}\s+(?:[A-Z][a-z]+\s){1,3}(?:Street|St|Av
 private fun ExchangeCard(e: Exchange, onMoment: (Long, Long) -> Unit = { _, _ -> }) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val shown = remember(e.answer) { net.boswell.phone.assistant.Moments.strip(e.answer) }
+    // Bold shown as bold; the other symbols (#, list dashes, backticks) tidied away.
+    val styled = remember(shown) {
+        val (text, bold) = net.boswell.phone.assistant.SpeechText.boldSpans(shown)
+        val tidy = net.boswell.phone.assistant.SpeechText.plain(text)
+        androidx.compose.ui.text.buildAnnotatedString {
+            append(tidy)
+            for (r in bold) {
+                val inner = text.substring(r.first, r.last + 1)
+                val at = tidy.indexOf(inner).takeIf { it >= 0 } ?: continue
+                addStyle(androidx.compose.ui.text.SpanStyle(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), at, at + inner.length)
+            }
+        }
+    }
     // Quoted moments, resolved off the main thread: "▶ 3:05 PM" plays that line.
     val moments by androidx.compose.runtime.produceState(emptyList<net.boswell.phone.assistant.Moments.Where>(), e.answer) {
         value = withContext(Dispatchers.IO) {
@@ -173,7 +186,7 @@ private fun ExchangeCard(e: Exchange, onMoment: (Long, Long) -> Unit = { _, _ ->
             modifier = Modifier.padding(end = 32.dp)) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (watcher) Text("Hint · ${e.question ?: ""}", style = MaterialTheme.typography.labelLarge)
-                Text(shown, style = MaterialTheme.typography.bodyLarge)
+                Text(styled, style = MaterialTheme.typography.bodyLarge)
                 if (moments.isNotEmpty() || details.isNotEmpty()) androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     for (m in moments) androidx.compose.material3.AssistChip(onClick = { onMoment(m.conversation, m.line) },
                         label = { Text("▶ ${Fmt.time(m.at)}") })

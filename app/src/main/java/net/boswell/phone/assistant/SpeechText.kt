@@ -12,6 +12,42 @@ object SpeechText {
     private val MOMENT = Regex("""\s*\[L\d+]""")
     private val EMOJI = Regex("""[\x{1F000}-\x{1FAFF}\x{2600}-\x{27BF}\x{FE0F}\x{200D}]""")
 
+    /**
+     * For reading where formatting can't be shown (a notification): the
+     * symbols go, the shape stays -- lines kept, list items as bullets, links
+     * left in place to tap.
+     */
+    fun plain(text: String): String {
+        var s = MOMENT.replace(text, "")
+        s = MD_LINK.replace(s) { it.groupValues[1] }
+        s = s.lines().filterNot { Regex("""^\s*\|?(?:\s*:?-{2,}:?\s*\|)+\s*$""").matches(it) }.joinToString("\n") { line ->
+            line.replace(Regex("""^\s{0,3}#{1,6}\s*"""), "")
+                .replace(Regex("""^\s*>\s?"""), "")
+                .replace(Regex("""^(\s*)[-*+]\s+"""), "$1• ")
+        }
+        s = s.replace(Regex("""(\*{1,3}|_{2,3})(\S(?:.*?\S)?)\1""")) { it.groupValues[2] }
+            .replace(Regex("""`+([^`]*)`+""")) { it.groupValues[1] }
+            .replace(Regex("""(?m)^\s*\|\s*|\s*\|\s*$"""), "").replace(Regex("""\s*\|\s*"""), " · ")
+        return s.replace(Regex("""[ \t]{2,}"""), " ").replace(Regex("""\n{3,}"""), "\n\n").trim()
+    }
+
+    /** Bold spans of [plain]-style text, for showing **bold** as bold: (start, end) pairs in the returned string. */
+    fun boldSpans(text: String): Pair<String, List<IntRange>> {
+        val spans = mutableListOf<IntRange>()
+        val out = StringBuilder()
+        var i = 0
+        val re = Regex("""\*\*(\S(?:.*?\S)?)\*\*|__(\S(?:.*?\S)?)__""")
+        for (m in re.findAll(text)) {
+            out.append(text, i, m.range.first)
+            val inner = m.groupValues[1].ifEmpty { m.groupValues[2] }
+            spans += out.length until out.length + inner.length
+            out.append(inner)
+            i = m.range.last + 1
+        }
+        out.append(text.substring(i))
+        return out.toString() to spans
+    }
+
     fun clean(text: String): String {
         var s = text
         s = MOMENT.replace(s, "")

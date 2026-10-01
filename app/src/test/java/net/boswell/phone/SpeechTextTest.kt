@@ -28,4 +28,16 @@ class SpeechTextTest {
     @Test fun `numbers, times and money stay as they are`() {
         assertEquals("It's 3:05 PM, \$42.50, 307,632 people, 1.5%.", SpeechText.clean("It's 3:05 PM, \$42.50, 307,632 people, 1.5%."))
     }
+
+    @Test fun `notifications keep shape but lose symbols`() {
+        assertEquals("Today\n• Lunch with Sam at noon\n• Call the plumber at https://plumb.example",
+            SpeechText.plain("## Today\n- Lunch with **Sam** at noon\n- Call the `plumber` at https://plumb.example"))
+        assertEquals("You mean The Wave (2019).", SpeechText.plain("You mean **The Wave (2019)** [L12]."))
+    }
+
+    @Test fun `bold spans are found`() {
+        val (t, b) = SpeechText.boldSpans("See **The Wave** and **Sam**.")
+        assertEquals("See The Wave and Sam.", t)
+        assertEquals(listOf("The Wave", "Sam"), b.map { t.substring(it.first, it.last + 1) })
+    }
 }

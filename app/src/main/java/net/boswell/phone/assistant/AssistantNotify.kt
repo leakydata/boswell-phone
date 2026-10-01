@@ -44,7 +44,7 @@ object AssistantNotify {
 
     fun post(c: Context, channel: String, title: String, rawText: String, id: Int = (System.currentTimeMillis() % 100_000).toInt() + 1000) {
         ensureChannels(c)
-        val text = Moments.strip(rawText)
+        val text = SpeechText.plain(Moments.strip(rawText))
         val open = PendingIntent.getActivity(c, 0, Intent(c, MainActivity::class.java).putExtra("open", "ask"), PendingIntent.FLAG_IMMUTABLE)
         // The first quoted moment, a tap away.
         val moment = Moments.ids(rawText).firstOrNull()?.let { runCatching { Moments.resolve(c, it) }.getOrNull() }
