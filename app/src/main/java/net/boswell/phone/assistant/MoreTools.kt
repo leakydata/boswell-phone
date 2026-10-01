@@ -49,7 +49,7 @@ class MoreTools(private val context: Context, private val userWords: String? = n
             mapOf("kind" to ("string" to "optional"), "days" to ("integer" to "default 7"))),
         Llm.tool("read_texts", "Text messages to and from the contacts the user chose for texting (only those), newest last, with dates. Without hours: the latest 20, however old.",
             mapOf("contact" to ("string" to "a name or number (optional: all chosen contacts)"), "hours" to ("integer" to "only the last N hours (optional)"))),
-        Llm.tool("send_text", "Prepare a text to one of the user's chosen contacts. It is held, not sent, until the user confirms (taps Send, or says yes).",
+        Llm.tool("send_text", "Text one of the user's chosen contacts. Usually held until the user confirms (taps Send, or says yes); contacts they set to 'send right away' go after a 10-second chance to cancel. Report exactly what the result says.",
             mapOf("to" to ("string" to "contact name or number"), "text" to ("string" to "the message")), listOf("to", "text")),
         Llm.tool("confirm_send", "Send the text held by send_text, only when the user has just said to send it (yes / send it / go ahead).", emptyMap()),
         Llm.tool("calendar_events", "The user's calendar events over a range of days (all their visible calendars).",
@@ -92,7 +92,7 @@ class MoreTools(private val context: Context, private val userWords: String? = n
                 } + entries.mapNotNull { it.amount }.takeIf { it.isNotEmpty() }?.let { "\ntotal of amounts: ${"%.2f".format(it.sum())}" }.orEmpty()
             }
             "read_texts" -> Texting.read(context, str("contact"), int("hours")?.coerceIn(1, 24 * 365))
-            "send_text" -> Texting.prepare(context, str("to") ?: return "missing recipient", str("text") ?: return "missing text")
+            "send_text" -> Texting.prepare(context, str("to") ?: return "missing recipient", str("text") ?: return "missing text", direct = userWords != null)
             "confirm_send" -> Texting.confirm(context, userWords)
             "calendar_events" -> {
                 val first = when (val d = str("date")?.lowercase()) {

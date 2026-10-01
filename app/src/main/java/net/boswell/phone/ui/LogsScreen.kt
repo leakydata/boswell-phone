@@ -45,7 +45,7 @@ fun LogsScreen(onBack: () -> Unit) {
         LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = pad.calculateTopPadding() + 8.dp, bottom = pad.calculateBottomPadding() + 24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
             item {
-                Text("Say it to the assistant: \\u201cI took my pills\\u201d, \\u201cspent 42 dollars on gas\\u201d, \\u201cI parked on level 3\\u201d. Ask \\u201cdid I take my pills today?\\u201d to read them back.",
+                Text("Say it to the assistant: \u201cI took my pills\u201d, \u201cspent 42 dollars on gas\u201d, \u201cI parked on level 3\u201d. Ask \u201cdid I take my pills today?\u201d to read them back.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (entries.isEmpty()) item { Text("Nothing logged yet.", color = MaterialTheme.colorScheme.onSurfaceVariant) }

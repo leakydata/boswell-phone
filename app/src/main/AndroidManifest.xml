@@ -75,6 +75,10 @@
         </provider>
 
         <receiver
+            android:name=".assistant.AutoSendCancel"
+            android:exported="false" />
+
+        <receiver
             android:name=".assistant.TextSendReceiver"
             android:exported="false" />
 

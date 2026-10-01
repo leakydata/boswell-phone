@@ -46,7 +46,7 @@ fun MemoryScreen(onBack: () -> Unit, onLogs: () -> Unit) {
         LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = pad.calculateTopPadding() + 8.dp, bottom = pad.calculateBottomPadding() + 24.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item {
-                Text("Say \\u201cremember that Sam's daughter is Ava\\u201d or \\u201cremember my locker is 214\\u201d. It also notices facts in what's said, every few hours. Ask \\u201cwhat do I know about Sam?\\u201d to hear them.",
+                Text("Say \u201cremember that Sam's daughter is Ava\u201d or \u201cremember my locker is 214\u201d. It also notices facts in what's said, every few hours. Ask \u201cwhat do I know about Sam?\u201d to hear them.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (facts.isEmpty()) item { Text("Nothing remembered yet.", color = MaterialTheme.colorScheme.onSurfaceVariant) }

@@ -207,6 +207,7 @@ fun PersonScreen(vm: ArchiveViewModel, id: Long, onBack: () -> Unit, onOpen: (Lo
                     })
                 }
             }
+            if (p?.name != null) item { ContactCard(p.id) }
             // What the assistant has learned about them, from what was said or told it.
             item {
                 val ctx = androidx.compose.ui.platform.LocalContext.current
@@ -249,4 +250,77 @@ fun PersonScreen(vm: ArchiveViewModel, id: Long, onBack: () -> Unit, onOpen: (Lo
         }
     }
     if (renaming) NameDialog(p?.name, onDismiss = { renaming = false }) { vm.namePerson(id, it); renaming = false }
+}
+
+/**
+ * A person's phone contact: link one (the phone's Contacts stay where the
+ * details live), see and use its number, email and birthday, and choose
+ * whether the assistant may text them -- off, ask first, or send right away
+ * (with a 10-second chance to cancel).
+ */
+@Composable
+private fun ContactCard(personId: Long) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var version by remember { mutableStateOf(0) }
+    var allowed by remember { mutableStateOf(net.boswell.phone.assistant.Contacts.allowed(ctx)) }
+    val link = remember(personId, version) { net.boswell.phone.speakers.SpeakerStore(ctx).use { it.linkOf(personId) } }
+    val info = remember(link, allowed) { link?.let { net.boswell.phone.assistant.Contacts.info(ctx, it.contact) } }
+    val ask = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { allowed = it }
+    val pick = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.PickContact()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        val lookup = net.boswell.phone.assistant.Contacts.lookupUri(ctx, uri) ?: return@rememberLauncherForActivityResult
+        net.boswell.phone.speakers.SpeakerStore(ctx).use { it.link(personId, lookup); if (it.linkOf(personId)?.mayText == null) it.setMayText(personId, "off") }
+        if (!allowed) ask.launch(android.Manifest.permission.READ_CONTACTS)
+        version++
+    }
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Contact", style = MaterialTheme.typography.titleMedium)
+            if (link == null) {
+                Text("Link them to a phone contact: their number, email and birthday show here, the assistant can use them, and you can let it text them.",
+                    style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(onClick = { pick.launch(null) }) { Text("Link to a contact") }
+                return@Column
+            }
+            if (!allowed) {
+                Text("Allow contacts so Boswell can show their details.", style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = { ask.launch(android.Manifest.permission.READ_CONTACTS) }) { Text("Allow contacts") }
+            }
+            info?.let { i ->
+                Text(i.name, style = MaterialTheme.typography.bodyLarge)
+                androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    i.phones.firstOrNull()?.let { ph ->
+                        androidx.compose.material3.AssistChip(onClick = { runCatching { ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_DIAL, android.net.Uri.parse("tel:$ph"))) } }, label = { Text("Call $ph") })
+                        androidx.compose.material3.AssistChip(onClick = { runCatching { ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_SENDTO, android.net.Uri.parse("smsto:$ph"))) } }, label = { Text("Text") })
+                    }
+                    i.emails.firstOrNull()?.let { em ->
+                        androidx.compose.material3.AssistChip(onClick = { runCatching { ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_SENDTO, android.net.Uri.parse("mailto:$em"))) } }, label = { Text(em) })
+                    }
+                }
+                i.birthday?.let { Text("Birthday: $it", style = MaterialTheme.typography.bodySmall) }
+                if (i.phones.isNotEmpty()) {
+                    Text("Assistant may text them", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 6.dp))
+                    Row {
+                        for ((mode, label) in listOf("off" to "No", "ask" to "Ask first", "auto" to "Send right away")) {
+                            androidx.compose.material3.FilterChip(selected = link.mayText == mode, onClick = {
+                                net.boswell.phone.speakers.SpeakerStore(ctx).use { it.setMayText(personId, mode) }; version++
+                            }, label = { Text(label) }, modifier = Modifier.padding(end = 4.dp))
+                        }
+                    }
+                    Text(when (link.mayText) {
+                        "auto" -> "When you ask, it sends after a 10-second chance to cancel. Only for your own requests, never on its own."
+                        "ask" -> "It holds each text until you tap Send or say yes."
+                        else -> "It won't text them (it can still make you a draft)."
+                    }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (link.mayText != "off" && !net.boswell.phone.assistant.Texting.enabled(ctx))
+                        Text("Texting is off in Device → Assistant → Texting.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+            }
+            Row {
+                TextButton(onClick = { runCatching { ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(link.contact))) } }) { Text("Open in Contacts") }
+                TextButton(onClick = { pick.launch(null) }) { Text("Change") }
+                TextButton(onClick = { net.boswell.phone.speakers.SpeakerStore(ctx).use { it.link(personId, null); it.setMayText(personId, "off") }; version++ }) { Text("Unlink") }
+            }
+        }
+    }
 }

@@ -53,7 +53,7 @@ class Assistant(private val context: Context) {
             mapOf("date" to ("string" to "YYYY-MM-DD, or 'today' / 'yesterday'")), listOf("date")))
         add(Llm.tool("read_conversation", "Every line of one conversation.",
             mapOf("id" to ("integer" to "conversation id from day_conversations or search")), listOf("id")))
-        add(Llm.tool("people", "Everyone the phone knows by name, and when each was last heard.", emptyMap()))
+        add(Llm.tool("people", "Everyone the phone knows by name: when each was last heard, and for people linked to a phone contact, their number, email, birthday and whether they may be texted.", emptyMap()))
         for (d in MoreTools(context).defs()) add(d)
     }
 
@@ -215,7 +215,11 @@ class Assistant(private val context: Context) {
                 lines(archive, speakers, c.started - 1, c.ended + 1)
             }
             "people" -> speakers.people().filter { it.name != null }.joinToString("\n") { p ->
-                "${p.name}${if (p.id == AssistantPrefs.owner(context)) " (me)" else ""}: last heard ${p.lastHeard?.let(::at) ?: "never"}"
+                val link = speakers.linkOf(p.id)
+                val info = link?.let { Contacts.info(context, it.contact) }
+                "${p.name}${if (p.id == AssistantPrefs.owner(context)) " (me)" else ""}: last heard ${p.lastHeard?.let(::at) ?: "never"}" +
+                    (info?.let { i -> "; contact: " + listOfNotNull(i.phones.firstOrNull()?.let { "phone $it" }, i.emails.firstOrNull()?.let { "email $it" },
+                        i.birthday?.let { "birthday $it" }).joinToString(", ") + "; texting ${when (link.mayText) { "auto" -> "send right away"; "ask" -> "ask first"; else -> "off" }}" } ?: "")
             }.ifBlank { "nobody has been named yet" }
             "add_todo" -> {
                 val text = str("text") ?: return "missing text"

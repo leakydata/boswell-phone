@@ -79,7 +79,7 @@ fun TextingScreen(onBack: () -> Unit) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Let the assistant text", style = MaterialTheme.typography.titleMedium)
-                        Text("It can read your texts with the people below, and text them -- but a text is only sent after you tap Send or say \\u201cyes, send it\\u201d. Nobody else, ever.",
+                        Text("It can read your texts with the people below, and text them: \u201cask first\u201d holds each text until you tap Send or say yes; \u201csend right away\u201d sends when you ask, after 10 seconds to cancel. Nobody else, ever.",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Switch(checked = on, onCheckedChange = { on = it; Texting.setEnabled(ctx, it) })
@@ -90,7 +90,7 @@ fun TextingScreen(onBack: () -> Unit) {
                     Text("Android needs to allow reading and sending texts.", style = MaterialTheme.typography.bodyMedium)
                     Button(onClick = { perms.launch(arrayOf(Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS)) }) { Text("Allow texts") }
                     if (refused) {
-                        Text("If Android won't ask (it says the setting is restricted): open App info, tap ⋮ (top right), choose \\u201cAllow restricted settings\\u201d, then come back and tap Allow texts again. Apps installed outside the Play Store need this once.",
+                        Text("If Android won't ask (it says the setting is restricted): open App info, tap ⋮ (top right), choose \u201cAllow restricted settings\u201d, then come back and tap Allow texts again. Apps installed outside the Play Store need this once.",
                             style = MaterialTheme.typography.bodySmall)
                         OutlinedButton(onClick = {
                             ctx.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${ctx.packageName}")))
@@ -101,12 +101,30 @@ fun TextingScreen(onBack: () -> Unit) {
             item { Text("Contacts it may text", style = MaterialTheme.typography.titleMedium) }
             if (people.isEmpty()) item { Text("None yet.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
             items(people, key = { Texting.digits(it.number) }) { p ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(p.name)
-                        Text(p.number, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(p.name)
+                            Text(p.number, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        TextButton(onClick = { save(people - p) }) { Text("Remove") }
                     }
-                    TextButton(onClick = { save(people - p) }) { Text("Remove") }
+                    Row {
+                        for ((mode, label) in listOf("ask" to "Ask first", "auto" to "Send right away")) {
+                            androidx.compose.material3.FilterChip(selected = p.mode == mode, onClick = {
+                                save(people.map { if (it == p) it.copy(mode = mode) else it })
+                            }, label = { Text(label) }, modifier = Modifier.padding(end = 4.dp))
+                        }
+                    }
+                }
+            }
+            item {
+                val linked = remember(people) { runCatching { net.boswell.phone.assistant.Contacts.textable(ctx) }.getOrDefault(emptyList()) }
+                if (linked.isNotEmpty()) Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("From People", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+                    for (l in linked) Text("${l.name} · ${l.number} · ${if (l.mode == "auto") "send right away" else "ask first"}", style = MaterialTheme.typography.bodyMedium)
+                    Text("People linked to a contact; change this on their page in People.", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             item {

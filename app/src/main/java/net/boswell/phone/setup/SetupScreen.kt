@@ -210,7 +210,20 @@ private fun Permissions() {
             }
         }
     }
-    Body("Location is never used: Boswell finds the Omi by the service it advertises.")
+    // Optional: not needed to record, asked for here so nothing surprises later.
+    val contactsOk = granted(Manifest.permission.READ_CONTACTS)
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Contacts (optional)", style = MaterialTheme.typography.titleMedium)
+                Text("To link the voices Boswell knows to your contacts, and to text or draft messages to people by name.", style = MaterialTheme.typography.bodyMedium)
+            }
+            @Suppress("UNUSED_EXPRESSION") tick
+            if (contactsOk) Text("✓", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
+            else TextButton(onClick = { launcher.launch(arrayOf(Manifest.permission.READ_CONTACTS)) }) { Text("Allow") }
+        }
+    }
+    Body("Location is never used: Boswell finds the Omi by the service it advertises. Timers and alarms the assistant sets need no permission.")
 }
 
 @Composable
@@ -375,6 +388,32 @@ private fun Assistant() {
         }
         LaunchedEffect(calendarOk) { if (calendarOk && chosen == null) picking = true }
         if (picking) net.boswell.phone.ui.CalendarPicker(onDismiss = { picking = false }) { c -> chosen = c; picking = false }
+
+        // Texting (optional): Android treats texts as a restricted permission for
+        // apps not installed from the Play Store, so the way through is spelled out.
+        var smsOk by remember { mutableStateOf(net.boswell.phone.assistant.Texting.canRead(ctx) && net.boswell.phone.assistant.Texting.canSend(ctx)) }
+        var smsRefused by remember { mutableStateOf(false) }
+        val smsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+            smsOk = net.boswell.phone.assistant.Texting.canRead(ctx) && net.boswell.phone.assistant.Texting.canSend(ctx)
+            smsRefused = !smsOk
+            if (smsOk) net.boswell.phone.assistant.Texting.setEnabled(ctx, true)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Texting (optional)", style = MaterialTheme.typography.titleMedium)
+                Text(if (smsOk) "Allowed. Choose who it may text in Device → Assistant → Texting, or on a person's page."
+                    else "Let the assistant read and send texts with people you choose. A text is never sent without your say-so.",
+                    style = MaterialTheme.typography.bodyMedium)
+            }
+            if (!smsOk) TextButton(onClick = { smsLauncher.launch(arrayOf(Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS)) }) { Text("Allow") }
+        }
+        if (smsRefused) {
+            Text("If Android says this setting is restricted: open App info, tap ⋮ (top right), choose \u201cAllow restricted settings\u201d, come back, and tap Allow again. Apps installed outside the Play Store need this once. You can also skip this and set it up later.",
+                style = MaterialTheme.typography.bodySmall)
+            OutlinedButton(onClick = {
+                ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:${ctx.packageName}")))
+            }) { Text("Open App info") }
+        }
     }
     Spacer(Modifier.height(4.dp))
 }

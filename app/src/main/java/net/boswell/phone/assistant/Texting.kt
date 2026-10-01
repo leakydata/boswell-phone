@@ -20,7 +20,9 @@ import java.time.format.DateTimeFormatter
 
 /** A contact the assistant may read texts from and text (after confirmation). */
 @Serializable
-data class TextContact(val name: String, val number: String)
+data class TextContact(val name: String, val number: String,
+                       /** ask: hold for Send / yes. auto: send right away when they ask, after a 10 s chance to cancel. */
+                       val mode: String = "ask")
 
 /**
  * Texting, within limits the code enforces (not just the model's
@@ -46,6 +48,9 @@ object Texting {
     fun setContacts(c: Context, list: List<TextContact>) = prefs(c).edit()
         .putString("texting_contacts", json.encodeToString(ListSerializer(TextContact.serializer()), list.distinctBy { digits(it.number) })).apply()
 
+    /** Everyone who may be texted: the hand-made list plus people linked to a contact and allowed to be texted. */
+    fun all(c: Context): List<TextContact> = (contacts(c) + runCatching { Contacts.textable(c) }.getOrDefault(emptyList())).distinctBy { digits(it.number) }
+
     fun canRead(c: Context) = c.checkSelfPermission(Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED
     fun canSend(c: Context) = c.checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
 
@@ -54,7 +59,7 @@ object Texting {
 
     /** A chosen contact by name (any part of it) or number. */
     fun find(c: Context, who: String): TextContact? {
-        val list = contacts(c)
+        val list = all(c)
         val d = digits(who)
         if (d.length >= 7) list.firstOrNull { digits(it.number) == d }?.let { return it }
         val w = who.trim().lowercase()
@@ -68,7 +73,7 @@ object Texting {
     fun read(c: Context, who: String?, hours: Int?, latest: Int = 20): String {
         if (!enabled(c)) return "texting is off (Device -> Assistant -> Texting)"
         if (!canRead(c)) return "Boswell isn't allowed to read texts yet (Device -> Assistant -> Texting)"
-        val allowed = if (who != null) listOfNotNull(find(c, who)) else contacts(c)
+        val allowed = if (who != null) listOfNotNull(find(c, who)) else all(c)
         if (allowed.isEmpty()) return if (who != null) "$who isn't one of the contacts chosen for texting" else "no contacts are chosen for texting"
         val byDigits = allowed.associateBy { digits(it.number) }
         val since = hours?.let { System.currentTimeMillis() - it * 3_600_000L } ?: 0L
@@ -92,11 +97,17 @@ object Texting {
     private data class Pending(val to: TextContact, val text: String, val at: Long, val id: Int)
     @Volatile private var pending: Pending? = null
 
-    /** Hold a text for confirmation and show it with Send. */
-    fun prepare(c: Context, who: String, text: String): String {
+    /**
+     * Text a chosen contact. Normally held for Send / yes; for a contact set
+     * to "send right away", and only when the person asked directly ([direct]:
+     * their own typed or spoken request, never a routine), it goes after a
+     * 10-second chance to cancel.
+     */
+    fun prepare(c: Context, who: String, text: String, direct: Boolean = false): String {
         if (!enabled(c)) return "texting is off (Device -> Assistant -> Texting)"
         val to = find(c, who) ?: return "$who isn't one of the contacts chosen for texting, so I can't text them; I can make a draft instead (draft_message)"
         if (!canSend(c)) return "Boswell isn't allowed to send texts yet (Device -> Assistant -> Texting); I can make a draft instead"
+        if (to.mode == "auto" && direct) return AutoSend.start(c, to, text.trim())
         val id = (System.currentTimeMillis() % 100_000).toInt() + 500_000
         pending = Pending(to, text.trim(), System.currentTimeMillis(), id)
         AssistantNotify.ensureChannels(c)
@@ -128,6 +139,9 @@ object Texting {
         return send(c, p)
     }
 
+    /** Send now, no questions (the auto-send countdown has run out). */
+    internal fun sendNow(c: Context, to: TextContact, text: String): String = send(c, Pending(to, text, System.currentTimeMillis(), -1))
+
     internal fun sendPending(c: Context, id: Int): String {
         val p = pending?.takeIf { it.id == id } ?: return "nothing to send"
         return send(c, p)
@@ -140,8 +154,7 @@ object Texting {
             val parts = sms.divideMessage(p.text)
             if (parts.size > 1) sms.sendMultipartTextMessage(p.to.number, null, parts, null, null)
             else sms.sendTextMessage(p.to.number, null, p.text, null, null)
-            pending = null
-            c.getSystemService(NotificationManager::class.java).cancel(p.id)
+            if (p.id >= 0) { pending = null; c.getSystemService(NotificationManager::class.java).cancel(p.id) }
             net.boswell.phone.capture.CaptureRepository.log("texted ${p.to.name}")
             "sent to ${p.to.name}: “${p.text}”"
         }.getOrElse { "couldn't send: ${it.message}" }
@@ -162,5 +175,59 @@ class TextSendReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val r = Texting.sendPending(context, intent.getIntExtra("id", -1))
         AssistantNotify.post(context, AssistantNotify.ANSWERS, "Text", r.replaceFirstChar { it.uppercase() })
+    }
+}
+
+
+/**
+ * "Send right away": a text to a trusted contact goes 10 seconds after it's
+ * asked for, unless cancelled -- a notification (and a buzz on the Omi) says
+ * so, with Cancel. Scheduled as background work so it survives the app
+ * closing; Cancel removes the work before it runs.
+ */
+object AutoSend {
+    const val DELAY_S = 10L
+
+    fun start(c: Context, to: TextContact, text: String): String {
+        val id = (System.currentTimeMillis() % 100_000).toInt() + 600_000
+        val work = androidx.work.OneTimeWorkRequestBuilder<AutoSendWorker>()
+            .setInitialDelay(DELAY_S, java.util.concurrent.TimeUnit.SECONDS)
+            .setInputData(androidx.work.workDataOf("name" to to.name, "number" to to.number, "text" to text, "id" to id)).build()
+        androidx.work.WorkManager.getInstance(c).enqueueUniqueWork("autosend-$id", androidx.work.ExistingWorkPolicy.REPLACE, work)
+        AssistantNotify.ensureChannels(c)
+        val cancel = PendingIntent.getBroadcast(c, id, Intent(c, AutoSendCancel::class.java).putExtra("id", id), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val n = NotificationCompat.Builder(c, AssistantNotify.ANSWERS)
+            .setSmallIcon(R.drawable.ic_stat_mic)
+            .setContentTitle("Sending to ${to.name} in ${DELAY_S}s")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText("\u201c$text\u201d"))
+            .addAction(0, "Cancel", cancel)
+            .setTimeoutAfter((DELAY_S + 2) * 1000)
+            .build()
+        runCatching { c.getSystemService(NotificationManager::class.java).notify(id, n) }
+        net.boswell.phone.capture.CaptureService.buzz(c, 1)
+        return "sending to ${to.name} in $DELAY_S seconds unless they tap Cancel: \u201c$text\u201d (${to.name} is set to send right away)"
+    }
+}
+
+class AutoSendWorker(context: Context, params: androidx.work.WorkerParameters) : androidx.work.Worker(context, params) {
+    override fun doWork(): androidx.work.ListenableWorker.Result {
+        val d = inputData
+        val to = TextContact(d.getString("name") ?: return androidx.work.ListenableWorker.Result.failure(),
+            d.getString("number") ?: return androidx.work.ListenableWorker.Result.failure(), "auto")
+        val r = Texting.sendNow(applicationContext, to, d.getString("text") ?: return androidx.work.ListenableWorker.Result.failure())
+        applicationContext.getSystemService(NotificationManager::class.java).cancel(d.getInt("id", 0))
+        AssistantNotify.post(applicationContext, AssistantNotify.ANSWERS, "Text", r.replaceFirstChar { it.uppercase() })
+        return androidx.work.ListenableWorker.Result.success()
+    }
+}
+
+/** Cancel on a countdown: the text never goes. */
+class AutoSendCancel : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val id = intent.getIntExtra("id", 0)
+        androidx.work.WorkManager.getInstance(context).cancelUniqueWork("autosend-$id")
+        context.getSystemService(NotificationManager::class.java).cancel(id)
+        AssistantNotify.post(context, AssistantNotify.ANSWERS, "Text cancelled", "Nothing was sent.")
     }
 }

@@ -32,7 +32,7 @@ data class VoiceGroup(val key: Long, val voiceprints: Int, val seconds: Double, 
  *
  * Starts empty. Nothing is imported from the desktop.
  */
-class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", null, 5) {
+class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", null, 6) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""
@@ -40,7 +40,9 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
                 id      INTEGER PRIMARY KEY,
                 name    TEXT UNIQUE,              -- NULL = an unidentified recurring voice
                 kind    TEXT,
-                created REAL
+                created REAL,
+                contact TEXT,                     -- a phone contact's lookup URI, if linked
+                may_text TEXT                     -- off | ask | auto (send right away), for a linked contact
             )""")
         db.execSQL("""
             CREATE TABLE voiceprints (
@@ -83,6 +85,10 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         if (oldVersion < 3) db.execSQL(MERGES)
         if (oldVersion < 4) db.execSQL(REJECTIONS)
         if (oldVersion < 5) db.execSQL(ASSIGNED)
+        if (oldVersion < 6) {
+            db.execSQL("ALTER TABLE people ADD COLUMN contact TEXT")
+            db.execSQL("ALTER TABLE people ADD COLUMN may_text TEXT")
+        }
     }
 
     override fun onConfigure(db: SQLiteDatabase) = db.setForeignKeyConstraintsEnabled(true)
@@ -301,6 +307,28 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
             db.execSQL("DELETE FROM people WHERE id = ? AND name IS NULL", arrayOf<Any>(from))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
+    }
+
+    // ------------------------------------------------------------ contacts
+
+    data class Link(val personId: Long, val name: String?, val contact: String, val mayText: String)
+
+    fun link(personId: Long, contactUri: String?) {
+        writableDatabase.execSQL("UPDATE people SET contact = ? WHERE id = ?", arrayOf<Any?>(contactUri, personId))
+    }
+
+    fun setMayText(personId: Long, mode: String) {
+        writableDatabase.execSQL("UPDATE people SET may_text = ? WHERE id = ?", arrayOf<Any>(mode, personId))
+    }
+
+    fun linkOf(personId: Long): Link? = readableDatabase.rawQuery(
+        "SELECT id, name, contact, COALESCE(may_text, 'off') FROM people WHERE id = ? AND contact IS NOT NULL", arrayOf(personId.toString())).use { c ->
+        if (c.moveToFirst()) Link(c.getLong(0), c.str(1), c.getString(2), c.getString(3)) else null
+    }
+
+    fun links(): List<Link> = readableDatabase.rawQuery(
+        "SELECT id, name, contact, COALESCE(may_text, 'off') FROM people WHERE contact IS NOT NULL", null).use { c ->
+        buildList { while (c.moveToNext()) add(Link(c.getLong(0), c.str(1), c.getString(2), c.getString(3))) }
     }
 
     fun nameOf(personId: Long): String? = readableDatabase.rawQuery("SELECT name FROM people WHERE id = ?", arrayOf(personId.toString())).use { c ->
