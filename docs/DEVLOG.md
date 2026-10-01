@@ -288,3 +288,25 @@ warnings for the Omi and phone offer a switch to Sync mode when very low.
 - **Conversation cards** show only voices that said something: coughs and
   seconds of TV had their own unnameable "?" circles.
 
+## Milestone 7: moving in for real (2026-10-01)
+
+- **Backup and restore.** Device -> Storage -> Back up writes one zip:
+  recordings, transcripts, the people/voice, to-do, memory and assistant
+  databases (consistent copies via `VACUUM INTO`), and settings. Models are
+  left out (they download again) and the archive index rebuilds itself. API
+  keys are tied to the phone's keystore, so they're only included -- readable
+  -- when asked. Setup offers "Restore from a backup", which stages the whole
+  file before swapping anything, then restarts into setup at Permissions.
+  Two bugs found by doing it for real: a restored Live mode started the
+  connected-device service before Bluetooth permission existed (Android
+  refuses, so the app crashed), and the restored API key was saved
+  asynchronously just before the restart and lost.
+- **R8** for releases: 90 -> 63 MB. Keep rules for sherpa-onnx and ONNX
+  Runtime (their JNI finds classes and fields by name) and JavaMail (it finds
+  its providers by name). Verified on the phone: transcription, voices, sound
+  tags and the assistant all work in the shrunk build.
+- **Email** for the assistant over IMAP/SMTP with an app password, so it
+  works with Gmail, Outlook, iCloud, Yahoo and Fastmail without a Google
+  Cloud project of our own. The inbox is opened read-only, so reading never
+  marks mail as read; sending is held for confirmation like texts.
+

@@ -72,6 +72,11 @@ class DebugReceiver : BroadcastReceiver() {
                     net.boswell.phone.assistant.Texting.contacts(context) + net.boswell.phone.assistant.TextContact(n, num))
                 android.util.Log.i("Boswell", "texting: on, contacts ${net.boswell.phone.assistant.Texting.contacts(context)}, read ${net.boswell.phone.assistant.Texting.canRead(context)}, send ${net.boswell.phone.assistant.Texting.canSend(context)}")
             }
+            // am broadcast -a net.boswell.phone.debug.DEMO   (a made-up day for screenshots; refuses if recordings exist)
+            "net.boswell.phone.debug.DEMO" -> {
+                val pending = goAsync()
+                Thread { try { android.util.Log.i("Boswell", DemoData.seed(context)) } finally { pending.finish() } }.start()
+            }
             // am broadcast -a net.boswell.phone.debug.LED --ei pct 30   (the Omi's light, as the Device slider sets it)
             "net.boswell.phone.debug.LED" -> {
                 context.getSharedPreferences("boswell", Context.MODE_PRIVATE).edit().putInt("led_brightness", intent.getIntExtra("pct", 50)).apply()

@@ -81,6 +81,9 @@
         <receiver
             android:name=".assistant.TextSendReceiver"
             android:exported="false" />
+        <receiver
+            android:name=".assistant.EmailSendReceiver"
+            android:exported="false" />
 
         <receiver
             android:name=".assistant.AlarmReceiver"

@@ -74,6 +74,7 @@ Answers cite the moment, and **▶ plays it**. It can:
 |---|---|
 | 📅 To-dos, reminders and calendar events | 🔎 Search everything that was said |
 | ⏱️ Timers and alarms (rings the phone, buzzes the Omi) | 💬 Read and send texts — only with people you choose, only when you confirm |
+| ✉️ Read your inbox and send email — each one only after you confirm | 🗓️ What's on your calendar |
 | 🧠 Remember facts about people | 📊 Who you talked with most, and for how long |
 | 🌐 Look things up on the web | 📒 Quick logs — medication, expenses, parking |
 | ☎️ Pull out numbers, emails, addresses that were said | 📝 Meeting notes: summary, decisions, action items |
@@ -81,6 +82,10 @@ Answers cite the moment, and **▶ plays it**. It can:
 And it works in the background: a **morning brief**, an **evening recap**, **promises
 noticed** in what was said (yours and others') filed as to-dos, and a **brief before each
 meeting** from what was last said with those people.
+
+### 💾 Yours to keep
+**Back up** everything — recordings, transcripts, people and their voices, to-dos,
+what the assistant remembers — to one file, and **restore** it in setup on a new phone.
 
 ### 🔒 Private by default
 Everything is recorded, transcribed, identified and stored **on the phone**. Nothing
@@ -133,6 +138,7 @@ Every number below came from a script in [`tools/`](tools) run against real reco
 | End of a spoken question | **0.8–1.6 s** after the last word (speech model, not loudness) |
 | Model download | **682 → 468 MB** for the recognizer, gzip-verified on the phone |
 | Downloaded audio frames | **815 → 0** undecodable, after finding an off-by-one in the Omi's firmware |
+| App download | **90 → 63 MB** with R8; the rest is the on-device speech engine |
 
 The full story — including the dead ends — is in [`docs/DEVLOG.md`](docs/DEVLOG.md).
 
@@ -144,7 +150,7 @@ assistant or cloud transcription — an [OpenRouter](https://openrouter.ai) API 
 ### Install
 
 **[⬇ Download the latest APK](https://github.com/leakydata/boswell-phone/releases)**
-(about 90 MB), open it on your phone, and allow installing from your browser or file
+(about 63 MB), open it on your phone, and allow installing from your browser or file
 manager when Android asks. Play Protect may warn about an app it hasn't seen before;
 choose *Install anyway*. Updates install over the top, keeping your data.
 
@@ -152,7 +158,7 @@ Or build it yourself (see [Building](#building)).
 
 ### First run
 
-1. Open Boswell and follow the setup: permissions,
+1. Open Boswell and follow the setup (or **restore a backup** from another phone): permissions,
    find your Omi, choose Live or Sync, download the models (~510 MB, once), read a short
    passage so it learns your voice, and optionally add your OpenRouter key.
 2. **Wear the Omi.** Conversations show up on **Today**; name the voices you know in
@@ -207,7 +213,7 @@ docs/          DEVLOG · OMI-PROTOCOL · LESSONS · REFERENCE-CODEBASE
 
 ## Roadmap
 
-- Email (reading needs Google sign-in), more wearables, a desktop ↔ phone merge
+- More wearables, and a desktop ↔ phone merge
 - On-device Parakeet, once its contextual biasing works reliably in sherpa-onnx
 
 ## Credits

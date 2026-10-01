@@ -62,7 +62,7 @@ class CaptureService : LifecycleService() {
             val address = net.boswell.phone.sync.Modes.address(this)
             if (net.boswell.phone.sync.Modes.mode(this) == net.boswell.phone.sync.Mode.LIVE && address != null) {
                 CaptureRepository.log("restarted after the app was stopped")
-                goForeground("Connecting to Omi…")
+                if (!goForeground("Connecting to Omi…")) return START_NOT_STICKY
                 startCapture(address)
                 return START_STICKY
             }
@@ -72,7 +72,7 @@ class CaptureService : LifecycleService() {
         when (intent.action) {
             ACTION_START -> {
                 val address = intent.getStringExtra(EXTRA_ADDRESS) ?: return START_NOT_STICKY
-                goForeground("Connecting to Omi…")
+                if (!goForeground("Connecting to Omi…")) return START_NOT_STICKY
                 startCapture(address)
                 return START_STICKY       // live: come back if the process dies
             }
@@ -87,19 +87,27 @@ class CaptureService : LifecycleService() {
             }
             ACTION_SYNC -> {
                 val address = intent.getStringExtra(EXTRA_ADDRESS) ?: return START_NOT_STICKY
-                goForeground("Syncing with Omi…")
+                if (!goForeground("Syncing with Omi…")) return START_NOT_STICKY
                 startSync(address)
             }
         }
         return START_NOT_STICKY
     }
 
-    private fun goForeground(text: String) {
+    /** False (and the service stops) when Android won't allow it: Bluetooth permission not granted yet. */
+    private fun goForeground(text: String): Boolean {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL, "Recording", NotificationManager.IMPORTANCE_LOW)
         )
-        startForeground(NOTIFICATION_ID, notification(text), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        return try {
+            startForeground(NOTIFICATION_ID, notification(text), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+            true
+        } catch (e: SecurityException) {
+            CaptureRepository.log("can't connect to the Omi yet: Bluetooth permission not granted")
+            stopSelf()
+            false
+        }
     }
 
     private fun notification(text: String): Notification =
@@ -745,21 +753,29 @@ class CaptureService : LifecycleService() {
 
         fun clipsDir(context: Context) = File(context.filesDir, "clips").apply { mkdirs() }
 
-        fun start(context: Context, address: String) =
+        /** Bluetooth permission, without which Android refuses the connected-device service (e.g. right after a restore). */
+        fun allowed(context: Context) = ContextCompat.checkSelfPermission(context, android.Manifest.permission.BLUETOOTH_CONNECT) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        fun start(context: Context, address: String) {
+            if (!allowed(context)) { CaptureRepository.log("not connecting yet: Bluetooth permission not granted"); return }
             ContextCompat.startForegroundService(
                 context,
                 Intent(context, CaptureService::class.java).setAction(ACTION_START).putExtra(EXTRA_ADDRESS, address),
             )
+        }
 
         fun stop(context: Context) =
             context.startService(Intent(context, CaptureService::class.java).setAction(ACTION_STOP))
 
         /** One sync visit: download the backlog, then let the device go. */
-        fun sync(context: Context, address: String) =
+        fun sync(context: Context, address: String) {
+            if (!allowed(context)) { CaptureRepository.log("not syncing yet: Bluetooth permission not granted"); return }
             ContextCompat.startForegroundService(
                 context,
                 Intent(context, CaptureService::class.java).setAction(ACTION_SYNC).putExtra(EXTRA_ADDRESS, address),
             )
+        }
 
         fun spoolDir(context: Context) = File(context.filesDir, "omi_spool").apply { mkdirs() }
 

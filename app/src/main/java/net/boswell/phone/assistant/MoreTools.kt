@@ -1,6 +1,7 @@
 package net.boswell.phone.assistant
 
 import android.content.Context
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
@@ -52,11 +53,19 @@ class MoreTools(private val context: Context, private val userWords: String? = n
         Llm.tool("send_text", "Text one of the user's chosen contacts. Usually held until the user confirms (taps Send, or says yes); contacts they set to 'send right away' go after a 10-second chance to cancel. Report exactly what the result says.",
             mapOf("to" to ("string" to "contact name or number"), "text" to ("string" to "the message")), listOf("to", "text")),
         Llm.tool("confirm_send", "Send the text held by send_text, only when the user has just said to send it (yes / send it / go ahead).", emptyMap()),
+        Llm.tool("read_email", "The user's email inbox (if they set email up): newest first, with sender, subject and opening text. Reading never marks anything as read.",
+            mapOf("query" to ("string" to "words in the subject or body (optional)"), "from" to ("string" to "a sender's name or address (optional)"),
+                "unread_only" to ("boolean" to "only unread (optional)"), "days" to ("integer" to "only the last N days (optional)"),
+                "limit" to ("integer" to "how many, default 5, at most 15"))),
+        Llm.tool("send_email", "Email someone from the user's account. Always held until the user confirms (taps Send, or says yes). Report exactly what the result says.",
+            mapOf("to" to ("string" to "a name from their contacts, or an email address"), "subject" to ("string" to "subject line"),
+                "text" to ("string" to "the email body, signed as the user would")), listOf("to", "subject", "text")),
+        Llm.tool("confirm_email", "Send the email held by send_email, only when the user has just said to send it (yes / send it / go ahead).", emptyMap()),
         Llm.tool("calendar_events", "The user's calendar events over a range of days (all their visible calendars).",
             mapOf("date" to ("string" to "first day, YYYY-MM-DD or 'today' / 'tomorrow'"), "days" to ("integer" to "how many days, default 1"))),
     )
 
-    val names = setOf("find_details", "talk_stats", "remember_fact", "facts_about", "set_timer", "set_alarm", "draft_message", "web_search", "log_entry", "read_log", "calendar_events", "read_texts", "send_text", "confirm_send")
+    val names = setOf("find_details", "talk_stats", "remember_fact", "facts_about", "set_timer", "set_alarm", "draft_message", "web_search", "log_entry", "read_log", "calendar_events", "read_texts", "send_text", "confirm_send", "read_email", "send_email", "confirm_email")
 
     fun run(name: String, args: JsonObject, archive: Archive, speakers: SpeakerStore): String {
         fun str(k: String) = args[k]?.jsonPrimitive?.contentOrNull
@@ -94,6 +103,10 @@ class MoreTools(private val context: Context, private val userWords: String? = n
             "read_texts" -> Texting.read(context, str("contact"), int("hours")?.coerceIn(1, 24 * 365))
             "send_text" -> Texting.prepare(context, str("to") ?: return "missing recipient", str("text") ?: return "missing text", direct = userWords != null)
             "confirm_send" -> Texting.confirm(context, userWords)
+            "read_email" -> Email.read(context, str("query"), str("from"), args["unread_only"]?.jsonPrimitive?.booleanOrNull == true,
+                int("days")?.coerceIn(1, 365), (int("limit") ?: 5).coerceIn(1, 15))
+            "send_email" -> Email.prepare(context, str("to") ?: return "missing recipient", str("subject") ?: "", str("text") ?: return "missing text")
+            "confirm_email" -> Email.confirm(context, userWords)
             "calendar_events" -> {
                 val first = when (val d = str("date")?.lowercase()) {
                     null, "today" -> java.time.LocalDate.now(); "tomorrow" -> java.time.LocalDate.now().plusDays(1)

@@ -52,10 +52,11 @@ android {
             versionNameSuffix = "-debug"
         }
         release {
-            // Off for now: the size is the speech engine's native libraries, which
-            // R8 can't shrink, and keep rules for sherpa-onnx's JNI would need
-            // testing on a device first.
-            isMinifyEnabled = false
+            // R8: the app's own code and libraries were 32 MB of uncompressed dex.
+            // Keep rules for the native engines' JNI are in proguard-rules.pro.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.findByName("release")
         }
     }
@@ -71,6 +72,8 @@ android {
     // libonnxruntime.so, which would collide with onnxruntime-android's.
     packaging {
         jniLibs { excludes += listOf("lib/x86/**", "lib/x86_64/**", "lib/armeabi-v7a/**") }
+        // The mail libraries each carry the same license notices.
+        resources { pickFirsts += listOf("META-INF/NOTICE.md", "META-INF/LICENSE.md") }
     }
 
     testOptions { unitTests.isReturnDefaultValues = true }
@@ -126,6 +129,9 @@ dependencies {
     implementation(libs.androidx.work.runtime)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.media3.exoplayer)
+    // Email over IMAP/SMTP with an app password (any provider, no Google project needed).
+    implementation(libs.android.mail)
+    implementation(libs.android.activation)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

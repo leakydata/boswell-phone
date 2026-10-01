@@ -23,6 +23,7 @@
                 <action android:name="net.boswell.phone.debug.LIFE_DELETE" />
                 <action android:name="net.boswell.phone.debug.BUDGET" />
                 <action android:name="net.boswell.phone.debug.LED" />
+                <action android:name="net.boswell.phone.debug.DEMO" />
                 <action android:name="net.boswell.phone.debug.TEXTING" />
                 <action android:name="net.boswell.phone.debug.RECHECK" />
                 <action android:name="net.boswell.phone.debug.CLOUD_REDO" />

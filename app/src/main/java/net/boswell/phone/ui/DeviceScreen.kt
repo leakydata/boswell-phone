@@ -19,6 +19,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -40,6 +42,8 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -288,6 +292,7 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                     Switch(checked = cloudQ, onCheckedChange = { cloudQ = it; net.boswell.phone.assistant.AssistantPrefs.setCloudQuestions(ctx2, it) })
                 }
                 AssistantRoutines()
+                EmailSettings()
                 Text("Texting, contacts and what's remembered about people are in People.", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable(onClick = onTriggers)) {
@@ -503,6 +508,7 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                         net.boswell.phone.process.ProcessingWorker.enqueue(ctx)
                     })
                 }
+                BackupRow()
                 Text("Delete the sound of quiet clips", style = MaterialTheme.typography.bodyLarge)
                 Text("Clips with no speech where only background was heard. The day's timeline keeps them; only the sound goes. " +
                     "Clips with speech are kept compressed, about a tenth of their original size.",
@@ -626,3 +632,99 @@ private fun AssistantRoutines() {
     Toggle("Look things up on the web", "Weather, news, facts and opening hours, when you ask. A few cents a search at most.", web) { web = it; P.setWebSearch(ctx, it) }
 
 }
+
+/**
+ * Back up everything to one file the person chooses where to keep. Restoring
+ * is offered in setup, on a new phone or a fresh install.
+ */
+@Composable
+private fun BackupRow() {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var withKeys by remember { mutableStateOf(false) }
+    var progress by remember { mutableStateOf<Float?>(null) }
+    var result by remember { mutableStateOf<String?>(null) }
+    val create = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        progress = 0f; result = null
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            result = runCatching { net.boswell.phone.backup.Backup.export(ctx, uri, withKeys) { progress = it } }
+                .fold({ "Backed up ${it.recordings} recordings (${Fmt.bytes(it.bytes)})." + if (it.keys) " Your API key is in it: keep the file private." else "" },
+                    { "The backup didn't finish: ${it.message}" })
+            progress = null
+        }
+    }
+    Text("Back up", style = MaterialTheme.typography.bodyLarge)
+    Text("Recordings, transcripts, people and voices, to-dos, what the assistant remembers, and settings, in one file. " +
+        "Restore it from setup on a new phone. The models aren't included; they download again.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Checkbox(checked = withKeys, onCheckedChange = { withKeys = it })
+        Text("Include my API key (readable by anyone with the file)", style = MaterialTheme.typography.bodyMedium)
+    }
+    val p = progress
+    if (p != null) LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth())
+    else OutlinedButton(onClick = { create.launch(net.boswell.phone.backup.Backup.suggestedName()) }) { Text("Back up…") }
+    result?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+}
+
+/**
+ * Email for the assistant: an address and an app password, servers filled in
+ * for the common providers (editable under "Servers"). Checked by signing in
+ * before it's kept.
+ */
+@Composable
+private fun EmailSettings() {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var saved by remember { mutableStateOf(net.boswell.phone.assistant.Email.account(ctx)?.takeIf { net.boswell.phone.assistant.Email.configured(ctx) }) }
+    var address by remember { mutableStateOf(saved?.address ?: "") }
+    var password by remember { mutableStateOf("") }
+    var servers by remember { mutableStateOf(false) }
+    var imap by remember { mutableStateOf(saved?.let { "${it.imapHost}:${it.imapPort}" } ?: "") }
+    var smtp by remember { mutableStateOf(saved?.let { "${it.smtpHost}:${it.smtpPort}" } ?: "") }
+    var checking by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    Text("Email", style = MaterialTheme.typography.bodyLarge)
+    val s = saved
+    if (s != null) {
+        Text("${s.address} · the assistant can read your inbox, and send email after you confirm each one.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        TextButton(onClick = { net.boswell.phone.assistant.Email.forget(ctx); saved = null; password = ""; message = null }) { Text("Turn off email") }
+        return
+    }
+    Text("Let the assistant read your inbox and send email (only after you confirm each one). Uses an app password, never your main one.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    OutlinedTextField(value = address, onValueChange = {
+        address = it.trim()
+        if (address.contains('@')) net.boswell.phone.assistant.Email.guess(address).let { g -> imap = "${g.imapHost}:${g.imapPort}"; smtp = "${g.smtpHost}:${g.smtpPort}" }
+    }, label = { Text("Email address") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Email))
+    OutlinedTextField(value = password, onValueChange = { password = it }, label = { Text("App password") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Password))
+    if (address.contains('@')) Text(net.boswell.phone.assistant.Email.appPasswordHelp(address), style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+    TextButton(onClick = { servers = !servers }) { Text(if (servers) "Hide servers" else "Servers") }
+    if (servers) {
+        OutlinedTextField(value = imap, onValueChange = { imap = it.trim() }, label = { Text("Incoming (IMAP) host:port") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(value = smtp, onValueChange = { smtp = it.trim() }, label = { Text("Outgoing (SMTP) host:port") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    }
+    if (checking) LinearProgressIndicator(Modifier.fillMaxWidth())
+    else Button(enabled = address.contains('@') && password.isNotBlank(), onClick = {
+        checking = true; message = null
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val g = net.boswell.phone.assistant.Email.guess(address)
+            fun hp(v: String, h: String, p: Int) = v.substringBefore(':').ifBlank { h } to (v.substringAfter(':', "").toIntOrNull() ?: p)
+            val (ih, ip) = hp(imap, g.imapHost, g.imapPort); val (sh, sp) = hp(smtp, g.smtpHost, g.smtpPort)
+            val a = net.boswell.phone.assistant.Email.Account(address, ih, ip, sh, sp)
+            net.boswell.phone.assistant.Email.save(ctx, a, password)
+            val problem = net.boswell.phone.assistant.Email.test(ctx)
+            if (problem == null) { saved = a; password = "" } else { net.boswell.phone.assistant.Email.forget(ctx); message = problem }
+            checking = false
+        }
+    }) { Text("Sign in") }
+    message?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+}
+

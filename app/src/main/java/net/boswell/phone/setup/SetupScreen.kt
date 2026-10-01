@@ -82,8 +82,9 @@ private const val PASSAGE = "The morning light came through the kitchen window w
  */
 @Composable
 fun SetupScreen(vm: MainViewModel, onPair: () -> Unit, onFinish: () -> Unit, voiceOnly: Boolean = false) {
-    var step by rememberSaveable { mutableStateOf(if (voiceOnly) Step.YOU else Step.WELCOME) }
     val ctx0 = LocalContext.current
+    // After restoring a backup the app restarts into setup, past the welcome.
+    var step by rememberSaveable { mutableStateOf(if (voiceOnly) Step.YOU else if (net.boswell.phone.backup.Backup.wasRestored(ctx0)) Step.PERMISSIONS else Step.WELCOME) }
     var name by rememberSaveable { mutableStateOf(net.boswell.phone.assistant.AssistantPrefs.owner(ctx0)
         ?.let { net.boswell.phone.speakers.SpeakerStore(ctx0).let { s -> try { s.nameOf(it) } finally { s.close() } } } ?: "") }
     val ui by vm.ui.collectAsStateWithLifecycle()
@@ -107,6 +108,7 @@ fun SetupScreen(vm: MainViewModel, onPair: () -> Unit, onFinish: () -> Unit, voi
                         Body("Boswell turns what your Omi hears into a record of your day: conversations, who said what, and the things you said you'd do.")
                         Body("Transcribing, recognizing voices and sorting it all happens on this phone. Nothing is sent anywhere unless you switch on the assistant (text only) or cloud transcription later.")
                         Body("Setup takes a couple of minutes. Every step can be skipped and changed later.")
+                        RestoreCard()
                     }
                     Step.PERMISSIONS -> Permissions()
                     Step.OMI -> {
@@ -160,7 +162,14 @@ fun SetupScreen(vm: MainViewModel, onPair: () -> Unit, onFinish: () -> Unit, voi
                 if (step in listOf(Step.OMI, Step.MODELS, Step.YOU, Step.ASSISTANT, Step.BUTTON, Step.BACKGROUND)) TextButton(onClick = ::next) { Text("Skip") }
                 Spacer(Modifier.width(8.dp))
                 Button(onClick = {
-                    if (step == Step.DONE) { Setup.setDone(ctx, true); onFinish() } else next()
+                    if (step == Step.DONE) {
+                        Setup.setDone(ctx, true)
+                        net.boswell.phone.backup.Backup.afterRestore(ctx)
+                        // Start the chosen mode now that permissions are in: a restored Live
+                        // was never tapped, so nothing else would start it until a restart.
+                        vm.setMode(ui.mode)
+                        onFinish()
+                    } else next()
                 }) { Text(when {
                     step == Step.WELCOME -> "Get started"
                     step == Step.DONE -> "Open Boswell"
@@ -259,7 +268,9 @@ private fun You(vm: MainViewModel, mode: Mode, streaming: Boolean, hasOmi: Boole
     val scope = rememberCoroutineScope()
     val en by Enrollment.state.collectAsStateWithLifecycle()
     var result by remember { mutableStateOf<String?>(null) }
-    var enrolled by rememberSaveable { mutableStateOf(false) }
+    // A restored backup brings your voice with it.
+    var enrolled by rememberSaveable { mutableStateOf(net.boswell.phone.backup.Backup.wasRestored(ctx) &&
+        net.boswell.phone.assistant.AssistantPrefs.owner(ctx) != null) }
     val chosenMode = remember { mode }
     Title("Who are you?")
     Body("Boswell names the voices it knows. Tell it yours and read a short passage so it recognizes you, and so the assistant knows which voice is you.")
@@ -417,3 +428,53 @@ private fun Assistant() {
     }
     Spacer(Modifier.height(4.dp))
 }
+
+/** "Moving from another phone?": pick a backup, see what's in it, restore, restart. */
+@Composable
+private fun RestoreCard() {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var picked by remember { mutableStateOf<android.net.Uri?>(null) }
+    var info by remember { mutableStateOf<net.boswell.phone.backup.Backup.Summary?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var progress by remember { mutableStateOf<Float?>(null) }
+    val open = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        picked = uri; error = null
+        info = net.boswell.phone.backup.Backup.peek(ctx, uri)
+        if (info == null) error = "That file isn't a Boswell backup."
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Moving from another phone?", fontWeight = FontWeight.SemiBold)
+            val i = info
+            when {
+                progress != null -> {
+                    Text("Restoring… Boswell will restart when it's done.")
+                    LinearProgressIndicator(progress = { progress ?: 0f }, modifier = Modifier.fillMaxWidth())
+                }
+                i != null -> {
+                    Text("Backup from ${Fmt.day(java.time.Instant.ofEpochSecond(i.created).atZone(java.time.ZoneId.systemDefault()).toLocalDate())}: ${i.recordings} recordings" +
+                        if (i.keys) ", with your API key." else ".", style = MaterialTheme.typography.bodyMedium)
+                    Text("This replaces anything already in Boswell on this phone.", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Button(onClick = {
+                        progress = 0f
+                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                            runCatching { net.boswell.phone.backup.Backup.restore(ctx, picked!!) { progress = it } }
+                                .onSuccess { net.boswell.phone.backup.Backup.restart(ctx) }
+                                .onFailure { error = it.message ?: "The restore didn't finish."; progress = null }
+                        }
+                    }) { Text("Restore") }
+                }
+                else -> {
+                    Text("Restore a Boswell backup (Device → Storage → Back up) to bring your recordings, people and voices with you.",
+                        style = MaterialTheme.typography.bodyMedium)
+                    OutlinedButton(onClick = { open.launch(arrayOf("*/*")) /* a zip filter makes the picker treat .zip as a folder; peek() checks the file */ }) { Text("Restore from a backup") }
+                }
+            }
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        }
+    }
+}
+

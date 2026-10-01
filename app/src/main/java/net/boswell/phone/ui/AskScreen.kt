@@ -123,7 +123,7 @@ fun AskScreen(pad: PaddingValues, onSetup: () -> Unit, onUsage: () -> Unit = {},
             }
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(value = q, onValueChange = { q = it }, placeholder = { Text("What did we decide about…") },
+            OutlinedTextField(value = q, onValueChange = { q = it }, placeholder = { Text(if (s.ready) "What did we decide about…" else "Add an API key (Device → Assistant) to ask") },
                 modifier = Modifier.weight(1f), maxLines = 4, enabled = s.ready)
             Spacer(Modifier.width(8.dp))
             FilledIconButton(onClick = { vm.ask(q.trim()); q = "" }, enabled = s.ready && q.isNotBlank() && !s.thinking) {
