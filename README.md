@@ -232,3 +232,36 @@ day, not for operating a pipeline.
   something new, and speaks up rarely. It has its own daily budget ($0.50 by
   default, adjustable).
 - Answers are notifications. Spoken answers are a toggle, off by default.
+
+## Milestone 5: transcription, voices and syncing, refined (2026-09-30)
+
+**Transcription.** On the phone by default (Nemotron 3.5 ASR, int8): the
+best of the on-device models measured (`tools/phone_vs_cloud.py`,
+`tools/parakeet_local.py`). Optional cloud transcription with Parakeet v3
+through OpenRouter (Device -> Transcription): it read best of six engines
+tested on real Omi clips, about $0.09 per hour of speech. Only clips that
+pass the speech check are sent; who spoke and who they are is always
+worked out on the phone; a daily limit, and any failure falls back to the
+phone. Recordings -> select -> More -> Redo in the cloud does it per clip,
+and Compare with the cloud reports how the two differ, word by word.
+
+- A segmentation-only **speech check** (~0.6 s) skips the recognizer for
+  clips nobody speaks in: 49 of 51 empty clips caught, none with words missed.
+- Clips heard live are transcribed first and newest first; a big download
+  from the Omi waits for the phone's charger.
+- **Words Boswell should know**: names in People, Omi, Boswell and your own
+  words are fixed when the transcript nearly gets them ("omi", "Bozwell").
+  Conservative by design; corrected lines keep what was heard.
+- Models download compressed (the recognizer: 468 MB instead of 682 MB) and
+  are verified after unpacking.
+
+**Voices.** Every transcript keeps its voiceprints, so past recordings are
+matched again whenever Boswell learns a voice (naming, review answers,
+"Not them", reading the passage). People -> Review asks about voices close
+to someone known ("Is this you?"), plays only that voice's parts, and
+remembers each No.
+
+**Syncing.** In Live mode, the Omi's stored backlog is collected when it goes
+on its charger (setting, on by default), and the Omi's clock is set on every
+connection: without a valid clock its firmware stores nothing. Battery
+warnings for the Omi and phone offer a switch to Sync mode when very low.

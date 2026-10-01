@@ -122,6 +122,9 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
     private fun verdictFor(hasSpeech: Boolean, tags: List<net.boswell.phone.sound.SoundTag>): String =
         if (hasSpeech || net.boswell.phone.sound.Sounds.verdict(tags) == net.boswell.phone.sound.Sounds.Verdict.KEEP) "keep" else "empty"
 
+    /** Words Boswell should know, read once per run (names change rarely). */
+    private val vocabulary by lazy { runCatching { net.boswell.phone.asr.Vocabulary.all(applicationContext) }.getOrDefault(emptyList()) }
+
     private fun process(wav: File, asr: LocalAsr, diarizer: net.boswell.phone.diarize.Diarizer, store: SpeakerStore, out: File,
                         tagger: net.boswell.phone.sound.SoundTagger?) {
         val t0 = System.currentTimeMillis()
@@ -137,9 +140,15 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
             return
         }
         val cloud = cloudWords(wav)
-        val words = cloud ?: asr.transcribe(audio)
+        val heard = cloud ?: asr.transcribe(audio)
+        val words = net.boswell.phone.asr.Vocabulary.apply(heard, vocabulary)
         val d = diarizer.run(audio)
-        val segments = Lines.build(words, d.turns)
+        // A line the vocabulary changed keeps what was heard, as a hand edit does (and can be restored the same way).
+        val segments = Lines.build(words, d.turns).map { seg ->
+            if (words === heard) seg
+            else heard.filter { (it.start + it.end) / 2 in seg.start..seg.end }.joinToString(" ") { it.text }
+                .let { h -> if (h.isNotBlank() && h != seg.text) seg.copy(original = h) else seg }
+        }
         val tags = tagger?.tag(audio)
 
         val speakers = LinkedHashMap<String, SpeakerId>()

@@ -180,7 +180,7 @@ private fun Bubble(line: LineRow, v: Voice?, header: Boolean, playing: Boolean, 
         ) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 9.dp)) {
                 Text(line.text, style = MaterialTheme.typography.bodyLarge)
-                if (edited) Text("edited", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (edited) Text("corrected", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

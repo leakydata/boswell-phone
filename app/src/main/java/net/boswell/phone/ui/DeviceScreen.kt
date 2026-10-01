@@ -4,6 +4,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -387,6 +389,18 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                     }
                 }
                 if (hasKey) Text("Spent on cloud transcription today: $%.3f".format(spent), style = MaterialTheme.typography.bodySmall)
+                var vocabOpen by remember { mutableStateOf(false) }
+                var vocabCount by remember { mutableStateOf(net.boswell.phone.asr.Vocabulary.custom(tctx).size) }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { vocabOpen = true }) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Words Boswell should know", style = MaterialTheme.typography.bodyLarge)
+                        Text("Names and terms it should spell right: everyone in People, Omi and Boswell" +
+                            if (vocabCount > 0) ", and $vocabCount of your own" else "",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Text("Edit", color = MaterialTheme.colorScheme.primary)
+                }
+                if (vocabOpen) VocabularyDialog(onDismiss = { vocabOpen = false; vocabCount = net.boswell.phone.asr.Vocabulary.custom(tctx).size })
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable(onClick = onCompare)) {
                     Column(Modifier.weight(1f)) {
                         Text("Compare with the cloud", style = MaterialTheme.typography.bodyLarge)
@@ -490,4 +504,42 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
             dismissButton = { TextButton(onClick = { confirmClean = false }) { Text("Keep") } },
         )
     }
+}
+
+/**
+ * The words list: what's automatic (built in, People) shown for reference,
+ * and the person's own words, added and removed here.
+ */
+@Composable
+private fun VocabularyDialog(onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    var mine by remember { mutableStateOf(net.boswell.phone.asr.Vocabulary.custom(ctx)) }
+    var adding by remember { mutableStateOf("") }
+    val auto = remember { net.boswell.phone.asr.Vocabulary.all(ctx).filter { a -> mine.none { it.equals(a, true) } } }
+    fun save(list: List<String>) { mine = list; net.boswell.phone.asr.Vocabulary.setCustom(ctx, list) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+        title = { Text("Words Boswell should know") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("When the transcript nearly gets one of these (\"omi\", \"bos well\"), it's fixed. Common words that only sound alike are never changed, and a corrected line can be restored.",
+                    style = MaterialTheme.typography.bodySmall)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.material3.OutlinedTextField(value = adding, onValueChange = { adding = it }, singleLine = true,
+                        placeholder = { Text("A name or word") }, modifier = Modifier.weight(1f))
+                    TextButton(enabled = adding.trim().length >= 3, onClick = { save(mine + adding.trim()); adding = "" }) { Text("Add") }
+                }
+                for (w in mine) Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(w, Modifier.weight(1f))
+                    TextButton(onClick = { save(mine - w) }) { Text("Remove") }
+                }
+                if (auto.isNotEmpty()) {
+                    Text("Always included", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp))
+                    Text(auto.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text("Applies to new transcripts.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+    )
 }
