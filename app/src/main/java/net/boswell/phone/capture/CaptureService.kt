@@ -234,8 +234,7 @@ class CaptureService : LifecycleService() {
         // The button, on the connection that is already open. Never fatal: the
         // desktop's BlueZ refused this subscription on every attempt, and a
         // recorder that streams but cannot report its button is still a recorder.
-        val buttonOk = conn.has(OmiUuids.BUTTON) && runCatching { conn.enableNotifications(OmiUuids.BUTTON) }
-            .onFailure { CaptureRepository.log("button: ${it.message}") }.isSuccess
+        val buttonOk = subscribeButton(conn)
         CaptureRepository.update { it.copy(buttonReady = buttonOk) }
         if (buttonOk) CaptureRepository.log("button ready: tap to ask")
         val began = System.currentTimeMillis()
@@ -282,6 +281,9 @@ class CaptureService : LifecycleService() {
                     val ok = runCatching { readVolatile(conn, strict = true) }.isSuccess
                     failedChecks = if (ok) 0 else failedChecks + 1
                     if (failedChecks >= 2) throw IllegalStateException("device stopped answering")
+                    if (ok && CaptureRepository.state.value.buttonReady == false && conn.has(OmiUuids.BUTTON)) {
+                        if (subscribeButton(conn, tries = 1)) CaptureRepository.update { it.copy(buttonReady = true) }
+                    }
                     if (ok && question == null) checkCharger()
                 }
                 if (tick % net.boswell.phone.assistant.Watcher.EVERY_SECONDS == 0 && watching?.isActive != true) {
@@ -388,6 +390,22 @@ class CaptureService : LifecycleService() {
             }
             CaptureRepository.update { it.copy(asking = null) }
         }
+    }
+
+    /**
+     * Subscribe to the button, trying again on a weak link (one timeout left the
+     * button dead for a whole session). Called again at each link check while
+     * it hasn't taken.
+     */
+    private suspend fun subscribeButton(conn: OmiConnection, tries: Int = 3): Boolean {
+        if (!conn.has(OmiUuids.BUTTON)) return false
+        repeat(tries) { i ->
+            val r = runCatching { conn.enableNotifications(OmiUuids.BUTTON) }
+            if (r.isSuccess) { if (i > 0) CaptureRepository.log("button ready (try ${i + 1})"); return true }
+            CaptureRepository.log("button: ${r.exceptionOrNull()?.message}")
+            delay(500)
+        }
+        return false
     }
 
     private suspend fun readText(conn: OmiConnection, uuid: java.util.UUID): String? =
@@ -517,9 +535,13 @@ class CaptureService : LifecycleService() {
 
     private class OnCharger : Exception("on the charger")
 
+    /** Charging readings in a row: one reading alone never starts a download (a garbled one once did, mid-wear). */
+    private var chargingSeen = 0
+
     private fun checkCharger() {
         val charging = CaptureRepository.state.value.charging?.value ?: return
-        if (!charging) { drainedThisCharge = false; drainRetryAt = 0L; return }
+        if (!charging) { chargingSeen = 0; drainedThisCharge = false; drainRetryAt = 0L; return }
+        if (++chargingSeen < 2) return
         if (!drainedThisCharge && System.currentTimeMillis() >= drainRetryAt &&
             net.boswell.phone.sync.Modes.syncOnCharger(this)) throw OnCharger()
     }

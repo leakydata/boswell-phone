@@ -42,7 +42,15 @@ class OmiConnection(
     private val onButton: (Int) -> Unit = {},
 ) {
     private val opLock = Mutex()
-    @Volatile private var pending: CompletableDeferred<Any?>? = null
+    /**
+     * The operation in flight and the reply it is waiting for ("read <uuid>",
+     * "mtu", ...). A reply that arrives after its own operation timed out
+     * must not complete the next one: on a weak link it did, and every read
+     * after it answered the question before -- the firmware version came back
+     * as the model name, and a stray byte read as "charging".
+     */
+    private class Pending(val expects: String, val d: CompletableDeferred<Any?>)
+    @Volatile private var pending: Pending? = null
     private val connected = CompletableDeferred<Unit>()
     private var gatt: BluetoothGatt? = null
     private var storageNotifying = false
@@ -65,31 +73,31 @@ class OmiConnection(
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 val e = GattException("disconnected (status $status)")
                 connected.completeExceptionally(e)
-                pending?.completeExceptionally(e)
+                pending?.d?.completeExceptionally(e)
                 disconnected.complete(status)
                 g.close()
             }
         }
 
-        override fun onServicesDiscovered(g: BluetoothGatt, status: Int) = finish(status, status)
+        override fun onServicesDiscovered(g: BluetoothGatt, status: Int) = finish("discover", status, status)
 
-        override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) = finish(status, mtu)
+        override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) = finish("mtu", status, mtu)
 
         override fun onCharacteristicRead(
             g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray, status: Int,
-        ) = finish(status, value)
+        ) = finish("read ${c.uuid}", status, value)
 
         override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) =
-            finish(status, Unit)
+            finish("write ${c.uuid}", status, Unit)
 
         override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) =
-            finish(status, Unit)
+            finish("notify ${d.characteristic.uuid}", status, Unit)
 
         override fun onPhyUpdate(g: BluetoothGatt, txPhy: Int, rxPhy: Int, status: Int) {
             android.util.Log.i("Boswell", "PHY now tx $txPhy rx $rxPhy (1 = 1M, 2 = 2M, 3 = coded) status $status")
         }
 
-        override fun onReadRemoteRssi(g: BluetoothGatt, rssi: Int, status: Int) = finish(status, rssi)
+        override fun onReadRemoteRssi(g: BluetoothGatt, rssi: Int, status: Int) = finish("rssi", status, rssi)
 
         override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray) {
             if (notifications++ < 3) android.util.Log.i("Boswell", "notify #$notifications ${c.uuid} ${value.size}B")
@@ -103,17 +111,21 @@ class OmiConnection(
         }
     }
 
-    private fun finish(status: Int, value: Any?) {
+    private fun finish(reply: String, status: Int, value: Any?) {
         val p = pending ?: return
-        if (status == BluetoothGatt.GATT_SUCCESS) p.complete(value)
-        else p.completeExceptionally(GattException("GATT status $status"))
+        if (p.expects != reply) {
+            android.util.Log.i("Boswell", "late reply ($reply) ignored while waiting for ${p.expects}")
+            return
+        }
+        if (status == BluetoothGatt.GATT_SUCCESS) p.d.complete(value)
+        else p.d.completeExceptionally(GattException("GATT status $status"))
     }
 
-    private suspend fun <T> op(what: String, timeoutMs: Long = 5_000, start: (BluetoothGatt) -> Boolean): T =
+    private suspend fun <T> op(what: String, expects: String, timeoutMs: Long = 5_000, start: (BluetoothGatt) -> Boolean): T =
         opLock.withLock {
             val g = gatt ?: throw GattException("$what: not connected")
             val d = CompletableDeferred<Any?>()
-            pending = d
+            pending = Pending(expects, d)
             try {
                 // "Refused" usually means the stack is still finishing an
                 // operation whose callback came late -- common on a weak link.
@@ -142,10 +154,10 @@ class OmiConnection(
         gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
         kotlinx.coroutines.withTimeoutOrNull(timeoutMs) { connected.await(); true }
             ?: throw GattException("connect timed out after ${timeoutMs / 1000}s")
-        op<Int>("discover services", 15_000) { it.discoverServices() }
+        op<Int>("discover services", "discover", 15_000) { it.discoverServices() }
         // Bigger MTU means whole frames per notification; the desktop never saw
         // a split frame on a CV 1, and this keeps it that way.
-        mtu = runCatching { op<Int>("request MTU") { it.requestMtu(247) } }.getOrDefault(23)
+        mtu = runCatching { op<Int>("request MTU", "mtu") { it.requestMtu(247) } }.getOrDefault(23)
     }
 
     /**
@@ -166,12 +178,12 @@ class OmiConnection(
 
     suspend fun read(uuid: UUID): ByteArray {
         val c = char(uuid)
-        return op("read $uuid") { it.readCharacteristic(c) }
+        return op("read $uuid", "read $uuid") { it.readCharacteristic(c) }
     }
 
     suspend fun write(uuid: UUID, value: ByteArray) {
         val c = char(uuid)
-        op<Unit>("write $uuid") {
+        op<Unit>("write $uuid", "write $uuid") {
             it.writeCharacteristic(c, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) ==
                 BluetoothStatusCodes.SUCCESS
         }
@@ -180,7 +192,7 @@ class OmiConnection(
     suspend fun enableNotifications(uuid: UUID) {
         val c = char(uuid)
         val cccd = c.getDescriptor(OmiUuids.CCCD) ?: throw GattException("$uuid has no CCCD")
-        op<Unit>("enable notifications $uuid") {
+        op<Unit>("enable notifications $uuid", "notify $uuid") {
             it.setCharacteristicNotification(c, true) &&
                 it.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) ==
                 BluetoothStatusCodes.SUCCESS
@@ -191,7 +203,7 @@ class OmiConnection(
      * RSSI of the live connection, read from the controller -- not a cached
      * advertisement value, which is what misled the desktop for hours.
      */
-    suspend fun rssi(): Int = op("read RSSI") { it.readRemoteRssi() }
+    suspend fun rssi(): Int = op("read RSSI", "rssi") { it.readRemoteRssi() }
 
     private suspend fun ensureStorage() {
         if (!storageNotifying) {
