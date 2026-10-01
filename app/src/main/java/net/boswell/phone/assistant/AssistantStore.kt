@@ -30,7 +30,7 @@ class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db
     }
 
     /** A conversation's title and summary, made when it had [clips] recordings (more later means make it again). */
-    data class Note(val title: String, val summary: String, val clips: Int)
+    data class Note(val title: String, val summary: String, val clips: Int, val made: Double = 0.0)
 
     fun setNote(conversation: Long, clips: Int, title: String, summary: String) {
         writableDatabase.insertWithOnConflict("conv_notes", null, ContentValues().apply {
@@ -40,8 +40,8 @@ class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db
 
     fun notes(ids: Collection<Long>): Map<Long, Note> {
         if (ids.isEmpty()) return emptyMap()
-        return readableDatabase.rawQuery("SELECT id, title, summary, clips FROM conv_notes WHERE id IN (${ids.joinToString(",")})", null).use { c ->
-            buildMap { while (c.moveToNext()) put(c.getLong(0), Note(c.getString(1), c.getString(2), c.getInt(3))) }
+        return readableDatabase.rawQuery("SELECT id, title, summary, clips, made FROM conv_notes WHERE id IN (${ids.joinToString(",")})", null).use { c ->
+            buildMap { while (c.moveToNext()) put(c.getLong(0), Note(c.getString(1), c.getString(2), c.getInt(3), c.getDouble(4))) }
         }
     }
 

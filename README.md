@@ -59,8 +59,12 @@ one day merge.
 - **NVIDIA Nemotron 3.5 ASR** runs on the phone, ~8× faster than real time.
 - A **speech check** (0.6 s) skips clips nobody speaks in, before the recognizer runs.
 - Optional **cloud transcription** with NVIDIA **Parakeet v3** — sending only the
-  speech, never the silences — with a daily spending limit and automatic fallback to the
-  phone.
+  speech, never the silences — for everything, or only **when someone besides you is
+  talking** (where the phone is weakest), with a daily spending limit and automatic
+  fallback to the phone. **Redo** any conversation in the cloud, and see which words
+  came from where.
+- **Check the accuracy yourself**: correct a few lines, and the app scores the phone,
+  Parakeet and Nova-3 against what was really said.
 - **Words Boswell should know**: names and terms it nearly gets right ("omi",
   "Bozwell") are corrected, conservatively, and can be undone.
 - **Compare with the cloud** shows, word by word, where the phone and the cloud disagree.
@@ -76,6 +80,7 @@ one day merge.
   contacts, and voices get names.
 
 ### 🤖 An assistant with your day as context
+Every conversation gets a **title and a one-line summary**, so a day reads at a glance.
 Tap the Omi and ask — *"What did Sam say about the deadline?"* — or type in the app.
 Answers cite the moment, and **▶ plays it**. It can:
 
@@ -94,7 +99,8 @@ meeting** from what was last said with those people.
 
 ### 💾 Yours to keep
 **Back up** everything — recordings, transcripts, people and their voices, to-dos,
-what the assistant remembers — to one file, and **restore** it in setup on a new phone.
+what the assistant remembers — to one file, **automatically every week** into a folder
+you choose, and **restore** it in setup on a new phone.
 
 ### 🔒 Private by default
 Everything is recorded, transcribed, identified and stored **on the phone**. Nothing

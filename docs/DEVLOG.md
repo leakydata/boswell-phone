@@ -310,3 +310,26 @@ warnings for the Omi and phone offer a switch to Sync mode when very low.
   Cloud project of our own. The inbox is opened read-only, so reading never
   marks mail as read; sending is held for confirmation like texts.
 
+## Milestone 8: a day that reads at a glance (2026-10-01)
+
+- **Titles and summaries** per conversation, from the assistant's routines a
+  few minutes after a conversation ends; stored by conversation id in
+  assistant.db (so they survive the archive index being rebuilt) and made
+  again if the conversation grows.
+- **Cloud "With others"**: diarization now runs before the engine is chosen,
+  so a recording goes to Parakeet only when a voice that isn't the owner's
+  (or a TV's) speaks for a second or more.
+- **Which engine wrote what** is shown per conversation and per line; a
+  notification reports how a Redo went, including any fallbacks and why. The
+  first Redo looked like it had done nothing: it had worked, but the words
+  were nearly the same and nothing said where they came from.
+- **Automatic backups** weekly into a chosen folder (Storage Access
+  Framework tree, persisted permission), while charging, newest 3 kept,
+  never with API keys.
+- **Accuracy check**: hand corrections are marked as such (`edited`), and a
+  corrected recording becomes an answer key. Scores are word error rates
+  against it, for the engine that transcribed it and for Parakeet and Nova-3.
+- **Battery**: on a day of testing, Boswell's cost was almost all CPU (588 of
+  591 mAh), i.e. on-device transcription; the BLE link and audio barely
+  register. A clean off-charger day is still to be measured.
+
