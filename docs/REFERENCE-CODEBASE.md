@@ -1,6 +1,6 @@
 # Using the desktop codebase as a reference
 
-**Location:** `/home/scholyx/Documents/electronics/nRF52840`
+**Location:** a sibling checkout of the desktop project
 **GitHub:** `https://github.com/leakydata/boswell` (public, branch `main`)
 
 It is a sibling of this directory, so `../nRF52840/` from here.
@@ -64,7 +64,7 @@ and recovery), `tests/test_speaker_store.py` (identity).
 ## Claude's memory for this project
 
 If the new session has access to the auto-memory at
-`~/.claude/projects/-home-scholyx-Documents-electronics-nRF52840/memory/`,
+the desktop project's notes,
 several entries are directly relevant:
 
 - `omi-as-a-recorder.md` — the two protocol facts, condensed

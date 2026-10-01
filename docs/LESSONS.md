@@ -76,7 +76,7 @@ has classified yet.
 
 An earlier version judged the **clip** instead — refusing anything from a
 recording that was mostly unnamed speech. It was measured against the live
-archive and thrown away: Nathan talks at the screen while videos play, so his
+archive and thrown away: the owner talks at the screen while videos play, so his
 words and a video's are interleaved in the same clips and the video usually
 does most of the talking. That rule blocked his own dictated request at 4%
 named-person.
@@ -93,7 +93,7 @@ recording it appears in, past and future.
 video" originally ended it — the voice was in neither the named-references path
 nor the unknown-cluster path, so every later occurrence arrived as a fresh
 stranger. Tag fifty video voices and you get fifty clusters today and fifty
-more next week. Nathan's objection is the right way to think about the whole
+more next week. the owner's objection is the right way to think about the whole
 feature: he will not use a label meaning "doesn't matter" if it stops that
 voice being labeled properly some other day.
 

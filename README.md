@@ -1,267 +1,212 @@
-# boswell-phone — start here
+<div align="center">
 
-The phone version of Boswell: an Android app that records from an Omi, then
-transcribes, diarizes and names voices, independently of the desktop.
+# Boswell Phone
 
-**Nathan's instruction, 2026-09-26:** the phone version is *its own project*,
-not a branch, port, or rewrite of the desktop one. Work started 2026-09-30.
-Nothing here is a commitment to an architecture; it is what was learned paying
-for it once.
+**A memory for your day, kept on your phone.**
 
-## Decided and measured (2026-09-30)
+Your [Omi](https://www.omi.me) listens. Boswell transcribes what's said, knows *who* said it,
+and answers questions about it — with the speech recognition, speaker identification
+and sound tagging all running on the phone itself.
 
-Scripts are in `tools/`, a uv project (`uv run python <script>`). They read the
-desktop archive read-only and never touch a device.
+![Android 13+](https://img.shields.io/badge/Android-13%2B-3ddc84?logo=android&logoColor=white)
+![Kotlin](https://img.shields.io/badge/Kotlin-Compose-7f52ff?logo=kotlin&logoColor=white)
+![On-device AI](https://img.shields.io/badge/AI-on--device-0a7ea4)
+![Models](https://img.shields.io/badge/models-optional%20download-555)
 
-- **Voiceprints match the desktop exactly.** `tools/export_voiceprint.py` builds
-  `voiceprint.onnx`: raw 16 kHz audio in, a 256-d WeSpeaker ResNet34-LM vector
-  out, with pyannote's fbank built into the graph. `tools/embed_parity.py`: cosine 1.0000
-  against desktop Boswell on 217 speakers, with the same naming decision in 217/217.
-  sherpa-onnx's own speaker extractor does *not* match (cosine ~0, because it
-  skips pyannote's mean centring), so do not use it for voiceprints.
-- **Hosted ASR cannot diarize.** Through OpenRouter, Nemotron 3.5 ASR and
-  Nova-3 both reject `diarize`. Both return word timestamps. Nova is more
-  accurate and fast (~$0.26/hr) but returns nothing for TV/background speech;
-  cloud Nemotron is ~$0.012/hr but queues ~150 s per request
-  (`tools/asr_bench.py`).
-- **Nemotron runs on-device.** sherpa-onnx's int8 build of
-  `nemotron-3.5-asr-streaming-0.6b` (1120 ms chunk, ~475 MB) runs at 0.22×
-  realtime on 4 desktop threads, with accuracy about equal to the cloud version
-  (`tools/local_asr_bench.py`). **On a Pixel 10 Pro XL (Tensor G5):** RTF 0.12
-  on 4 threads (~8× faster than realtime), 0.16 on 1 thread, 0.26 on 8 (the
-  little cores slow it down, so use 4). Decoding several streams in one batch is
-  faster still. Measured with sherpa-onnx's Android CLI binary over adb.
-- **The app ships with no models.** ASR, segmentation and `voiceprint.onnx`
-  are optional in-app downloads. The app must work with none installed.
-
-## The app (milestone 1, 2026-09-30)
-
-Kotlin + Compose, `app/`, package `net.boswell.phone` (debug build installs as
-`net.boswell.phone.debug`). Build with `./gradlew :app:assembleDebug`; unit
-tests with `./gradlew :app:testDebugUnitTest`. JDK 21, AGP 9.4, compileSdk 37.1,
-minSdk 33, arm64 only.
-
-What works, verified on a Pixel 10 Pro XL with the Omi CV 1 (fw 3.0.21):
-scan by service UUID, connect without bonding, read device info, battery,
-charging, live link RSSI and device clock (each shown with its age), subscribe
-to live audio, decode Opus, and write 30 s WAV clips with desktop-compatible
-sidecar JSON (`time_known: false`) in app-private storage, from a foreground
-service that reconnects with backoff.
-
-Things learned on the device:
-
-- **The CV 1 sends nothing while it is quiet.** Its mic has hardware acoustic
-  activity detection (`CONFIG_OMI_ENABLE_T5838_AAD`, ~3 s hold): in silence
-  the stream pauses, for minutes, on a healthy link. Liveness is therefore a
-  GATT read succeeding, never audio arriving, and a pause longer than 4 s
-  closes the current clip so a clip never spans a silence.
-- **Concentus (pure-Java Opus) is close enough to libopus.** Same refused
-  frames, 99.85% of samples within ±1, voiceprint cosine 0.9999
-  (`tools/opus_parity.py`, `OpusParityTest`).
-- The live packet counter is 16-bit and wraps every ~22 min. `RunTracker`
-  treats a wrap as a wrap. The desktop's `Run.note` treats it as a reboot.
-- **Offload is deliberately absent.** Only the read-only ring-info query
-  exists (the "Check backlog" button). Reading the ring consumes it: audio
-  drained to the phone is gone from the device, and so never reaches desktop
-  Boswell.
-
-`tools/omi_probe.py` counts live notifications from this machine without
-writing anything, to tell device behavior from phone behavior.
-
-## Milestone 2: on-phone transcripts with speakers (2026-09-30, local only)
-
-Everything runs on the phone; nothing is sent anywhere.
-
-- **Models** download on request from the `models-v1` GitHub release
-  (`tools/make_model_release.py` builds the catalog `app/src/main/assets/models.json`),
-  resume after interruption, and are checked against SHA-256. The APK ships none.
-- **Transcription:** Nemotron 3.5 ASR via the sherpa-onnx static AAR, fetched
-  and hash-checked by the `fetchSherpa` Gradle task (not committed).
-- **Diarization:** `diarize/Diarizer.kt`, pyannote's recipe in miniature --
-  segmentation-3.0 over 10 s windows every 2 s, local speakers embedded with
-  `voiceprint.onnx`, average-linkage clustering at cosine 0.60 (the desktop's
-  `SAME_VOICE`), and a per-frame vote to rebuild the timeline. The segmentation
-  ONNX matches pyannote's torch model frame for frame. Against desktop
-  pyannote 3.1 on 30 Omi clips (`tools/diarize_compare.py`): median 88%
-  speaker-time agreement, and the phone names the same person the desktop did
-  for 72% of voices the desktop had named. Most misses are voices under ~3 s.
-- **Identity:** `speakers/` ports the desktop's rules unchanged (best row per
-  person, margin between people, MATCH_HIGH 0.75, MARGIN_MIN 0.15,
-  MARGIN_STRONG 0.25, unnamed clusters at 0.75). The store starts empty.
-- **Transcripts** are saved per clip in desktop Boswell's own JSON format.
-  Organizing them into conversations is still to be decided.
-- **Speed on the Pixel 10 Pro XL:** median 3.6 s to transcribe, diarize and
-  identify a 30 s clip.
-
-Read these four files in order:
-
-| file | what it is |
-|---|---|
-| `README.md` | this — the problem, the constraint, what is decided |
-| `OMI-PROTOCOL.md` | the BLE protocol, exact and hard-won. The part worth carrying |
-| `LESSONS.md` | numbers that were measured, and failures that looked like health |
-| `REFERENCE-CODEBASE.md` | where to look in the desktop repo, file by file |
+</div>
 
 ---
 
-## What Boswell is
+> *James Boswell followed Samuel Johnson around London for twenty years, writing down
+> what he said. This one fits in a pocket.*
 
-An always-on personal audio archive. A wearable recorder captures continuously;
-a host collects the audio, transcribes it, works out who was speaking, groups
-it into conversations, and makes the result searchable — by word, by meaning,
-and by a model through an MCP tool surface.
+Boswell Phone pairs with an Omi wearable, records the conversations around you, and turns
+them into a day you can scroll, search and ask about: **who you talked with, what was
+decided, what you promised.** Tap the Omi's button and ask out loud; the answer arrives
+on your lock screen, or in your ear.
 
-The desktop version has been running for months and holds roughly **29,000
-clips, 26,000 transcripts and 78,000 transcript segments**. It is not a
-prototype. Its assumptions have been tested by a real archive, which is why the
-numbers in `LESSONS.md` are worth more than the code that uses them.
+It is a standalone Android app — the phone-first sibling of the desktop
+[Boswell](https://github.com/leakydata/boswell) project, built to be fully useful on its
+own and to produce voiceprints **identical** to the desktop's, so the two archives can
+one day merge.
 
-Two recorders feed it: a handmade XIAO nRF52840 board running Zephyr, and a
-commercial **Omi CV 1**. The phone project is about the Omi. The handmade board
-is not in scope unless Nathan says otherwise.
+## What it does
 
-## The constraint that shapes everything
+### 🎙️ Capture, the way you actually wear it
+- **Live** — streams from the Omi over Bluetooth; conversations appear within seconds.
+- **Sync** — the Omi records on its own and the phone collects its memory every so
+  often, or whenever it comes into range. Easier on both batteries.
+- **On the charger** — in Live mode, putting the Omi on its charger collects whatever it
+  stored while you were out of range, then goes back to live.
+- Recordings land **in the order they happened**, by the Omi's own clock, however late
+  they download. Live capture restarts itself if Android ever stops the app.
 
-**A phone has no RTX 4090.**
+### 📝 Transcription — on the phone, or in the cloud if you'd rather
+- **NVIDIA Nemotron 3.5 ASR** runs on the phone, ~8× faster than real time.
+- A **speech check** (0.6 s) skips clips nobody speaks in, before the recognizer runs.
+- Optional **cloud transcription** with NVIDIA **Parakeet v3** — sending only the
+  speech, never the silences — with a daily spending limit and automatic fallback to the
+  phone.
+- **Words Boswell should know**: names and terms it nearly gets right ("omi",
+  "Bozwell") are corrected, conservatively, and can be undone.
+- **Compare with the cloud** shows, word by word, where the phone and the cloud disagree.
 
-The desktop does all its thinking locally: WhisperX for transcription, pyannote
-for diarization, wespeaker for voiceprints, an AST model for sound tagging.
-Every one of those assumes a card with several gigabytes of VRAM. On a phone,
-that work has to be hosted.
+### 🗣️ Voices — who said what
+- Speaker diarization and **voiceprints compatible with desktop Boswell** (cosine
+  1.0000 against the desktop on 217 speakers).
+- **Teach it your voice** by reading a short passage during setup.
+- **"Is this you?"** — a review of voices that are close but not certain, playing only
+  that voice's words. One answer covers every recording of it, and every past recording
+  is checked again.
+- **Link people to your contacts**: numbers, emails and birthdays come from your phone's
+  contacts, and voices get names.
 
-This is the whole reason the phone version is a separate project rather than a
-port. It is not "the same program on a smaller screen" — the division of labor
-is different. What stays local is the radio and the storage; what leaves is the
-intelligence.
+### 🤖 An assistant with your day as context
+Tap the Omi and ask — *"What did Sam say about the deadline?"* — or type in the app.
+Answers cite the moment, and **▶ plays it**. It can:
 
-## What is already solved, and what is genuinely new
+| | |
+|---|---|
+| 📅 To-dos, reminders and calendar events | 🔎 Search everything that was said |
+| ⏱️ Timers and alarms (rings the phone, buzzes the Omi) | 💬 Read and send texts — only with people you choose, only when you confirm |
+| 🧠 Remember facts about people | 📊 Who you talked with most, and for how long |
+| 🌐 Look things up on the web | 📒 Quick logs — medication, expenses, parking |
+| ☎️ Pull out numbers, emails, addresses that were said | 📝 Meeting notes: summary, decisions, action items |
 
-**Mostly solved (the desktop already has hosted paths):**
+And it works in the background: a **morning brief**, an **evening recap**, **promises
+noticed** in what was said (yours and others') filed as to-dos, and a **brief before each
+meeting** from what was last said with those people.
 
-- **Transcription** already selects between `local`, `openai` and `deepgram`.
-  Two cloud implementations exist and work.
-- **Diarization from a hosted service** already has a path: when segments
-  arrive already carrying speaker labels, the desktop builds the voiceprints
-  itself. Its own comment says *"the one thing they cannot send back is a
-  voiceprint"*. Any hosted diarizer that returns labels but no embeddings —
-  NVIDIA's Nemotron-3-Diarization is one Nathan has looked at — fits that shape.
-- **The reviewing model** is already remote by default (OpenRouter, DeepSeek).
+### 🔒 Private by default
+Everything is recorded, transcribed, identified and stored **on the phone**. Nothing
+leaves it unless you turn on the assistant (text only) or cloud transcription — each
+spelled out where you switch it on, each with its cost on an AI-usage screen. No
+account, no server, no telemetry.
 
-**Genuinely new work, and it is the hard part:**
+## How it works
 
-- **Being the BLE host on a phone.** Background BLE on iOS and Android is a
-  different discipline from a Linux daemon with bleak. This is where the
-  protocol knowledge in `OMI-PROTOCOL.md` is worth real money.
-- **Storage and offload on a device with limited disk and aggressive process
-  lifecycle management.** The desktop spools raw bytes to disk and fsyncs
-  before decoding, because *reading the device consumes it*. A phone OS that
-  kills your process mid-transfer makes that property much sharper.
-- **Voiceprints without a local embedding model.** Speaker identity is the
-  thing the desktop does best and the thing hosted services least provide.
-  Decide early whether the phone does identity at all, defers it to a server,
-  or ships audio somewhere that can.
+```mermaid
+flowchart LR
+    Omi["Omi wearable<br/>Opus audio over BLE"] -->|live stream| Clip
+    Omi -->|stored backlog<br/>Sync / charger| Spool[Spool on disk] --> Clip
+    Clip["30 s clips<br/>Ogg Opus, Omi's own frames"] --> Check{Speech check<br/>pyannote seg.}
+    Check -->|nobody speaking| Quiet[Timeline only]
+    Check -->|speech| ASR["Words<br/>Nemotron on phone<br/>or Parakeet cloud"]
+    Check -->|speech| Diar["Who spoke when<br/>segmentation + clustering"]
+    Diar --> VP["Voiceprints<br/>WeSpeaker ResNet34"] --> ID[Match against people]
+    ASR --> T[Transcript]
+    ID --> T
+    Clip --> Tags["Sound tags<br/>CED-Mini"] --> T
+    T --> Index[(Archive index<br/>search · conversations)]
+    Index --> UI[Today · People · To-do]
+    Index --> AI["Assistant<br/>tools over your day"]
+    Button["Omi button"] --> AI
+```
 
-## One fact that constrains the product, not just the code
+- **Capture** keeps the Omi's own Opus frames as an Ogg file (no re-encoding, about a
+  tenth of a WAV's size); a speech-free clip keeps only its place on the timeline.
+- **Identity** follows the desktop's rules exactly: one row per voiceprint, the best row
+  per person, a margin over the runner-up, and unnamed voices clustered until you name
+  them.
+- **The assistant** is any model on [OpenRouter](https://openrouter.ai) (your key),
+  with tools over the archive and the phone. Moments are labelled `[L123]` in what it
+  reads, and it cites them back so the app can play them.
 
-**The Omi allows one connection at a time.** A phone holding it means the
-laptop cannot, and vice versa. They are alternatives, not a pair.
+## Measured, not guessed
 
-This matters for how the two projects coexist. Nathan's Neo 1 and Looki L1
-record independently and can run alongside anything; the Omi cannot.
+Every number below came from a script in [`tools/`](tools) run against real recordings.
 
-## What NOT to assume
+| | Result |
+|---|---|
+| Voiceprints vs desktop Boswell | cosine **1.0000**, same name in **217/217** cases |
+| Opus decoding vs libopus | **99.85%** of samples within ±1; voiceprints 0.9999 alike |
+| On-device transcription (Pixel 10 Pro XL) | **0.12×** real time on 4 threads |
+| Speech check on 185 clips | **49 of 51** empty clips skipped, **no** speech missed |
+| Cloud engines on the owner's own reading | Parakeet v3 **0%** errors · Nova-3 3.2% · Whisper turbo 4.7% (and invents text over noise) |
+| Storage | **482 MB → 30 MB**, by keeping the Omi's own frames |
+| Speech-only cloud transcription | **80%** cheaper on a mostly-quiet clip, same words and times |
+| End of a spoken question | **0.8–1.6 s** after the last word (speech model, not loudness) |
+| Model download | **682 → 468 MB** for the recognizer, gzip-verified on the phone |
 
-- Do not assume the desktop's architecture is right for a phone. It is right
-  for a machine with a GPU, a stable power supply, and a process that lives for
-  days. Question the clip-at-a-time pipeline in particular — see `LESSONS.md`.
-- Do not assume the desktop's code can be lifted. Read it for *what was
-  learned*, not for what to copy.
-- Do not start building until Nathan says so.
+The full story — including the dead ends — is in [`docs/DEVLOG.md`](docs/DEVLOG.md).
 
-## Milestone 3: a phone-first app (2026-09-30)
+## Getting started
 
-Deliberately unlike the desktop in layout: it is for looking back at your
-day, not for operating a pipeline.
+**You need:** an Android 13+ phone (arm64), an **Omi CV 1**, and — only for the
+assistant or cloud transcription — an [OpenRouter](https://openrouter.ai) API key.
 
-- **Today:** swipe between days; a 24-hour ribbon (talk solid, typing/TV/other
-  sounds tinted, background faint); conversation cards with faces, first
-  lines, names and sound chips.
-- **Conversation:** chat-style bubbles per voice (one stable color per
-  person), tap a line to hear it, and a player across all its clips (Media3).
-  Tap a voice: "Sounds like X?" to confirm, pick someone, name them, or mark
-  it TV/media.
-- **People:** a "Who's this?" queue of recurring unnamed voices (hear, name,
-  it's TV, skip), known people, and a person page with their conversations
-  and "Not them" to take a wrongly named group back off (nothing is deleted).
-- **Search:** full-text across everything said (SQLite FTS4), by day.
-- **Device:** the Omi, battery-optimization exemption, models, storage and
-  diagnostics. Recording restarts after a reboot or an app update if it was on.
-- **Archive index** (`archive/Archive.kt`): rebuildable from the files.
-  Conversations are speech clips within 60 s of each other; voices keep one
-  identity across a conversation's clips (person id, else SAME_VOICE 0.60).
-- **Sound tagging:** CED-Mini (10 MB, Apache-2.0) with the desktop's windowing
-  and keep/empty rules. It agrees with the desktop's AST verdict on 92% of 150
-  clips (`tools/sound_compare.py`), but is less sensitive, so cleanup is
-  **off by default**. When switched on it removes only the audio of clips at
-  least a week old that have no speech and only background sound. The
-  timeline entry and tags are kept.
+1. **Build and install** (see below), open Boswell, and follow the setup: permissions,
+   find your Omi, choose Live or Sync, download the models (~510 MB, once), read a short
+   passage so it learns your voice, and optionally add your OpenRouter key.
+2. **Wear the Omi.** Conversations show up on **Today**; name the voices you know in
+   **People**.
+3. **Tap the Omi's button** (a quick tap — it ignores long presses) and ask a question.
+   It buzzes when it hears you, and again when the answer is on your phone.
 
-## Milestone 4: modes and the assistant (2026-09-30)
+Models are **not** in the app: they download from this repository's
+[`models-v1`](https://github.com/leakydata/boswell-phone/releases/tag/models-v1) release,
+are checked against their SHA-256, and can be removed any time.
 
-**Modes** (Device page): Off, Sync, Live.
-- **Sync:** the Omi records on its own; the phone visits every 15 min–4 h and
-  whenever the Omi comes into range (companion-device presence), downloads
-  the backlog and lets go. Reading consumes, so every batch is fsynced to a
-  spool before the read pointer moves; partial batches are salvaged; visits
-  are capped at 10 min; the device clock is set on each visit. Clips carry the
-  device's own timestamps. Storage commands are never sent during a live stream.
-- **Live:** streaming, the Omi button, and the assistant listening along.
+## Building
 
-**Assistant** (Ask tab; settings under Device → Assistant):
-- OpenRouter (default `z-ai/glm-5.3-flash`, configurable), key in the Android
-  Keystore, text only, every call logged with its cost.
-- Tools over the phone's archive: search, recent lines, a day's
-  conversations, read a conversation, people, set a reminder. Verified live:
-  the model calls `search_transcripts` and answers from the result
-  (`LlmToolTest`, about $0.00007 per two-round exchange).
-- **Omi button:** tap asks (listen until a pause, transcribe on the phone,
-  answer as a notification); double tap bookmarks the moment or summarizes
-  the last 10 minutes. On the desktop the BlueZ subscription to the button
-  always failed; on the phone this is still untested.
-- **Watcher:** in live mode it looks every 2 minutes, only when "Me" has said
-  something new, and speaks up rarely. It has its own daily budget ($0.50 by
-  default, adjustable).
-- Answers are notifications. Spoken answers are a toggle, off by default.
+```bash
+# JDK 21 and the Android SDK (compileSdk 37); the sherpa-onnx AAR is fetched by Gradle
+JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./gradlew :app:assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
 
-## Milestone 5: transcription, voices and syncing, refined (2026-09-30)
+./gradlew :app:testDebugUnitTest          # 70+ unit tests, no device needed
+```
 
-**Transcription.** On the phone by default (Nemotron 3.5 ASR, int8): the
-best of the on-device models measured (`tools/phone_vs_cloud.py`,
-`tools/parakeet_local.py`). Optional cloud transcription with Parakeet v3
-through OpenRouter (Device -> Transcription): it read best of six engines
-tested on real Omi clips, about $0.09 per hour of speech. Only clips that
-pass the speech check are sent; who spoke and who they are is always
-worked out on the phone; a daily limit, and any failure falls back to the
-phone. Recordings -> select -> More -> Redo in the cloud does it per clip,
-and Compare with the cloud reports how the two differ, word by word.
+The measurement scripts in `tools/` are a [uv](https://docs.astral.sh/uv/) project:
+`cd tools && uv run python speech_check.py …`.
 
-- A segmentation-only **speech check** (~0.6 s) skips the recognizer for
-  clips nobody speaks in: 49 of 51 empty clips caught, none with words missed.
-- Clips heard live are transcribed first and newest first; a big download
-  from the Omi waits for the phone's charger.
-- **Words Boswell should know**: names in People, Omi, Boswell and your own
-  words are fixed when the transcript nearly gets them ("omi", "Bozwell").
-  Conservative by design; corrected lines keep what was heard.
-- Models download compressed (the recognizer: 468 MB instead of 682 MB) and
-  are verified after unpacking.
+## Repository
 
-**Voices.** Every transcript keeps its voiceprints, so past recordings are
-matched again whenever Boswell learns a voice (naming, review answers,
-"Not them", reading the passage). People -> Review asks about voices close
-to someone known ("Is this you?"), plays only that voice's parts, and
-remembers each No.
+```
+app/src/main/java/net/boswell/phone/
+  omi/         BLE protocol: live audio, storage offload, button, haptics, clock
+  capture/     the capture service, clips, battery watch, charger drain
+  sync/        Live / Sync modes, spool → clips
+  asr/         on-device and cloud transcription, speech-only cloud, vocabulary
+  diarize/     segmentation, clustering, speech check
+  speakers/    voiceprints, matching, review and re-check
+  audio/       Opus decode/encode, Ogg Opus, WAV, clip storage
+  archive/     the searchable index: clips, lines, conversations
+  assistant/   the agent, its tools, routines, texting, alarms, contacts
+  process/     the transcription worker, cleanup, clip actions
+  ui/  setup/  Compose screens
+tools/         measurement and release scripts (Python, uv)
+docs/          DEVLOG · OMI-PROTOCOL · LESSONS · REFERENCE-CODEBASE
+```
 
-**Syncing.** In Live mode, the Omi's stored backlog is collected when it goes
-on its charger (setting, on by default), and the Omi's clock is set on every
-connection: without a valid clock its firmware stores nothing. Battery
-warnings for the Omi and phone offer a switch to Sync mode when very low.
+- [`docs/OMI-PROTOCOL.md`](docs/OMI-PROTOCOL.md) — the Omi's Bluetooth protocol, exact
+  and hard-won.
+- [`docs/LESSONS.md`](docs/LESSONS.md) — numbers measured on a real archive, and
+  failures that looked like health.
+
+## Roadmap
+
+- A signed release build and an APK on the releases page
+- Email (reading needs Google sign-in), more wearables, a desktop ↔ phone merge
+- On-device Parakeet, once its contextual biasing works reliably in sherpa-onnx
+
+## Credits
+
+Built on [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx),
+[ONNX Runtime](https://onnxruntime.ai), [Concentus](https://github.com/lostromb/concentus)
+and Jetpack Compose / Media3. The models are downloaded separately, under their own
+licenses:
+
+| Model | Use | License |
+|---|---|---|
+| NVIDIA Nemotron 3.5 ASR (int8) | on-device transcription | OpenMDW-1.1 |
+| pyannote segmentation 3.0 | speech check, who spoke when | MIT |
+| WeSpeaker ResNet34-LM | voiceprints | CC-BY-4.0 |
+| CED-Mini | sound tags | Apache-2.0 |
+| NVIDIA Parakeet TDT 0.6B v3 *(cloud, optional)* | cloud transcription | CC-BY-4.0 |
+
+Boswell Phone is an independent project, not affiliated with Omi / Based Hardware.
+
+## License
+
+Not yet chosen. Until a license is added, all rights are reserved.

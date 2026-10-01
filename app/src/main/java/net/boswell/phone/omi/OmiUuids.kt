@@ -4,7 +4,7 @@ import java.util.UUID
 
 /**
  * The Omi CV 1's GATT table, as read off a working device (firmware 3.0.21)
- * and its open-source firmware. See OMI-PROTOCOL.md at the repo root.
+ * and its open-source firmware. See docs/OMI-PROTOCOL.md.
  */
 object OmiUuids {
     val SERVICE: UUID = UUID.fromString("19b10000-e8f2-537e-4f6c-d104768a1214")
