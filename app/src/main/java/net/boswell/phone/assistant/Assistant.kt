@@ -49,7 +49,7 @@ class Assistant(private val context: Context) {
             mapOf("query" to ("string" to "words to search for"), "days" to ("integer" to "only the last N days (optional)")), listOf("query")))
         add(Llm.tool("recent_lines", "What was said in the last N minutes, in order, with speakers.",
             mapOf("minutes" to ("integer" to "how far back, 1-240")), listOf("minutes")))
-        add(Llm.tool("day_conversations", "The conversations on one day: time, length, people and opening lines, with ids for read_conversation.",
+        add(Llm.tool("day_conversations", "The conversations on one day: time, length, people, and a title and summary of each (or its opening lines), with ids for read_conversation. The summaries are usually enough; read a conversation only for details.",
             mapOf("date" to ("string" to "YYYY-MM-DD, or 'today' / 'yesterday'")), listOf("date")))
         add(Llm.tool("read_conversation", "Every line of one conversation.",
             mapOf("id" to ("integer" to "conversation id from day_conversations or search")), listOf("id")))
@@ -205,9 +205,14 @@ class Assistant(private val context: Context) {
                     null, "today" -> LocalDate.now(); "yesterday" -> LocalDate.now().minusDays(1)
                     else -> runCatching { LocalDate.parse(s) }.getOrDefault(LocalDate.now())
                 }
-                archive.conversations(d).sortedBy { it.started }.joinToString("\n") { c ->
+                val convs = archive.conversations(d).sortedBy { it.started }
+                // Titles and summaries made after each conversation (ConversationNotes): a day read
+                // from these needs read_conversation only for the ones that matter.
+                val notes = AssistantStore(context).use { it.notes(convs.map { c -> c.id }) }
+                convs.joinToString("\n") { c ->
                     val who = c.speakers.mapNotNull { k -> k.takeIf { it.startsWith("p") }?.drop(1)?.toLongOrNull()?.let(speakers::nameOf) }
-                    "id ${c.id}: ${at(c.started)}, ${((c.ended - c.started) / 60).toInt()} min, with ${who.ifEmpty { listOf("unidentified voices") }.joinToString()} — \"${c.snippet.take(160)}\""
+                    val what = notes[c.id]?.let { n -> "${n.title}: ${n.summary}" } ?: "\"${c.snippet.take(160)}\""
+                    "id ${c.id}: ${at(c.started)}, ${((c.ended - c.started) / 60).toInt()} min, with ${who.ifEmpty { listOf("unidentified voices") }.joinToString()} — $what"
                 }.ifBlank { "no conversations on $d" }
             }
             "read_conversation" -> {

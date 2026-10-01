@@ -60,6 +60,7 @@ private fun purposeName(p: String) = when (p) {
     "compare" -> "Compare with the cloud"
     "web" -> "Web searches"
     "notice" -> "Noticing promises and facts"
+    "titles" -> "Conversation titles"
     "brief" -> "Morning briefs"
     "recap" -> "Evening recaps"
     "meeting" -> "Briefs before meetings"

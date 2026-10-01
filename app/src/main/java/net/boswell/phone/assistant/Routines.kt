@@ -62,7 +62,7 @@ class RoutinesWorker(context: Context, params: WorkerParameters) : CoroutineWork
             "Morning brief. Using calendar_events for today, list_todos (what's due today or overdue) and what was said yesterday (day_conversations for yesterday), " +
                 "give me: today's schedule, what's due, and any loose ends or promises from yesterday. Short, scannable, at most 6 lines."
         else
-            "Evening recap of today. Using day_conversations for today (read_conversation where useful) and list_todos: who I talked with, what was decided, " +
+            "Evening recap of today. Using day_conversations for today (its summaries first; read_conversation only where a detail matters) and list_todos: who I talked with, what was decided, " +
                 "what I promised and what others promised me, and anything I should do tomorrow. Short, scannable, at most 7 lines; cite moments."
         val a = Assistant(c).ask(q, if (morning) "brief" else "recap", display = if (morning) "Morning brief" else "Evening recap")
         if (!a.error && !a.text.startsWith("I don't have an answer")) AssistantNotify.post(c, AssistantNotify.ANSWERS, if (morning) "Good morning" else "Today, in short", a.text)
