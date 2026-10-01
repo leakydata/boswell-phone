@@ -72,6 +72,11 @@ class DebugReceiver : BroadcastReceiver() {
                     net.boswell.phone.assistant.Texting.contacts(context) + net.boswell.phone.assistant.TextContact(n, num))
                 android.util.Log.i("Boswell", "texting: on, contacts ${net.boswell.phone.assistant.Texting.contacts(context)}, read ${net.boswell.phone.assistant.Texting.canRead(context)}, send ${net.boswell.phone.assistant.Texting.canSend(context)}")
             }
+            // am broadcast -a net.boswell.phone.debug.LED --ei pct 30   (the Omi's light, as the Device slider sets it)
+            "net.boswell.phone.debug.LED" -> {
+                context.getSharedPreferences("boswell", Context.MODE_PRIVATE).edit().putInt("led_brightness", intent.getIntExtra("pct", 50)).apply()
+                net.boswell.phone.capture.CaptureService.applyLedNow(context)
+            }
             // am broadcast -a net.boswell.phone.debug.BUDGET --ef usd 1.0   (the watcher's daily budget)
             "net.boswell.phone.debug.BUDGET" -> net.boswell.phone.assistant.AssistantPrefs.setBudget(context, intent.getFloatExtra("usd", 0.5f).toDouble())
             // am broadcast -a net.boswell.phone.debug.LIFE_DELETE --el fact 1 --el log 1   (remove test entries)

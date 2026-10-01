@@ -46,6 +46,8 @@ data class CaptureState(
     val device: DeviceInfo? = null,
     val battery: Reading<Int>? = null,
     val charging: Reading<Boolean>? = null,
+    /** The Omi's LED brightness, 0-100, as it last reported. */
+    val ledBrightness: Int? = null,
     val rssi: Reading<Int>? = null,
     val deviceClockSkewSeconds: Reading<Long>? = null,
     val ring: Reading<RingInfo>? = null,

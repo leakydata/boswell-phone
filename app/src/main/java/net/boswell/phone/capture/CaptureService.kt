@@ -77,6 +77,10 @@ class CaptureService : LifecycleService() {
                 return START_STICKY       // live: come back if the process dies
             }
             ACTION_STOP -> lifecycleScope.launch { stopCapture("stopped by user"); stopSelf() }
+            ACTION_LED -> {
+                lifecycleScope.launch { connection?.let { applyLed(it) } }
+                return if (captureJob?.isActive == true) START_STICKY else START_NOT_STICKY
+            }
             ACTION_BUZZ -> {
                 buzz(intent.getIntExtra("level", 3))
                 return if (captureJob?.isActive == true) START_STICKY else START_NOT_STICKY
@@ -214,6 +218,7 @@ class CaptureService : LifecycleService() {
             CaptureRepository.log("battery ${st.battery?.value ?: "?"}% · " + when (st.charging?.value) { true -> "charging"; false -> "not charging"; null -> "charging unknown" })
         }
         syncClock(conn)
+        applyLed(conn)
         checkCharger()
 
         val decoder = OpusFrameDecoder(OmiUuids.SAMPLE_RATE, frameSamples)
@@ -373,6 +378,25 @@ class CaptureService : LifecycleService() {
         } finally {
             f.delete(); store.close()
         }
+    }
+
+    /**
+     * The LED brightness chosen in the app (Device -> Omi), written to the Omi
+     * when it differs from what the Omi reports; the Omi keeps it in its own
+     * flash. Then read back, so the app shows what the Omi actually has.
+     */
+    private suspend fun applyLed(conn: OmiConnection) {
+        if (!conn.has(OmiUuids.LED_BRIGHTNESS)) return
+        val now = runCatching { conn.read(OmiUuids.LED_BRIGHTNESS)[0].toInt() and 0xff }.getOrNull()
+        val want = getSharedPreferences("boswell", MODE_PRIVATE).getInt("led_brightness", -1)
+        if (want in 0..100 && want != now) {
+            runCatching { conn.write(OmiUuids.LED_BRIGHTNESS, byteArrayOf(want.toByte())) }
+                .onSuccess { CaptureRepository.log("set the Omi's light to $want%") }
+                .onFailure { CaptureRepository.log("couldn't set the Omi's light: ${it.message}") }
+        }
+        val after = runCatching { conn.read(OmiUuids.LED_BRIGHTNESS)[0].toInt() and 0xff }.getOrNull() ?: now
+        CaptureRepository.update { it.copy(ledBrightness = after) }
+        after?.let { CaptureRepository.log("Omi light: ${if (it == 0) "off" else "$it%"}") }
     }
 
     /** A short buzz on the Omi, if it has a motor. Best effort: feedback, never a failure. */
@@ -561,6 +585,7 @@ class CaptureService : LifecycleService() {
             CaptureRepository.update { it.copy(device = info) }
             readVolatile(conn)
             syncClock(conn)
+            applyLed(conn)
             CaptureRepository.state.value.rssi?.let { CaptureRepository.log("sync: link ${it.value} dBm") }
             conn.preferThroughput()
             delay(500)
@@ -693,6 +718,14 @@ class CaptureService : LifecycleService() {
         const val ACTION_STOP = "net.boswell.phone.STOP"
         const val ACTION_SYNC = "net.boswell.phone.SYNC"
         const val ACTION_BUZZ = "net.boswell.phone.BUZZ"
+        const val ACTION_LED = "net.boswell.phone.LED"
+
+        /** Apply the chosen LED brightness now if connected; otherwise it's applied at the next connection. */
+        fun applyLedNow(context: Context) {
+            val l = CaptureRepository.state.value.link
+            if (l != Link.STREAMING && l != Link.SYNCING) return
+            runCatching { context.startService(Intent(context, CaptureService::class.java).setAction(ACTION_LED)) }
+        }
 
         /** Buzz the Omi if Live capture is connected (a timer going off); nothing otherwise. */
         fun buzz(context: Context, level: Int) {

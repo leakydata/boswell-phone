@@ -13,6 +13,8 @@ object OmiUuids {
     val DIM_RATIO: UUID = UUID.fromString("19b10011-e8f2-537e-4f6c-d104768a1214")  // LED, rw
     val MIC_GAIN: UUID = UUID.fromString("19b10012-e8f2-537e-4f6c-d104768a1214")   // rw
     val CHARGING: UUID = UUID.fromString("19b10013-e8f2-537e-4f6c-d104768a1214")   // 1 while charging
+    /** LED brightness, one byte 0-100 (0 = off); the firmware saves it in its own flash. */
+    val LED_BRIGHTNESS: UUID = UUID.fromString("19b10011-e8f2-537e-4f6c-d104768a1214")
     val FEATURES: UUID = UUID.fromString("19b10021-e8f2-537e-4f6c-d104768a1214")
     val TIME_READ: UUID = UUID.fromString("19b10032-e8f2-537e-4f6c-d104768a1214")  // epoch, LE u32
     val TIME_WRITE: UUID = UUID.fromString("19b10031-e8f2-537e-4f6c-d104768a1214")

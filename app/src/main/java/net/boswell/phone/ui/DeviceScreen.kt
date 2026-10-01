@@ -177,6 +177,27 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                     ?: ui.savedAddress?.let { Row2("Paired", it) }
                 ReadingRow("Battery", cap.battery) { "$it%" }
                 ReadingRow("Charging", cap.charging) { if (it) "yes" else "no" }
+                if (ui.savedAddress != null) {
+                    // The Omi's LED: 0 is off. Sent now when connected, otherwise at the next connection.
+                    val lctx = LocalContext.current
+                    val lprefs = remember { lctx.getSharedPreferences("boswell", android.content.Context.MODE_PRIVATE) }
+                    var led by remember { mutableStateOf(lprefs.getInt("led_brightness", -1).takeIf { it >= 0 } ?: cap.ledBrightness ?: 50) }
+                    LaunchedEffect(cap.ledBrightness) {
+                        if (lprefs.getInt("led_brightness", -1) < 0) cap.ledBrightness?.let { led = it }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Light", Modifier.padding(end = 12.dp))
+                        androidx.compose.material3.Slider(value = led.toFloat(), onValueChange = { led = it.toInt() }, valueRange = 0f..100f, steps = 9,
+                            onValueChangeFinished = {
+                                lprefs.edit().putInt("led_brightness", led).apply()
+                                net.boswell.phone.capture.CaptureService.applyLedNow(lctx)
+                            }, modifier = Modifier.weight(1f))
+                        Text(if (led == 0) "Off" else "$led%", Modifier.padding(start = 12.dp).width(44.dp), style = MaterialTheme.typography.labelLarge)
+                    }
+                    val connected = cap.link == net.boswell.phone.capture.Link.STREAMING || cap.link == net.boswell.phone.capture.Link.SYNCING
+                    if (!connected) Text("Sent to the Omi the next time it connects.", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 ReadingRow("Signal", cap.rssi) { "$it dBm" }
                 ReadingRow("Clock", cap.deviceClockSkewSeconds) { if (kotlin.math.abs(it) < 3) "in sync" else "off by ${it}s" }
                 ReadingRow("Waiting on the Omi", cap.ring) { r -> "≈ %.0f min".format(r.pending * (27 * 3600.0 / 1_115_064) / 60) }
