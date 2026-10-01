@@ -81,4 +81,26 @@ class ProtocolTest {
         assertArrayEquals(byteArrayOf(11, 12), p.frames[0])
         assertArrayEquals(byteArrayOf(13), p.frames[1])
     }
+
+    @Test fun `the firmware's exact-fit ghost frame is skipped`() {
+        // 444-byte stored packet: 4-byte timestamp, then [len][frame]... in 440 bytes.
+        // Three real frames (1+99 bytes each = 300), then a "frame" that would end at
+        // exactly 440: the firmware's off-by-one writes only its length byte and
+        // leaves stale bytes, putting the real frame in the next packet.
+        val p = ByteArray(444)
+        p[3] = 7
+        var o = 4
+        repeat(3) { p[o] = 99; p[o + 1] = 0xb8.toByte(); o += 100 }
+        p[o] = (444 - o - 1).toByte()                    // ends exactly at the end: a ghost
+        for (k in o + 1 until 444) p[k] = 0x2b
+        val sp = net.boswell.phone.omi.StoredPacket.parse(p)!!
+        org.junit.Assert.assertEquals(3, sp.frames.size)
+        assert(sp.frames.all { it[0] == 0xb8.toByte() })
+    }
+
+    @Test fun `a last frame that leaves padding is kept`() {
+        val p = ByteArray(444)
+        p[4] = 72; p[5] = 0xb8.toByte()                  // one 72-byte frame, zero padding after
+        org.junit.Assert.assertEquals(1, net.boswell.phone.omi.StoredPacket.parse(p)!!.frames.size)
+    }
 }

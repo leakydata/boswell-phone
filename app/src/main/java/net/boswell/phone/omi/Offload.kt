@@ -90,6 +90,15 @@ data class StoredPacket(val timestamp: Long, val frames: List<ByteArray>) {
             while (i < data.size) {
                 val len = data[i].toInt() and 0xff
                 if (len == 0 || i + 1 + len > data.size) break
+                // A frame that would end exactly at the end of the packet is never
+                // real: the firmware's write_to_storage() checks against
+                // MAX_WRITE_SIZE - 1, so an exact fit counts as an overflow -- it
+                // writes that frame's length byte, leaves the rest of the buffer as
+                // stale bytes from an earlier packet, and puts the real frame first
+                // in the next packet. Measured on 112,567 stored packets: all 1,514
+                // exact-fit "frames" were these ghosts; 815 failed to decode and 673
+                // decoded into 20 ms of garbage in the clip.
+                if (i + 1 + len == data.size) break
                 frames += data.copyOfRange(i + 1, i + 1 + len)
                 i += 1 + len
             }
