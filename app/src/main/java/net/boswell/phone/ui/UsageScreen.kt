@@ -46,6 +46,7 @@ private data class UsageView(
     val today: AssistantStore.Usage, val week: AssistantStore.Usage, val month: AssistantStore.Usage,
     val byPurpose: List<Triple<String, Int, Double>>, val perDay: List<Pair<LocalDate, Double>>,
     val watcherToday: Double, val budget: Double, val key: Llm.KeyInfo?,
+    val lastMonth: AssistantStore.Usage, val monthDays: Int, val dayOfMonth: Int,
 )
 
 private fun purposeName(p: String) = when (p) {
@@ -54,6 +55,15 @@ private fun purposeName(p: String) = when (p) {
     "capture" -> "Double-tap captures"
     "trigger" -> "Voice triggers"
     "watcher" -> "Listen-along hints"
+    "question" -> "Hearing Omi questions (cloud)"
+    "transcribe" -> "Cloud transcription"
+    "compare" -> "Compare with the cloud"
+    "web" -> "Web searches"
+    "notice" -> "Noticing promises and facts"
+    "brief" -> "Morning briefs"
+    "recap" -> "Evening recaps"
+    "meeting" -> "Briefs before meetings"
+    "notes" -> "Meeting notes"
     else -> p
 }
 
@@ -77,6 +87,8 @@ fun UsageScreen(onBack: () -> Unit) {
                     byPurpose = s.byPurpose(month), perDay = s.perDay(14),
                     watcherToday = s.spentToday("watcher"), budget = AssistantPrefs.budget(ctx),
                     key = Secrets.get(ctx, Secrets.OPENROUTER)?.let { Llm(it, AssistantPrefs.model(ctx)).keyInfo() },
+                    lastMonth = s.usage(start(today.withDayOfMonth(1).minusMonths(1)), month),
+                    monthDays = today.lengthOfMonth(), dayOfMonth = today.dayOfMonth,
                 )
             } finally { s.close() }
         }
@@ -89,6 +101,21 @@ fun UsageScreen(onBack: () -> Unit) {
         LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = pad.calculateTopPadding() + 8.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (u == null) { item { Text("Adding it up…") }; return@LazyColumn }
+            item {
+                // Where the month is heading, at the pace of the last week.
+                val perDay = u.week.cost / 7
+                val projected = u.month.cost + perDay * (u.monthDays - u.dayOfMonth)
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+                    Column(Modifier.padding(14.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("About ${money(projected)} this month at this pace", style = MaterialTheme.typography.titleMedium)
+                        Text("${money(perDay)} a day over the last week" +
+                            (if (u.lastMonth.calls > 0) " · last month ${money(u.lastMonth.cost)}" else ""),
+                            style = MaterialTheme.typography.bodySmall)
+                        Text("Settings that cost: cloud transcription, cloud questions, listen-along hints, briefs and recaps, promise noticing, web searches (Device → Assistant and Transcription).",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     for ((label, x) in listOf("Today" to u.today, "7 days" to u.week, "This month" to u.month)) {
