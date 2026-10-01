@@ -332,4 +332,14 @@ warnings for the Omi and phone offer a switch to Sync mode when very low.
 - **Battery**: on a day of testing, Boswell's cost was almost all CPU (588 of
   591 mAh), i.e. on-device transcription; the BLE link and audio barely
   register. A clean off-charger day is still to be measured.
+- **Speaker separation threshold** swept on 40 desktop recordings against
+  pyannote 3.1: merge-at 0.45/0.50/0.55/0.60/0.65/0.70 gave median timeline
+  agreement 80/81/84/88/89/87% and the right speaker count on 13/12/15/19/17/15
+  of 40. The existing 0.60 is the best (0.65 ties within noise), so it stays.
+  The remaining gap is the lighter pipeline itself; naming, when the phone
+  names a voice, matched the desktop 14 of 15 times.
+- **Titles feed the assistant**: day_conversations returns each
+  conversation's title and summary, so briefs and recaps read the day from
+  them and open only what matters. Titles only for conversations of a minute
+  or more.
 
