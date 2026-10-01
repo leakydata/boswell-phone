@@ -53,6 +53,7 @@ class VoiceReview(private val context: Context) {
         try {
             var matched = 0
             val refs = store.namedRefs()
+            field = store.unnamedField()
             if (refs.isNotEmpty()) {
                 for (f in ProcessingWorker.transcriptsDir(context).listFiles { x -> x.extension == "json" }.orEmpty()) {
                     matched += recheckFile(f, store, refs)
@@ -61,6 +62,14 @@ class VoiceReview(private val context: Context) {
             return Recheck(matched, tidy(store))
         } finally { store.close() }
     }
+
+    /** This clip voice's own filed voiceprints, which must not compete with it. */
+    private fun ownRows(store: SpeakerStore, clip: String, label: String): Set<Long> =
+        store.readableDatabase.rawQuery("SELECT id FROM voiceprints WHERE clip = ? AND speaker = ?", arrayOf(clip, label)).use { c ->
+            buildSet { while (c.moveToNext()) add(c.getLong(0)) }
+        }
+
+    private var field: List<Matching.Reference> = emptyList()
 
     private fun recheckFile(f: File, store: SpeakerStore, refs: List<Matching.Reference>): Int {
         val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.getOrNull() ?: return 0
@@ -75,7 +84,7 @@ class VoiceReview(private val context: Context) {
             val now = store.currentPerson(t.clip, label, sp.personId)
             if (now != null && store.nameOf(now) != null) return@mapValues sp
             val no = store.rejected(t.clip, label)
-            val r = Matching.match(emb, if (no.isEmpty()) refs else refs.filter { it.personId !in no })
+            val r = Matching.match(emb, if (no.isEmpty()) refs else refs.filter { it.personId !in no }, field.filter { !(it.voiceprintId in ownRows(store, t.clip, label)) })
             val candidates = r.candidates.map { Candidate(it.personId, store.nameOf(it.personId), it.score, it.voiceprintId) }
             if (r.decision == Matching.Decision.MATCHED) {
                 val pid = r.personId!!

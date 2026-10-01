@@ -64,7 +64,7 @@ class RoutinesWorker(context: Context, params: WorkerParameters) : CoroutineWork
             "Evening recap of today. Using day_conversations for today (read_conversation where useful) and list_todos: who I talked with, what was decided, " +
                 "what I promised and what others promised me, and anything I should do tomorrow. Short, scannable, at most 7 lines; cite moments."
         val a = Assistant(c).ask(q, if (morning) "brief" else "recap", display = if (morning) "Morning brief" else "Evening recap")
-        if (!a.error) AssistantNotify.post(c, AssistantNotify.ANSWERS, if (morning) "Good morning" else "Today, in short", a.text)
+        if (!a.error && !a.text.startsWith("I don't have an answer")) AssistantNotify.post(c, AssistantNotify.ANSWERS, if (morning) "Good morning" else "Today, in short", a.text)
     }
 
     /**
@@ -130,7 +130,7 @@ class RoutinesWorker(context: Context, params: WorkerParameters) : CoroutineWork
             val a = Assistant(c).ask("Brief me for \"${e.title}\" at $whenText. Search what was said recently with or about the people or topic in it " +
                 "(search_transcripts, facts_about, list_todos). 2-4 short lines; if there is nothing relevant, say only what and when.", "meeting",
                 display = "Before ${e.title}")
-            if (!a.error) AssistantNotify.post(c, AssistantNotify.ANSWERS, "Before ${e.title} ($whenText)", a.text)
+            if (!a.error && !a.text.startsWith("I don't have an answer")) AssistantNotify.post(c, AssistantNotify.ANSWERS, "Before ${e.title} ($whenText)", a.text)
         }
     }
 

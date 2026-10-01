@@ -61,6 +61,9 @@ object AssistantNotify {
                 .putExtra("open", Moments.openExtra(w)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
         }
+        Drafts.takeRecent()?.let { draft ->
+            b.addAction(0, "Open draft", PendingIntent.getActivity(c, id + 7, draft, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+        }
         val n = b.build()
         runCatching { c.getSystemService(NotificationManager::class.java).notify(id, n) }
         if (channel != LISTENING && AssistantPrefs.voice(c)) speak(c, text)

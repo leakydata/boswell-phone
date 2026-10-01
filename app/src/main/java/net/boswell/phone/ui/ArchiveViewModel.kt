@@ -97,9 +97,12 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     init {
         // Once: lines older transcripts left without a speaker get the nearest one's.
         val prefs = app.getSharedPreferences("boswell", android.content.Context.MODE_PRIVATE)
-        if (!prefs.getBoolean("orphans_attributed_v1", false)) viewModelScope.launch(Dispatchers.IO) {
+        // Once per change to how voices are matched: look at past recordings again.
+        val wave = "voices_rechecked_v2"     // v2: unnamed voices count as the field to be clear of
+        if (!prefs.getBoolean(wave, false)) viewModelScope.launch(Dispatchers.IO) {
             runCatching { net.boswell.phone.speakers.VoiceReview(app).recheck() }
-            prefs.edit().putBoolean("orphans_attributed_v1", true).apply()
+                .onSuccess { if (it.matched > 0) net.boswell.phone.capture.CaptureRepository.log("re-check: ${it.matched} more voices recognized") }
+            prefs.edit().putBoolean(wave, true).putBoolean("orphans_attributed_v1", true).apply()
             refresh(force = true)
         }
         refresh()

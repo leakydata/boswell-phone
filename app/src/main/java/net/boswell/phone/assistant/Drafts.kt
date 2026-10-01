@@ -16,12 +16,19 @@ import net.boswell.phone.R
  * recipient and text filled in. Nothing is sent from here, ever.
  */
 object Drafts {
+    /** The draft made while answering, so the answer itself can carry "Open draft". */
+    @Volatile var last: Pair<Long, Intent>? = null
+
+    /** A draft made in the last two minutes, taken (once) for the answer that made it. */
+    fun takeRecent(): Intent? = last?.takeIf { System.currentTimeMillis() - it.first < 120_000 }?.second.also { last = null }
+
     fun prepare(c: Context, to: String, text: String, via: String): String {
         val email = via.equals("email", true) || to.contains("@")
         val target = if (email) (if (to.contains("@")) to else lookup(c, to, email = true)) else (if (to.any { it.isDigit() }) to else lookup(c, to, email = false))
         val intent = if (email) Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:${target ?: ""}")).putExtra(Intent.EXTRA_TEXT, text)
             else Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:${target ?: ""}")).putExtra("sms_body", text)
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        last = System.currentTimeMillis() to intent
         val id = (System.currentTimeMillis() % 100_000).toInt() + 300_000
         AssistantNotify.ensureChannels(c)
         val n = NotificationCompat.Builder(c, AssistantNotify.ANSWERS)

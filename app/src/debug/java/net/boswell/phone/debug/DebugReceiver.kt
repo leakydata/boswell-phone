@@ -53,6 +53,19 @@ class DebugReceiver : BroadcastReceiver() {
                 net.boswell.phone.asr.Transcription.requestCloud(context, listOf(clip))
                 net.boswell.phone.process.ClipActions.retranscribe(context, listOf(clip))
             }
+            // am broadcast -a net.boswell.phone.debug.RECHECK   (voices: look at past recordings again, logging the outcome)
+            "net.boswell.phone.debug.RECHECK" -> {
+                val pending = goAsync()
+                Thread {
+                    try {
+                        val t0 = System.currentTimeMillis()
+                        val r = net.boswell.phone.speakers.VoiceReview(context).recheck()
+                        android.util.Log.i("Boswell", "recheck: matched ${r.matched}, merged ${r.merged} in ${System.currentTimeMillis() - t0} ms")
+                    } catch (e: Throwable) { android.util.Log.e("Boswell", "recheck failed", e) } finally { pending.finish() }
+                }.start()
+            }
+            // am broadcast -a net.boswell.phone.debug.BUDGET --ef usd 1.0   (the watcher's daily budget)
+            "net.boswell.phone.debug.BUDGET" -> net.boswell.phone.assistant.AssistantPrefs.setBudget(context, intent.getFloatExtra("usd", 0.5f).toDouble())
             // am broadcast -a net.boswell.phone.debug.LIFE_DELETE --el fact 1 --el log 1   (remove test entries)
             "net.boswell.phone.debug.LIFE_DELETE" -> net.boswell.phone.assistant.LifeStore(context).use { s ->
                 intent.getLongExtra("fact", -1).takeIf { it >= 0 }?.let(s::deleteFact)

@@ -51,7 +51,7 @@ object Matching {
      * well-covered person owns the top several rows, and a row margin would
      * collapse to zero exactly where coverage is best.
      */
-    fun match(vec: FloatArray, refs: List<Reference>): Result {
+    fun match(vec: FloatArray, refs: List<Reference>, field: List<Reference> = emptyList()): Result {
         if (!usable(vec) || refs.isEmpty()) return Result(Decision.NONE, emptyList(), 0.0, 0.0)
         val v = unit(vec)
         val best = HashMap<Long, Candidate>()
@@ -62,7 +62,15 @@ object Matching {
         }
         val ranked = best.values.sortedByDescending { it.score }
         val top = ranked.first()
-        val margin = ranked.getOrNull(1)?.let { top.score - it.score }
+        // The runner-up is the next named person -- or, as part of the field to
+        // be clear of, the closest unnamed voice. With one named person (often
+        // just the owner) there was no runner-up at all, so only the strict
+        // 0.75 applied and most of the owner's own speech stayed "uncertain";
+        // counting unnamed voices lets "clear of the field" apply as it does on
+        // the desktop. They are only ever competition, never the answer.
+        val fieldBest = field.maxOfOrNull { dot(v, it.vec) }
+        val runnerUp = listOfNotNull(ranked.getOrNull(1)?.score, fieldBest).maxOrNull()
+        val margin = runnerUp?.let { top.score - it }
         return Result(decide(top.score, margin), ranked.take(3), top.score, margin)
     }
 

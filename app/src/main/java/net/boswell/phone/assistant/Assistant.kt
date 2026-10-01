@@ -92,6 +92,7 @@ class Assistant(private val context: Context) {
                 }
             }
             messages += Llm.user(question)
+            var retried = false
             repeat(MAX_ROUNDS) {
                 val reply = try {
                     llm.chat(messages, tools(forCapture = fileOnly))
@@ -101,6 +102,12 @@ class Assistant(private val context: Context) {
                 }
                 store.logCall(source, model, reply)
                 cost += reply.cost
+                if (reply.toolCalls.isEmpty() && reply.text.isNullOrBlank() && !retried) {
+                    // An empty answer: ask once more, plainly, before giving up.
+                    retried = true
+                    messages += Llm.user("Please answer now in plain text, briefly.")
+                    return@repeat
+                }
                 if (reply.toolCalls.isEmpty()) {
                     val text = reply.text?.trim().orEmpty().ifEmpty { "I don't have an answer for that." }
                     // A trigger that turned out not to be a request: nothing to record or show.
@@ -138,6 +145,7 @@ class Assistant(private val context: Context) {
             if (source == "button") appendLine("${me ?: "The user"} asked this out loud just now by tapping the button on their Omi wearable; the phone heard it and transcribed it, so expect small transcription errors in the question. The question itself also appears in the recent lines below.")
             if (source == CAPTURE) appendLine("The user double-tapped the Omi to capture something to remember. File it with add_todo (pick a fitting category; set due only if they said when). Use add_calendar_event instead only if it is clearly an appointment or meeting at a specific time. Then reply with a very short confirmation like 'Added to Errands: pick up prescription (Thu 9:00)'.")
             appendLine("Answers appear as a phone notification: be direct and brief, one to three sentences, unless asked for detail. Say so plainly when the record does not contain the answer; do not invent what was said. Transcripts are machine-made and may contain errors.")
+            appendLine("For general questions (a film, a fact, how something works), answer from what you know; use web_search when it needs current information. Don't say you have no answer just because it isn't in the record.")
             appendLine("Every line you're given carries a moment label like [L123]. When you quote or refer to something specific that was said, put its label right after it (e.g. Sam said the budget is due Friday [L123]): the app turns labels into a link that plays that moment. Never invent labels.")
             appendLine("You can also: set timers and alarms; draft a text or email (it is only a draft the user sends themselves -- say so); look things up on the web for current information (weather, news, hours); remember facts about people when the user shares them, and recall them; keep quick logs (medication, expenses, parking, habits) and read them back; give talk stats; pull out numbers, emails, links and addresses that were said; translate what someone said. Named lists (\"read later\", \"gift ideas\", shopping) are to-do categories: add with add_todo and read with list_todos.")
             appendLine()

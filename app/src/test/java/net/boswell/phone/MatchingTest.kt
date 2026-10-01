@@ -47,4 +47,15 @@ class MatchingTest {
         assertEquals(0x3E800000, java.nio.ByteBuffer.wrap(b).order(java.nio.ByteOrder.LITTLE_ENDIAN).int)
         assertArrayEquals(x, SpeakerStore.unpack(b), 0f)
     }
+
+    @Test fun `with one named person, being clear of the unnamed voices is enough`() {
+        fun v(vararg x: Float) = Matching.unit(floatArrayOf(*x))
+        val me = Matching.Reference(1, 1, v(1f, 0f, 0f))
+        val voice = v(0.66f, 0.75f, 0f)             // ~0.66 like me: below the strict 0.75
+        assertEquals(Matching.Decision.UNCERTAIN, Matching.match(voice, listOf(me)).decision)
+        val farStranger = Matching.Reference(2, 9, v(0f, 0f, 1f))       // 0 like the voice
+        assertEquals(Matching.Decision.MATCHED, Matching.match(voice, listOf(me), listOf(farStranger)).decision)
+        val nearStranger = Matching.Reference(3, 9, v(0.5f, 0.86f, 0f))  // as like the voice as I am
+        assertEquals(Matching.Decision.UNCERTAIN, Matching.match(voice, listOf(me), listOf(nearStranger)).decision)
+    }
 }

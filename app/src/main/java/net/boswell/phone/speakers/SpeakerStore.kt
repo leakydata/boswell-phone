@@ -95,8 +95,27 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         }
     }
 
-    /** Match against named people only: unnamed clusters are the question, not the answer. */
-    fun match(vec: FloatArray): Matching.Result = Matching.match(vec, refs(named = true))
+    /**
+     * Match against named people: unnamed clusters are the question, not the
+     * answer -- but they are part of the field a match must be clear of.
+     * [exclude] keeps a voice from competing with its own filed voiceprint.
+     */
+    fun match(vec: FloatArray, exclude: Pair<String, String>? = null): Matching.Result =
+        Matching.match(vec, refs(named = true), unnamedField(exclude))
+
+    /** Unnamed voices' voiceprints, without the ones of one clip's voice. */
+    fun unnamedField(exclude: Pair<String, String>? = null): List<Matching.Reference> {
+        val sql = """SELECT v.id, v.person_id, v.vec, v.clip, v.speaker FROM voiceprints v JOIN people p ON p.id = v.person_id
+                     WHERE p.name IS NULL AND v.impure = 0"""
+        return readableDatabase.rawQuery(sql, null).use { c ->
+            buildList {
+                while (c.moveToNext()) {
+                    if (exclude != null && c.getString(3) == exclude.first && c.getString(4) == exclude.second) continue
+                    add(Matching.Reference(c.getLong(0), c.getLong(1), unpack(c.getBlob(2))))
+                }
+            }
+        }
+    }
 
     fun logMatch(clip: String, speaker: String, r: Matching.Result) {
         writableDatabase.insert("matches", null, ContentValues().apply {
