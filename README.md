@@ -13,7 +13,7 @@ and sound tagging all running on the phone itself.
 ![On-device AI](https://img.shields.io/badge/AI-on--device-0a7ea4)
 ![Models](https://img.shields.io/badge/models-optional%20download-555)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-[![Release](https://img.shields.io/github/v/release/leakydata/boswell-phone?include_prereleases&label=download)](https://github.com/leakydata/boswell-phone/releases/latest)
+[![Release](https://img.shields.io/github/v/release/leakydata/boswell-phone?include_prereleases&label=download)](https://github.com/leakydata/boswell-phone/releases)
 
 </div>
 
@@ -139,7 +139,7 @@ assistant or cloud transcription — an [OpenRouter](https://openrouter.ai) API 
 
 ### Install
 
-**[⬇ Download the latest APK](https://github.com/leakydata/boswell-phone/releases/latest)**
+**[⬇ Download the latest APK](https://github.com/leakydata/boswell-phone/releases)**
 (about 90 MB), open it on your phone, and allow installing from your browser or file
 manager when Android asks. Play Protect may warn about an app it hasn't seen before;
 choose *Install anyway*. Updates install over the top, keeping your data.
