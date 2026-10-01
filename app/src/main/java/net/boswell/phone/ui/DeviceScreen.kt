@@ -262,6 +262,7 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                     }
                     Switch(checked = cloudQ, onCheckedChange = { cloudQ = it; net.boswell.phone.assistant.AssistantPrefs.setCloudQuestions(ctx2, it) })
                 }
+                AssistantRoutines()
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable(onClick = onTriggers)) {
                     Column(Modifier.weight(1f)) {
                         Text("Voice triggers", style = MaterialTheme.typography.bodyLarge)
@@ -555,4 +556,54 @@ private fun VocabularyDialog(onDismiss: () -> Unit) {
             }
         },
     )
+}
+
+/** The assistant's own routines and reach: brief, recap, promises, meeting briefs, the web, contacts. */
+@Composable
+private fun AssistantRoutines() {
+    val ctx = LocalContext.current
+    val P = net.boswell.phone.assistant.AssistantPrefs
+    var brief by remember { mutableStateOf(P.briefHour(ctx)) }
+    var recap by remember { mutableStateOf(P.recapHour(ctx)) }
+    var promises by remember { mutableStateOf(P.promises(ctx)) }
+    var meetings by remember { mutableStateOf(P.meetingBriefs(ctx)) }
+    var web by remember { mutableStateOf(P.webSearch(ctx)) }
+    var contacts by remember { mutableStateOf(ctx.checkSelfPermission(android.Manifest.permission.READ_CONTACTS) == android.content.pm.PackageManager.PERMISSION_GRANTED) }
+    val ask = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { contacts = it }
+    fun hourLabel(h: Int) = when { h < 0 -> "Off"; h == 0 -> "12 AM"; h < 12 -> "$h AM"; h == 12 -> "12 PM"; else -> "${h - 12} PM" }
+
+    Text("Morning brief", style = MaterialTheme.typography.bodyLarge)
+    Text("Today's calendar, what's due, and loose ends from yesterday, as a notification.", style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Row(Modifier.horizontalScroll(rememberScrollState())) {
+        for (h in listOf(-1, 6, 7, 8, 9)) FilterChip(selected = brief == h, onClick = { brief = h; P.setBriefHour(ctx, h) },
+            label = { Text(hourLabel(h)) }, modifier = Modifier.padding(end = 4.dp))
+    }
+    Text("Evening recap", style = MaterialTheme.typography.bodyLarge)
+    Text("Who you talked with, what was decided, and what was promised.", style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Row(Modifier.horizontalScroll(rememberScrollState())) {
+        for (h in listOf(-1, 19, 20, 21, 22)) FilterChip(selected = recap == h, onClick = { recap = h; P.setRecapHour(ctx, h) },
+            label = { Text(hourLabel(h)) }, modifier = Modifier.padding(end = 4.dp))
+    }
+    @Composable fun Toggle(title: String, detail: String, on: Boolean, set: (Boolean) -> Unit) = Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = on, onCheckedChange = set)
+    }
+    Toggle("Notice promises", "Every few hours, promises in what was said (yours and others') become to-dos under Promises, and facts about people are remembered.",
+        promises) { promises = it; P.setPromises(ctx, it) }
+    Toggle("Brief before meetings", "Shortly before a calendar event, what was last said about its people or topic.", meetings) { meetings = it; P.setMeetingBriefs(ctx, it) }
+    Toggle("Look things up on the web", "Weather, news, facts and opening hours, when you ask. A few cents a search at most.", web) { web = it; P.setWebSearch(ctx, it) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Contacts for message drafts", style = MaterialTheme.typography.bodyLarge)
+            Text(if (contacts) "Allowed: \u201ctext Sam I'm late\u201d finds Sam's number. Drafts are never sent for you."
+                else "Let drafts find people by name. Without it, you pick the recipient when the draft opens.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (!contacts) TextButton(onClick = { ask.launch(android.Manifest.permission.READ_CONTACTS) }) { Text("Allow") }
+    }
 }

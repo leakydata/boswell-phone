@@ -119,6 +119,24 @@ object AssistantPrefs {
     fun topicSince(c: Context): Double = p(c).getLong("topic_since", 0L).toDouble()
     fun newTopic(c: Context) = p(c).edit().putLong("topic_since", System.currentTimeMillis() / 1000).apply()
 
+    /** The assistant may look things up on the web (OpenRouter's web plugin, a few cents a search). */
+    fun webSearch(c: Context) = p(c).getBoolean("web_search", true)
+    fun setWebSearch(c: Context, on: Boolean) = p(c).edit().putBoolean("web_search", on).apply()
+
+    /** Morning brief and evening recap: the hour of day, or -1 for off. */
+    fun briefHour(c: Context) = p(c).getInt("brief_hour", 8)
+    fun setBriefHour(c: Context, h: Int) = p(c).edit().putInt("brief_hour", h).apply()
+    fun recapHour(c: Context) = p(c).getInt("recap_hour", 21)
+    fun setRecapHour(c: Context, h: Int) = p(c).edit().putInt("recap_hour", h).apply()
+
+    /** Notice promises in what was said and file them as to-dos. */
+    fun promises(c: Context) = p(c).getBoolean("promises", true)
+    fun setPromises(c: Context, on: Boolean) = p(c).edit().putBoolean("promises", on).apply()
+
+    /** A short brief before calendar events. */
+    fun meetingBriefs(c: Context) = p(c).getBoolean("meeting_briefs", true)
+    fun setMeetingBriefs(c: Context, on: Boolean) = p(c).edit().putBoolean("meeting_briefs", on).apply()
+
     fun watcher(c: Context) = p(c).getBoolean("watcher", false)
     fun setWatcher(c: Context, on: Boolean) = p(c).edit().putBoolean("watcher", on).apply()
 

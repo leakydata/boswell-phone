@@ -53,6 +53,11 @@ class DebugReceiver : BroadcastReceiver() {
                 net.boswell.phone.asr.Transcription.requestCloud(context, listOf(clip))
                 net.boswell.phone.process.ClipActions.retranscribe(context, listOf(clip))
             }
+            // am broadcast -a net.boswell.phone.debug.LIFE_DELETE --el fact 1 --el log 1   (remove test entries)
+            "net.boswell.phone.debug.LIFE_DELETE" -> net.boswell.phone.assistant.LifeStore(context).use { s ->
+                intent.getLongExtra("fact", -1).takeIf { it >= 0 }?.let(s::deleteFact)
+                intent.getLongExtra("log", -1).takeIf { it >= 0 }?.let(s::deleteLog)
+            }
             // am broadcast -a net.boswell.phone.debug.RECOVER
             // Rebuild clips missing from the clips folder out of the kept spool files, never touching existing ones.
             "net.boswell.phone.debug.RECOVER" -> {

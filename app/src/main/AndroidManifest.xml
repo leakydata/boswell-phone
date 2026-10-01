@@ -26,6 +26,10 @@
     <uses-permission android:name="android.permission.REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
     <!-- Asked once, so Android does not stop recording to save battery. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Timers and alarms the assistant sets ring on time. -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <!-- Optional, asked for in Device -> Assistant: message drafts find the recipient by name. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
 
     <application
         android:allowBackup="false"
@@ -65,6 +69,10 @@
             android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/share_paths" />
         </provider>
+
+        <receiver
+            android:name=".assistant.AlarmReceiver"
+            android:exported="false" />
 
         <receiver
             android:name=".capture.SwitchToSyncReceiver"

@@ -105,6 +105,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Older clips become compact copies; quiet ones lose their sound, per the setting.
         net.boswell.phone.process.CleanupWorker.runNow(getApplication())
         net.boswell.phone.process.CleanupWorker.schedule(getApplication(), true)
+        net.boswell.phone.assistant.RoutinesWorker.schedule(getApplication())
         refreshAll()
         viewModelScope.launch { capture.distinctUntilChangedBy { it.clipsWritten }.collect { refreshClips() } }
         viewModelScope.launch { ProcessingRepository.state.distinctUntilChangedBy { it.done to it.running }.collect { refreshClips(); refreshPeople() } }

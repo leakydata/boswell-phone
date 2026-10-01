@@ -32,7 +32,8 @@ class LlmException(message: String) : Exception(message)
  */
 class Llm(private val apiKey: String, private val model: String, private val baseUrl: String = OPENROUTER_URL) {
 
-    fun chat(messages: List<JsonObject>, tools: JsonArray? = null, maxTokens: Int = 800, temperature: Double = 0.3): LlmReply {
+    fun chat(messages: List<JsonObject>, tools: JsonArray? = null, maxTokens: Int = 800, temperature: Double = 0.3,
+             extra: Map<String, kotlinx.serialization.json.JsonElement> = emptyMap()): LlmReply {
         val body = buildJsonObject {
             put("model", model)
             put("messages", JsonArray(messages))
@@ -41,6 +42,7 @@ class Llm(private val apiKey: String, private val model: String, private val bas
             put("temperature", temperature)
             // OpenRouter reports what each call cost, which is what the daily budget counts.
             put("usage", buildJsonObject { put("include", true) })
+            for ((k, v) in extra) put(k, v)
         }
         val conn = (URI(baseUrl).toURL().openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"

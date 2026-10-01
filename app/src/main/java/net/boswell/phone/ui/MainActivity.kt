@@ -26,9 +26,17 @@ class MainActivity : ComponentActivity() {
                 Manifest.permission.BLUETOOTH_CONNECT,
                 Manifest.permission.POST_NOTIFICATIONS,
             ).filter { checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED }.toTypedArray()
-                .takeIf { it.isNotEmpty() } ?: return run { setContent { BoswellTheme { BoswellApp(vm, intent?.getStringExtra("open")) } } }
+                .takeIf { it.isNotEmpty() } ?: return run { setContent { BoswellTheme { BoswellApp(vm, openTarget.value) } } }
         )
-        setContent { BoswellTheme { BoswellApp(vm, intent?.getStringExtra("open")) } }
+        setContent { BoswellTheme { BoswellApp(vm, openTarget.value) } }
+    }
+
+    /** Where a notification asked to land; a new one arriving while open replaces it. */
+    private val openTarget by lazy { androidx.compose.runtime.mutableStateOf(intent?.getStringExtra("open")) }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        intent.getStringExtra("open")?.let { openTarget.value = it }
     }
 
     override fun onResume() {

@@ -86,8 +86,8 @@ object Calendar {
      * Events from every calendar the phone shows (the ones visible in the
      * calendar app), recurring ones expanded, between two epoch-millis.
      */
-    fun events(c: Context, from: Long, to: Long): List<Event> {
-        if (!allowed(c) || !showEvents(c)) return emptyList()
+    fun events(c: Context, from: Long, to: Long, respectShow: Boolean = true): List<Event> {
+        if (!allowed(c) || (respectShow && !showEvents(c))) return emptyList()
         val uri = CalendarContract.Instances.CONTENT_URI.buildUpon()
         android.content.ContentUris.appendId(uri, from)
         android.content.ContentUris.appendId(uri, to)

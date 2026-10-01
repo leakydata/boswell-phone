@@ -54,6 +54,7 @@ class Assistant(private val context: Context) {
         add(Llm.tool("read_conversation", "Every line of one conversation.",
             mapOf("id" to ("integer" to "conversation id from day_conversations or search")), listOf("id")))
         add(Llm.tool("people", "Everyone the phone knows by name, and when each was last heard.", emptyMap()))
+        for (d in MoreTools(context).defs()) add(d)
     }
 
     fun ready(): Boolean = Secrets.get(context, Secrets.OPENROUTER) != null
@@ -137,6 +138,8 @@ class Assistant(private val context: Context) {
             if (source == "button") appendLine("${me ?: "The user"} asked this out loud just now by tapping the button on their Omi wearable; the phone heard it and transcribed it, so expect small transcription errors in the question. The question itself also appears in the recent lines below.")
             if (source == CAPTURE) appendLine("The user double-tapped the Omi to capture something to remember. File it with add_todo (pick a fitting category; set due only if they said when). Use add_calendar_event instead only if it is clearly an appointment or meeting at a specific time. Then reply with a very short confirmation like 'Added to Errands: pick up prescription (Thu 9:00)'.")
             appendLine("Answers appear as a phone notification: be direct and brief, one to three sentences, unless asked for detail. Say so plainly when the record does not contain the answer; do not invent what was said. Transcripts are machine-made and may contain errors.")
+            appendLine("Every line you're given carries a moment label like [L123]. When you quote or refer to something specific that was said, put its label right after it (e.g. Sam said the budget is due Friday [L123]): the app turns labels into a link that plays that moment. Never invent labels.")
+            appendLine("You can also: set timers and alarms; draft a text or email (it is only a draft the user sends themselves -- say so); look things up on the web for current information (weather, news, hours); remember facts about people when the user shares them, and recall them; keep quick logs (medication, expenses, parking, habits) and read them back; give talk stats; pull out numbers, emails, links and addresses that were said; translate what someone said. Named lists (\"read later\", \"gift ideas\", shopping) are to-do categories: add with add_todo and read with list_todos.")
             appendLine()
             appendLine("What was said in the last 10 minutes:")
             append(recent.ifBlank { "(nothing)" })
@@ -149,7 +152,7 @@ class Assistant(private val context: Context) {
         val names = HashMap<Long, String?>()
         val t = DateTimeFormatter.ofPattern("h:mm")
         return archive.readableDatabase.rawQuery("""
-            SELECT l.t0, s.conv_key, l.text FROM lines l LEFT JOIN clip_speakers s ON s.clip = l.clip AND s.label = l.label
+            SELECT l.t0, s.conv_key, l.text, l.id FROM lines l LEFT JOIN clip_speakers s ON s.clip = l.clip AND s.label = l.label
             WHERE l.t0 >= ? AND l.t0 < ? ORDER BY l.t0 LIMIT 400""", arrayOf(from.toString(), to.toString())).use { c ->
             buildString {
                 while (c.moveToNext()) {
@@ -157,7 +160,7 @@ class Assistant(private val context: Context) {
                     val pid = key?.takeIf { it.startsWith("p") }?.drop(1)?.toLongOrNull()
                     val who = pid?.let { p -> names.getOrPut(p) { speakers.nameOf(p) } } ?: "someone"
                     val mark = if (pid != null && pid == owner) " (me)" else ""
-                    appendLine("${Instant.ofEpochSecond(c.getDouble(0).toLong()).atZone(zone).format(t)} $who$mark: ${c.getString(2)}")
+                    appendLine("${Instant.ofEpochSecond(c.getDouble(0).toLong()).atZone(zone).format(t)} [L${c.getLong(3)}] $who$mark: ${c.getString(2)}")
                 }
             }
         }
@@ -181,7 +184,7 @@ class Assistant(private val context: Context) {
                 val hits = archive.search(str("query") ?: "", 60).filter { it.line.t0 >= since }.take(25)
                 if (hits.isEmpty()) "no matches" else hits.joinToString("\n") { h ->
                     val who = h.line.personId?.let(speakers::nameOf) ?: "someone"
-                    "${at(h.line.t0)} (conversation ${h.conversation}) $who: ${h.line.text}"
+                    "${at(h.line.t0)} (conversation ${h.conversation}) [L${h.line.id}] $who: ${h.line.text}"
                 }
             }
             "recent_lines" -> lines(archive, speakers, System.currentTimeMillis() / 1000.0 - (int("minutes") ?: 10).coerceIn(1, 240) * 60).ifBlank { "nothing was said" }
@@ -232,6 +235,7 @@ class Assistant(private val context: Context) {
                     onSuccess = { "added to the calendar \"${net.boswell.phone.todo.Calendar.chosen(context)?.name}\": $title at ${at(start)}" },
                     onFailure = { "not added: ${it.message}" })
             }
+            in MoreTools(context).names -> MoreTools(context).run(call.name, args, archive, speakers)
             else -> "unknown tool ${call.name}"
         }
     }

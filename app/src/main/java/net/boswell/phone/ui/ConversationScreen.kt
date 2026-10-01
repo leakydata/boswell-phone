@@ -61,7 +61,7 @@ import net.boswell.phone.ui.theme.Voices
 
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack: () -> Unit, onPerson: (Long) -> Unit) {
+fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack: () -> Unit, onPerson: (Long) -> Unit, playFocus: Boolean = false) {
     val s by vm.conv.collectAsStateWithLifecycle()
     var who by remember { mutableStateOf<String?>(null) }
     var orphan by remember { mutableStateOf<LineRow?>(null) }
@@ -71,11 +71,14 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
     LaunchedEffect(id) { vm.openConversation(id) }
     DisposableEffect(Unit) { onDispose { vm.closeConversation() } }
     val list = rememberLazyListState()
+    var playedFocus by remember { mutableStateOf(false) }
     LaunchedEffect(focusLine, s.lines.size) {
         // Scroll to the searched-for line's turn (lines merge into turns, so find by position in time).
         val target = s.lines.firstOrNull { it.id == focusLine } ?: return@LaunchedEffect
         val i = s.lines.filter { it.t0 < target.t0 }.map { it.speaker }.zipWithNext().count { (a, b) -> a != b }
         list.scrollToItem((i + 1).coerceAtMost(s.lines.size))
+        // From a "hear it" link: play that moment once the player is ready.
+        if (playFocus && !playedFocus) { playedFocus = true; kotlinx.coroutines.delay(400); vm.playLine(target) }
     }
 
     val c = s.conversation

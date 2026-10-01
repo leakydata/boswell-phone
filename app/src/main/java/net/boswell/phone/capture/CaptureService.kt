@@ -77,6 +77,10 @@ class CaptureService : LifecycleService() {
                 return START_STICKY       // live: come back if the process dies
             }
             ACTION_STOP -> lifecycleScope.launch { stopCapture("stopped by user"); stopSelf() }
+            ACTION_BUZZ -> {
+                buzz(intent.getIntExtra("level", 3))
+                return if (captureJob?.isActive == true) START_STICKY else START_NOT_STICKY
+            }
             ACTION_SYNC -> {
                 val address = intent.getStringExtra(EXTRA_ADDRESS) ?: return START_NOT_STICKY
                 goForeground("Syncing with Omi…")
@@ -670,6 +674,13 @@ class CaptureService : LifecycleService() {
         const val ACTION_START = "net.boswell.phone.START"
         const val ACTION_STOP = "net.boswell.phone.STOP"
         const val ACTION_SYNC = "net.boswell.phone.SYNC"
+        const val ACTION_BUZZ = "net.boswell.phone.BUZZ"
+
+        /** Buzz the Omi if Live capture is connected (a timer going off); nothing otherwise. */
+        fun buzz(context: Context, level: Int) {
+            if (CaptureRepository.state.value.link != Link.STREAMING) return
+            runCatching { context.startService(Intent(context, CaptureService::class.java).setAction(ACTION_BUZZ).putExtra("level", level)) }
+        }
         const val EXTRA_ADDRESS = "address"
         private const val CHANNEL = "capture"
         private const val NOTIFICATION_ID = 1

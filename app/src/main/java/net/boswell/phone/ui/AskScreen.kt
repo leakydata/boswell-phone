@@ -83,7 +83,8 @@ class AskViewModel(app: Application) : AndroidViewModel(app) {
 }
 
 @Composable
-fun AskScreen(pad: PaddingValues, onSetup: () -> Unit, onUsage: () -> Unit = {}) {
+fun AskScreen(pad: PaddingValues, onSetup: () -> Unit, onUsage: () -> Unit = {}, onMoment: (Long, Long) -> Unit = { _, _ -> },
+              onLogs: () -> Unit = {}) {
     val vm: AskViewModel = viewModel()
     val s by vm.state.collectAsStateWithLifecycle()
     val cap by CaptureRepository.state.collectAsStateWithLifecycle()
@@ -98,7 +99,7 @@ fun AskScreen(pad: PaddingValues, onSetup: () -> Unit, onUsage: () -> Unit = {})
                     Text(if (cap.asking == "listening") "Listening to your question…" else "Thinking…")
                 }
             }
-            items(s.exchanges, key = { it.id }) { e -> ExchangeCard(e) }
+            items(s.exchanges, key = { it.id }) { e -> ExchangeCard(e, onMoment) }
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Ask", style = MaterialTheme.typography.headlineLarge)
@@ -114,6 +115,7 @@ fun AskScreen(pad: PaddingValues, onSetup: () -> Unit, onUsage: () -> Unit = {})
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Row {
                             androidx.compose.material3.TextButton(onClick = { vm.newTopic() }) { Text(if (s.freshTopic) "New topic started ✓" else "New topic") }
+                            androidx.compose.material3.TextButton(onClick = onLogs) { Text("Logs") }
                             androidx.compose.material3.TextButton(onClick = onUsage) { Text("AI usage") }
                         }
                     }
@@ -131,8 +133,33 @@ fun AskScreen(pad: PaddingValues, onSetup: () -> Unit, onUsage: () -> Unit = {})
     }
 }
 
+/** Things in an answer worth a button: numbers to call, links and emails to open, addresses to map. */
+private val PHONE = Regex("""(?<!\d)(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}(?!\d)""")
+private val URL = Regex("""\bhttps?://\S+|\b[\w-]+\.(?:com|org|net|io|gov|edu)(?:/\S*)?""", RegexOption.IGNORE_CASE)
+private val EMAIL = Regex("""[\w.+-]+@[\w-]+\.[\w.]+""")
+private val ADDRESS = Regex("""\b\d{1,6}\s+(?:[A-Z][a-z]+\s){1,3}(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Boulevard|Blvd|Court|Ct|Way|Place|Pl)\b""")
+
 @Composable
-private fun ExchangeCard(e: Exchange) {
+private fun ExchangeCard(e: Exchange, onMoment: (Long, Long) -> Unit = { _, _ -> }) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val shown = remember(e.answer) { net.boswell.phone.assistant.Moments.strip(e.answer) }
+    // Quoted moments, resolved off the main thread: "▶ 3:05 PM" plays that line.
+    val moments by androidx.compose.runtime.produceState(emptyList<net.boswell.phone.assistant.Moments.Where>(), e.answer) {
+        value = withContext(Dispatchers.IO) {
+            net.boswell.phone.assistant.Moments.ids(e.answer).take(4).mapNotNull { net.boswell.phone.assistant.Moments.resolve(ctx, it) }
+        }
+    }
+    val details = remember(shown) {
+        buildList {
+            EMAIL.findAll(shown).forEach { add("Email" to android.content.Intent(android.content.Intent.ACTION_SENDTO, android.net.Uri.parse("mailto:${it.value}"))) }
+            PHONE.findAll(shown).forEach { add("Call ${it.value}" to android.content.Intent(android.content.Intent.ACTION_DIAL, android.net.Uri.parse("tel:${it.value.filter { c -> c.isDigit() || c == '+' }}"))) }
+            URL.findAll(shown).filter { u -> EMAIL.findAll(shown).none { it.value.contains(u.value) } }.forEach {
+                val u = if (it.value.startsWith("http")) it.value else "https://${it.value}"
+                add("Open ${it.value.removePrefix("https://").removePrefix("http://").take(24)}" to android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(u)))
+            }
+            ADDRESS.findAll(shown).forEach { add("Map" to android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("geo:0,0?q=" + android.net.Uri.encode(it.value)))) }
+        }.distinctBy { it.first }.take(4)
+    }
     val watcher = e.source == "watcher"
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (!watcher && e.question != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -146,7 +173,13 @@ private fun ExchangeCard(e: Exchange) {
             modifier = Modifier.padding(end = 32.dp)) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (watcher) Text("Hint · ${e.question ?: ""}", style = MaterialTheme.typography.labelLarge)
-                Text(e.answer, style = MaterialTheme.typography.bodyLarge)
+                Text(shown, style = MaterialTheme.typography.bodyLarge)
+                if (moments.isNotEmpty() || details.isNotEmpty()) androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (m in moments) androidx.compose.material3.AssistChip(onClick = { onMoment(m.conversation, m.line) },
+                        label = { Text("▶ ${Fmt.time(m.at)}") })
+                    for ((label, intent) in details) androidx.compose.material3.AssistChip(onClick = { runCatching { ctx.startActivity(intent) } },
+                        label = { Text(label) })
+                }
                 Text("${Fmt.time(e.at)} · ${when (e.source) { "button" -> "asked on the Omi"; "watcher" -> "while listening"; "trigger" -> "from a voice trigger"; "capture" -> "double tap"; else -> "typed" }}" +
                     (if (e.cost > 0) " · $%.4f".format(e.cost) else ""), style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)

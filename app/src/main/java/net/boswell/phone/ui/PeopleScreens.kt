@@ -207,6 +207,19 @@ fun PersonScreen(vm: ArchiveViewModel, id: Long, onBack: () -> Unit, onOpen: (Lo
                     })
                 }
             }
+            // What the assistant has learned about them, from what was said or told it.
+            item {
+                val ctx = androidx.compose.ui.platform.LocalContext.current
+                var version by remember { mutableStateOf(0) }
+                val facts = remember(p?.name, version) { p?.name?.let { n -> net.boswell.phone.assistant.LifeStore(ctx).use { it.facts(n.split(" ").first()) } }.orEmpty() }
+                if (facts.isNotEmpty()) Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("What you know about ${p?.name?.split(" ")?.first()}", style = MaterialTheme.typography.titleMedium)
+                    for (f in facts) Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("• ${f.fact}", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                        TextButton(onClick = { net.boswell.phone.assistant.LifeStore(ctx).use { it.deleteFact(f.id) }; version++ }) { Text("Remove") }
+                    }
+                }
+            }
             item { Text("Conversations", style = MaterialTheme.typography.titleMedium) }
             items(s.conversations, key = { it.id }) { c ->
                 Card(onClick = { onOpen(c.id) }, modifier = Modifier.fillMaxWidth()) {

@@ -42,10 +42,13 @@ object AssistantNotify {
         nm.createNotificationChannel(NotificationChannel(LISTENING, "Listening for a question", NotificationManager.IMPORTANCE_LOW))
     }
 
-    fun post(c: Context, channel: String, title: String, text: String, id: Int = (System.currentTimeMillis() % 100_000).toInt() + 1000) {
+    fun post(c: Context, channel: String, title: String, rawText: String, id: Int = (System.currentTimeMillis() % 100_000).toInt() + 1000) {
         ensureChannels(c)
+        val text = Moments.strip(rawText)
         val open = PendingIntent.getActivity(c, 0, Intent(c, MainActivity::class.java).putExtra("open", "ask"), PendingIntent.FLAG_IMMUTABLE)
-        val n = NotificationCompat.Builder(c, channel)
+        // The first quoted moment, a tap away.
+        val moment = Moments.ids(rawText).firstOrNull()?.let { runCatching { Moments.resolve(c, it) }.getOrNull() }
+        val b = NotificationCompat.Builder(c, channel)
             .setSmallIcon(R.drawable.ic_stat_mic)
             .setContentTitle(title)
             .setContentText(text)
@@ -53,7 +56,12 @@ object AssistantNotify {
             .setContentIntent(open)
             .setVisibility(if (channel == ANSWERS) NotificationCompat.VISIBILITY_PUBLIC else NotificationCompat.VISIBILITY_PRIVATE)
             .setAutoCancel(true)
-            .build()
+        moment?.let { w ->
+            b.addAction(0, "Hear it", PendingIntent.getActivity(c, id, Intent(c, MainActivity::class.java)
+                .putExtra("open", Moments.openExtra(w)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+        }
+        val n = b.build()
         runCatching { c.getSystemService(NotificationManager::class.java).notify(id, n) }
         if (channel != LISTENING && AssistantPrefs.voice(c)) speak(c, text)
     }

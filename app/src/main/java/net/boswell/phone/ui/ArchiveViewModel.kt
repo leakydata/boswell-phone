@@ -481,6 +481,21 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         net.boswell.phone.assistant.AssistantNotify.post(getApplication(), net.boswell.phone.assistant.AssistantNotify.ANSWERS, "Summary · ${Fmt.time(c.started)}", a.text)
     }
 
+    /** Meeting notes for a conversation -- summary, decisions, action items -- shared as text. */
+    fun meetingNotes(id: Long, launch: (android.content.Intent) -> Unit) = viewModelScope.launch {
+        val c = archive.conversation(id) ?: return@launch
+        val a = withContext(Dispatchers.IO) {
+            net.boswell.phone.assistant.Assistant(getApplication()).ask(
+                "Write meeting notes for conversation $id (${Fmt.time(c.started)}-${Fmt.time(c.ended)}) using read_conversation: " +
+                    "a 2-3 sentence summary, then 'Decisions:' and 'Action items:' as short bullet lists (who does what, by when if said). " +
+                    "Plain text for sharing; no moment labels.", "notes", display = "Meeting notes · ${Fmt.time(c.started)}")
+        }
+        if (a.error) return@launch
+        launch(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
+            .putExtra(android.content.Intent.EXTRA_SUBJECT, "Notes · ${Fmt.time(c.started)}")
+            .putExtra(android.content.Intent.EXTRA_TEXT, net.boswell.phone.assistant.Moments.strip(a.text)), "Share notes"))
+    }
+
     /** Save hand corrections for several lines at once, then refresh what shows them. */
     fun speakersInClip(clip: String): List<Pair<String, String?>> = archive.speakersInClip(clip)
 

@@ -45,8 +45,16 @@ fun BoswellApp(device: MainViewModel, startTab: String? = null) {
     val route = entry?.destination?.route
     val onTab = tabs.any { it.route == route }
 
-    androidx.compose.runtime.LaunchedEffect(startTab) { if (startTab == "ask" || startTab == "todo") nav.navigate(startTab) }
-    fun openConversation(id: Long, line: Long? = null) = nav.navigate("conversation/$id?line=${line ?: -1}")
+    androidx.compose.runtime.LaunchedEffect(startTab) {
+        when {
+            startTab == "ask" || startTab == "todo" -> nav.navigate(startTab)
+            startTab?.startsWith("conversation:") == true -> startTab.split(":").let { p ->
+                val id = p.getOrNull(1)?.toLongOrNull() ?: return@let
+                nav.navigate("conversation/$id?line=${p.getOrNull(2)?.toLongOrNull() ?: -1}&play=true")
+            }
+        }
+    }
+    fun openConversation(id: Long, line: Long? = null, play: Boolean = false) = nav.navigate("conversation/$id?line=${line ?: -1}&play=$play")
     fun go(tab: String) = nav.navigate(tab) {
         popUpTo(nav.graph.findStartDestination().id) { saveState = true }
         launchSingleTop = true
@@ -92,7 +100,11 @@ fun BoswellApp(device: MainViewModel, startTab: String? = null) {
                     onLearnVoice = { learningVoice = true }, onReview = { nav.navigate("review") })
             }
             composable("review") { ReviewScreen(archive, onBack = { nav.popBackStack() }) }
-            composable("ask") { AskScreen(pad, onSetup = { go("device") }, onUsage = { nav.navigate("usage") }) }
+            composable("ask") {
+                AskScreen(pad, onSetup = { go("device") }, onUsage = { nav.navigate("usage") },
+                    onMoment = { conv, line -> openConversation(conv, line, play = true) }, onLogs = { nav.navigate("logs") })
+            }
+            composable("logs") { LogsScreen(onBack = { nav.popBackStack() }) }
             composable("todo") { TodoScreen(pad) }
             composable("triggers") { TriggersScreen(onBack = { nav.popBackStack() }) }
             composable("usage") { UsageScreen(onBack = { nav.popBackStack() }) }
@@ -109,11 +121,13 @@ fun BoswellApp(device: MainViewModel, startTab: String? = null) {
                     onPair = pair, onSetup = { net.boswell.phone.setup.Setup.setDone(ctx, false); setupDone = false })
             }
             composable(
-                "conversation/{id}?line={line}",
-                arguments = listOf(navArgument("id") { type = NavType.LongType }, navArgument("line") { type = NavType.LongType; defaultValue = -1L }),
+                "conversation/{id}?line={line}&play={play}",
+                arguments = listOf(navArgument("id") { type = NavType.LongType }, navArgument("line") { type = NavType.LongType; defaultValue = -1L },
+                    navArgument("play") { type = NavType.BoolType; defaultValue = false }),
             ) { e ->
                 val line = e.arguments!!.getLong("line").takeIf { it >= 0 }
-                ConversationScreen(archive, e.arguments!!.getLong("id"), line, onBack = { nav.popBackStack() }, onPerson = { nav.navigate("person/$it") })
+                ConversationScreen(archive, e.arguments!!.getLong("id"), line, onBack = { nav.popBackStack() }, onPerson = { nav.navigate("person/$it") },
+                    playFocus = e.arguments!!.getBoolean("play"))
             }
             composable("person/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) { e ->
                 PersonScreen(archive, e.arguments!!.getLong("id"), onBack = { nav.popBackStack() }, onOpen = { openConversation(it) })

@@ -94,6 +94,10 @@ fun TodayScreen(vm: ArchiveViewModel, pad: PaddingValues, onOpen: (Long) -> Unit
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = { selected = emptySet() }) { Icon(Icons.Filled.Close, "cancel selection") }
                 Text("${selected.size} selected", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                if (selected.size == 1) androidx.compose.material3.TextButton(onClick = {
+                    vm.meetingNotes(selected.first()) { ctx.startActivity(it) }; selected = emptySet()
+                    android.widget.Toast.makeText(ctx, "Writing notes…", android.widget.Toast.LENGTH_SHORT).show()
+                }) { Text("Notes") }
                 if (selected.size == 1) androidx.compose.material3.TextButton(onClick = { vm.summarize(selected.first()); selected = emptySet()
                     android.widget.Toast.makeText(ctx, "Summary coming to Ask", android.widget.Toast.LENGTH_SHORT).show() }) { Text("Summarize") }
                 androidx.compose.material3.TextButton(onClick = { vm.shareConversations(selected.toList()) { ctx.startActivity(it) } }) { Text("Share") }
