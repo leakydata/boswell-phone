@@ -62,6 +62,25 @@ import net.boswell.phone.ui.theme.Voices
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack: () -> Unit, onPerson: (Long) -> Unit, playFocus: Boolean = false) {
+    // "Redo": the whole conversation again with the cloud engine (Parakeet), speech only.
+    var redo by remember { mutableStateOf(false) }
+    if (redo) {
+        val ctx0 = androidx.compose.ui.platform.LocalContext.current
+        val conv = vm.conversationOrNull(id)
+        val hasKey = net.boswell.phone.assistant.Secrets.get(ctx0, net.boswell.phone.assistant.Secrets.OPENROUTER) != null
+        val clips = remember(id) { vm.redoableClips(id) }
+        val cost = (conv?.speechSeconds ?: 0.0) / 3600 * 0.09
+        androidx.compose.material3.AlertDialog(onDismissRequest = { redo = false },
+            title = { Text("Redo in the cloud?") },
+            text = { Text(when {
+                !hasKey -> "Cloud transcription needs your OpenRouter key (Device → Assistant)."
+                clips.isEmpty() -> "None of this conversation's recordings still have their sound, so they can't be transcribed again."
+                else -> "Transcribe ${clips.size} recording${if (clips.size == 1) "" else "s"} again with Parakeet in the cloud. Only the speech is sent. " +
+                    "About ${if (cost < 0.01) "less than a cent" else "$%.2f".format(cost)}. Who said what is worked out on the phone again too."
+            }) },
+            confirmButton = { if (hasKey && clips.isNotEmpty()) TextButton(onClick = { vm.retranscribeCloud(clips); redo = false }) { Text("Redo") } },
+            dismissButton = { TextButton(onClick = { redo = false }) { Text(if (hasKey && clips.isNotEmpty()) "Cancel" else "OK") } })
+    }
     val s by vm.conv.collectAsStateWithLifecycle()
     var who by remember { mutableStateOf<String?>(null) }
     var orphan by remember { mutableStateOf<LineRow?>(null) }
@@ -95,6 +114,7 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
                 },
                 actions = {
                     if (c != null) {
+                        TextButton(onClick = { redo = true }) { Text("Redo") }
                         TextButton(onClick = { vm.shareConversations(listOf(c.id)) { ctx.startActivity(it) } }) { Text("Share") }
                         TextButton(onClick = { confirmDelete = s.lines.map { it.clip }.distinct().ifEmpty { listOf() } + listOf("#conversation") }) {
                             Text("Delete", color = MaterialTheme.colorScheme.error) }

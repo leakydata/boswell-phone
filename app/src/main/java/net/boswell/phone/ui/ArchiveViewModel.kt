@@ -467,6 +467,11 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     fun retranscribe(names: List<String>) = act2 { net.boswell.phone.process.ClipActions.retranscribe(getApplication(), names) }
 
     /** Transcribe these again in the cloud (Parakeet), whatever the transcription setting. */
+    fun conversationOrNull(id: Long) = archive.conversation(id)
+
+    /** A conversation's recordings that still have sound to transcribe. */
+    fun redoableClips(id: Long): List<String> = archive.clipsOf(id).filter { it.audio }.map { it.name }
+
     fun retranscribeCloud(names: List<String>) = act2 {
         net.boswell.phone.asr.Transcription.requestCloud(getApplication(), names)
         net.boswell.phone.process.ClipActions.retranscribe(getApplication(), names)
