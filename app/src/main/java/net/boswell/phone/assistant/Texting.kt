@@ -64,24 +64,27 @@ object Texting {
 
     // ---------------------------------------------------------------- read
 
-    fun read(c: Context, who: String?, hours: Int): String {
+    /** Texts with chosen contacts: those of the last [hours], or without hours the latest [latest] whenever they were. */
+    fun read(c: Context, who: String?, hours: Int?, latest: Int = 20): String {
         if (!enabled(c)) return "texting is off (Device -> Assistant -> Texting)"
         if (!canRead(c)) return "Boswell isn't allowed to read texts yet (Device -> Assistant -> Texting)"
         val allowed = if (who != null) listOfNotNull(find(c, who)) else contacts(c)
         if (allowed.isEmpty()) return if (who != null) "$who isn't one of the contacts chosen for texting" else "no contacts are chosen for texting"
         val byDigits = allowed.associateBy { digits(it.number) }
-        val since = System.currentTimeMillis() - hours * 3_600_000L
-        val t = DateTimeFormatter.ofPattern("EEE h:mm a").withZone(ZoneId.systemDefault())
+        val since = hours?.let { System.currentTimeMillis() - it * 3_600_000L } ?: 0L
+        val cap = if (hours == null) latest else 60
+        val t = DateTimeFormatter.ofPattern("MMM d, h:mm a").withZone(ZoneId.systemDefault())
         val out = mutableListOf<Pair<Long, String>>()
         c.contentResolver.query(Uri.parse("content://sms"), arrayOf("address", "body", "date", "type"), "date >= ?", arrayOf(since.toString()), "date DESC")?.use { cur ->
-            while (cur.moveToNext() && out.size < 60) {
+            while (cur.moveToNext() && out.size < cap) {
                 val who2 = byDigits[digits(cur.getString(0) ?: continue)] ?: continue
                 val mine = cur.getInt(3) == 2        // 2 = sent
                 val at = cur.getLong(2)
                 out += at to "${t.format(Instant.ofEpochMilli(at))} ${if (mine) "me -> ${who2.name}" else "${who2.name} -> me"}: ${cur.getString(1)}"
             }
         }
-        return out.sortedBy { it.first }.joinToString("\n") { it.second }.ifBlank { "no texts with ${allowed.joinToString { it.name }} in the last $hours hours" }
+        return out.sortedBy { it.first }.joinToString("\n") { it.second }
+            .ifBlank { "no texts with ${allowed.joinToString { it.name }}" + (hours?.let { " in the last $it hours" } ?: "") }
     }
 
     // ---------------------------------------------------------------- send

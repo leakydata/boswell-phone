@@ -47,8 +47,8 @@ class MoreTools(private val context: Context, private val userWords: String? = n
                 "amount" to ("number" to "a number if there is one, e.g. 42.50 (optional)")), listOf("kind")),
         Llm.tool("read_log", "Read back log entries, optionally of one kind and over the last N days, with totals of amounts.",
             mapOf("kind" to ("string" to "optional"), "days" to ("integer" to "default 7"))),
-        Llm.tool("read_texts", "Text messages to and from the contacts the user chose for texting (only those), newest last.",
-            mapOf("contact" to ("string" to "a name or number (optional: all chosen contacts)"), "hours" to ("integer" to "how far back, default 48"))),
+        Llm.tool("read_texts", "Text messages to and from the contacts the user chose for texting (only those), newest last, with dates. Without hours: the latest 20, however old.",
+            mapOf("contact" to ("string" to "a name or number (optional: all chosen contacts)"), "hours" to ("integer" to "only the last N hours (optional)"))),
         Llm.tool("send_text", "Prepare a text to one of the user's chosen contacts. It is held, not sent, until the user confirms (taps Send, or says yes).",
             mapOf("to" to ("string" to "contact name or number"), "text" to ("string" to "the message")), listOf("to", "text")),
         Llm.tool("confirm_send", "Send the text held by send_text, only when the user has just said to send it (yes / send it / go ahead).", emptyMap()),
@@ -91,7 +91,7 @@ class MoreTools(private val context: Context, private val userWords: String? = n
                     "${at(e.at)} ${e.kind}" + (e.note?.let { ": $it" } ?: "") + (e.amount?.let { " (${"%.2f".format(it)})" } ?: "")
                 } + entries.mapNotNull { it.amount }.takeIf { it.isNotEmpty() }?.let { "\ntotal of amounts: ${"%.2f".format(it.sum())}" }.orEmpty()
             }
-            "read_texts" -> Texting.read(context, str("contact"), (int("hours") ?: 48).coerceIn(1, 24 * 30))
+            "read_texts" -> Texting.read(context, str("contact"), int("hours")?.coerceIn(1, 24 * 365))
             "send_text" -> Texting.prepare(context, str("to") ?: return "missing recipient", str("text") ?: return "missing text")
             "confirm_send" -> Texting.confirm(context, userWords)
             "calendar_events" -> {

@@ -64,6 +64,14 @@ class DebugReceiver : BroadcastReceiver() {
                     } catch (e: Throwable) { android.util.Log.e("Boswell", "recheck failed", e) } finally { pending.finish() }
                 }.start()
             }
+            // am broadcast -a net.boswell.phone.debug.TEXTING --es name "Dan Miller" --es number 7174402538   (turn texting on, add a contact)
+            "net.boswell.phone.debug.TEXTING" -> {
+                net.boswell.phone.assistant.Texting.setEnabled(context, true)
+                val n = intent.getStringExtra("name"); val num = intent.getStringExtra("number")
+                if (n != null && num != null) net.boswell.phone.assistant.Texting.setContacts(context,
+                    net.boswell.phone.assistant.Texting.contacts(context) + net.boswell.phone.assistant.TextContact(n, num))
+                android.util.Log.i("Boswell", "texting: on, contacts ${net.boswell.phone.assistant.Texting.contacts(context)}, read ${net.boswell.phone.assistant.Texting.canRead(context)}, send ${net.boswell.phone.assistant.Texting.canSend(context)}")
+            }
             // am broadcast -a net.boswell.phone.debug.BUDGET --ef usd 1.0   (the watcher's daily budget)
             "net.boswell.phone.debug.BUDGET" -> net.boswell.phone.assistant.AssistantPrefs.setBudget(context, intent.getFloatExtra("usd", 0.5f).toDouble())
             // am broadcast -a net.boswell.phone.debug.LIFE_DELETE --el fact 1 --el log 1   (remove test entries)
