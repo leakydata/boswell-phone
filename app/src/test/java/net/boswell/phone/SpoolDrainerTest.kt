@@ -45,7 +45,7 @@ class SpoolDrainerTest {
         // 60 s of audio: 20 ms frames, 4 per packet = 80 ms per packet, stamped by the second.
         val t0 = 1_790_000_000L
         val packets = (0 until 750).map { packet(t0 + it * 80 / 1000, 4) }.toTypedArray()
-        val r = SpoolDrainer(clips, "c4b3fd7f1e91").drain(spool(*packets), kept)
+        val r = SpoolDrainer(clips, "aabbccddeeff").drain(spool(*packets), kept)
         assertEquals(0, r.bad)
         assertEquals(2, r.clips.size)
         val first = Json.decodeFromString(ClipTimes.serializer(), File(clips, r.clips[0].nameWithoutExtension + ".json").readText())

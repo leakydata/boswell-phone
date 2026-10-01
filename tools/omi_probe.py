@@ -5,7 +5,7 @@ reports how many packets arrive per second and whether the counter advances.
 Touches no archive and sends no storage commands. The Omi takes one
 connection at a time: stop omid and the phone app first.
 
-    uv run python omi_probe.py [--address C4:B3:FD:7F:1E:91] [--seconds 15]
+    uv run python omi_probe.py [--address AA:BB:CC:DD:EE:FF] [--seconds 15]
 """
 
 import argparse
@@ -39,7 +39,7 @@ async def main(address, seconds):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--address", default="C4:B3:FD:7F:1E:91")
+    ap.add_argument("--address", default="AA:BB:CC:DD:EE:FF")
     ap.add_argument("--seconds", type=float, default=15)
     a = ap.parse_args()
     asyncio.run(main(a.address, a.seconds))

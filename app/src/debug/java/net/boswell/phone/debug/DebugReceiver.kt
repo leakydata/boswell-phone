@@ -42,7 +42,7 @@ class DebugReceiver : BroadcastReceiver() {
                 Thread { try { net.boswell.phone.process.ClipActions.editLine(context, clip, start, text); android.util.Log.i("Boswell", "debug edited $clip") } finally { pending.finish() } }.start()
             }
             "net.boswell.phone.debug.CAL_REFRESH" -> { net.boswell.phone.todo.Calendar.refresh(context); android.util.Log.i("Boswell", "calendar refresh requested") }
-            // am broadcast -a net.boswell.phone.debug.NAME --el id 2 --es name "Nathan Jones"
+            // am broadcast -a net.boswell.phone.debug.NAME --el id 2 --es name "Sam Lee"
             "net.boswell.phone.debug.NAME" -> {
                 val st = net.boswell.phone.speakers.SpeakerStore(context)
                 try { android.util.Log.i("Boswell", "named -> ${st.name(intent.getLongExtra("id", -1), intent.getStringExtra("name") ?: return)}") } finally { st.close() }
@@ -64,7 +64,7 @@ class DebugReceiver : BroadcastReceiver() {
                     } catch (e: Throwable) { android.util.Log.e("Boswell", "recheck failed", e) } finally { pending.finish() }
                 }.start()
             }
-            // am broadcast -a net.boswell.phone.debug.TEXTING --es name "Dan Miller" --es number 7174402538   (turn texting on, add a contact)
+            // am broadcast -a net.boswell.phone.debug.TEXTING --es name "Sam Lee" --es number 5555550123   (turn texting on, add a contact)
             "net.boswell.phone.debug.TEXTING" -> {
                 net.boswell.phone.assistant.Texting.setEnabled(context, true)
                 val n = intent.getStringExtra("name"); val num = intent.getStringExtra("number")

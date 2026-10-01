@@ -6,14 +6,14 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class VocabularyTest {
-    private val terms = listOf("Omi", "Boswell", "Nathan Jones", "Nathan")
+    private val terms = listOf("Omi", "Boswell", "Morgan Ellis", "Morgan")
     private fun fix(s: String): String =
         Vocabulary.apply(s.split(" ").mapIndexed { i, w -> Word(w, i.toDouble(), i + 0.5) }, terms).joinToString(" ") { it.text }
 
     @Test fun `case is fixed`() = assertEquals("reposition the Omi.", fix("reposition the omi."))
     @Test fun `a split made only of common words is left alone`() = assertEquals("the boss well I mean", fix("the boss well I mean"))
     @Test fun `near spellings of a split are joined`() = assertEquals("ask Boswell about it", fix("ask bos well about it"))
-    @Test fun `long names one letter off are fixed`() = assertEquals("Nathan Jones said so", fix("Nathen Jones said so"))
+    @Test fun `long names one letter off are fixed`() = assertEquals("Morgan Ellis said so", fix("Morgen Ellis said so"))
     @Test fun `common words are never replaced`() {
         assertEquals("I went home today", fix("I went home today"))
         assertEquals("oh me oh my", fix("oh me oh my"))
@@ -32,7 +32,7 @@ class VocabularyRealTest {
     @Test fun listChanges() {
         val dir = System.getProperty("diar.vocabdir")?.let { java.io.File(it) }
         org.junit.Assume.assumeTrue(dir != null)
-        val terms = listOf("Omi", "Boswell", "Nathan Jones", "Nathan")
+        val terms = listOf("Omi", "Boswell", "Morgan Ellis", "Morgan")
         var n = 0
         for (f in dir!!.listFiles()!!.filter { it.name.endsWith(".json") }.sortedBy { it.name }) {
             val t = runCatching { net.boswell.phone.process.TranscriptJson.json.decodeFromString(net.boswell.phone.process.Transcript.serializer(), f.readText()) }.getOrNull() ?: continue

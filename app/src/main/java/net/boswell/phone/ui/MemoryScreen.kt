@@ -41,7 +41,7 @@ fun MemoryScreen(onBack: () -> Unit, onLogs: () -> Unit) {
     val facts = remember(version) { LifeStore(ctx).use { it.facts() } }
     Scaffold(topBar = {
         TopAppBar(title = { Text("Remembered") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "back") } },
-            actions = { TextButton(onClick = onLogs) { Text("Logs") } })
+            actions = { })
     }) { pad ->
         LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = pad.calculateTopPadding() + 8.dp, bottom = pad.calculateBottomPadding() + 24.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {

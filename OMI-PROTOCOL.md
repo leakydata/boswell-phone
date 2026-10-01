@@ -4,7 +4,7 @@ Everything here was read off a working implementation and verified against a
 real device. It is the most valuable thing in this directory: the intelligence
 layer can be bought from a vendor, this cannot.
 
-Device used throughout: **Omi CV 1**, address `C4:B3:FD:7F:1E:91`, firmware
+Device used throughout: **Omi CV 1**, address `AA:BB:CC:DD:EE:FF`, firmware
 **3.0.21**, hardware 5.0, maker "Based Hardware". It connects with **no pairing
 and no authentication**. Its GATT table matches the open-source firmware at
 `github.com/BasedHardware/omi` (`omi/firmware/omi/`), which is the reference

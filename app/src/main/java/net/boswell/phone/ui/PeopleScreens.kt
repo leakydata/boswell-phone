@@ -45,7 +45,7 @@ private fun Person.asVoice() = Voice("p$id", name ?: if (kind == "media") "TV / 
 
 @Composable
 fun PeopleScreen(vm: ArchiveViewModel, pad: PaddingValues, onPerson: (Long) -> Unit, onOpenConversation: (Long) -> Unit, onLearnVoice: () -> Unit = {},
-                 onReview: () -> Unit = {}) {
+                 onReview: () -> Unit = {}, onMemory: () -> Unit = {}, onTexting: () -> Unit = {}) {
     val s by vm.people.collectAsStateWithLifecycle()
     val review by vm.review.collectAsStateWithLifecycle()
     val note by vm.recheckNote.collectAsStateWithLifecycle()
@@ -56,6 +56,13 @@ fun PeopleScreen(vm: ArchiveViewModel, pad: PaddingValues, onPerson: (Long) -> U
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { Text("People", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.padding(horizontal = 16.dp)) }
+        // Everything about people in one place: what's remembered about them, and who may be texted.
+        item {
+            Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onMemory) { Text("Remembered") }
+                OutlinedButton(onClick = onTexting) { Text("Texting") }
+            }
+        }
         item {
             val ctx = androidx.compose.ui.platform.LocalContext.current
             val owner = net.boswell.phone.assistant.AssistantPrefs.owner(ctx)
@@ -313,7 +320,7 @@ private fun ContactCard(personId: Long) {
                         else -> "It won't text them (it can still make you a draft)."
                     }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (link.mayText != "off" && !net.boswell.phone.assistant.Texting.enabled(ctx))
-                        Text("Texting is off in Device → Assistant → Texting.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        Text("Texting is off in People → Texting.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
             }
             Row {

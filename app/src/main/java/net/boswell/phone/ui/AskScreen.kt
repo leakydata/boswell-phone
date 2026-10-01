@@ -115,7 +115,7 @@ fun AskScreen(pad: PaddingValues, onSetup: () -> Unit, onUsage: () -> Unit = {},
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Row {
                             androidx.compose.material3.TextButton(onClick = { vm.newTopic() }) { Text(if (s.freshTopic) "New topic started ✓" else "New topic") }
-                            androidx.compose.material3.TextButton(onClick = onLogs) { Text("Remembered") }
+                            androidx.compose.material3.TextButton(onClick = onLogs) { Text("Logs") }
                             androidx.compose.material3.TextButton(onClick = onUsage) { Text("AI usage") }
                         }
                     }

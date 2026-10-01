@@ -263,16 +263,8 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                     Switch(checked = cloudQ, onCheckedChange = { cloudQ = it; net.boswell.phone.assistant.AssistantPrefs.setCloudQuestions(ctx2, it) })
                 }
                 AssistantRoutines()
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable(onClick = onTexting)) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Texting", style = MaterialTheme.typography.bodyLarge)
-                        val tc = net.boswell.phone.assistant.Texting.contacts(ctx2).size
-                        Text(if (net.boswell.phone.assistant.Texting.enabled(ctx2)) "On · $tc contact${if (tc == 1) "" else "s"} · texts are sent only after you confirm"
-                            else "Off · let it read and send texts with people you choose",
-                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Text("Edit", color = MaterialTheme.colorScheme.primary)
-                }
+                Text("Texting, contacts and what's remembered about people are in People.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable(onClick = onTriggers)) {
                     Column(Modifier.weight(1f)) {
                         Text("Voice triggers", style = MaterialTheme.typography.bodyLarge)
@@ -607,13 +599,5 @@ private fun AssistantRoutines() {
         promises) { promises = it; P.setPromises(ctx, it) }
     Toggle("Brief before meetings", "Shortly before a calendar event, what was last said about its people or topic.", meetings) { meetings = it; P.setMeetingBriefs(ctx, it) }
     Toggle("Look things up on the web", "Weather, news, facts and opening hours, when you ask. A few cents a search at most.", web) { web = it; P.setWebSearch(ctx, it) }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text("Contacts for message drafts", style = MaterialTheme.typography.bodyLarge)
-            Text(if (contacts) "Allowed: \u201ctext Sam I'm late\u201d finds Sam's number. Drafts are never sent for you."
-                else "Let drafts find people by name. Without it, you pick the recipient when the draft opens.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        if (!contacts) TextButton(onClick = { ask.launch(android.Manifest.permission.READ_CONTACTS) }) { Text("Allow") }
-    }
+
 }

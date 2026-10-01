@@ -98,6 +98,16 @@ fun TextingScreen(onBack: () -> Unit) {
                     }
                 }
             }
+            item {
+                // Contacts access: lets drafts and texts find people by name, and People link voices to contacts.
+                var contactsOk by remember { mutableStateOf(net.boswell.phone.assistant.Contacts.allowed(ctx)) }
+                val askContacts = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { contactsOk = it }
+                if (!contactsOk) Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Allow contacts so the assistant can find people by name, and People can link voices to contacts.",
+                        Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = { askContacts.launch(Manifest.permission.READ_CONTACTS) }) { Text("Allow") }
+                }
+            }
             item { Text("Contacts it may text", style = MaterialTheme.typography.titleMedium) }
             if (people.isEmpty()) item { Text("None yet.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
             items(people, key = { Texting.digits(it.number) }) { p ->

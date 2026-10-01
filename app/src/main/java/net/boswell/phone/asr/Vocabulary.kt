@@ -91,7 +91,7 @@ object Vocabulary {
     fun fixes(words: List<String>, terms: List<String>): List<Fix> {
         val out = mutableListOf<Fix>()
         val used = BooleanArray(words.size)
-        // Longer terms first, so "Nathan Jones" wins over "Nathan".
+        // Longer terms first, so "Sam Lee" wins over "Sam".
         for (term in terms.sortedByDescending { it.length }) {
             val tl = letters(term)
             if (tl.length < 3) continue

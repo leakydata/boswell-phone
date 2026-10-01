@@ -401,7 +401,7 @@ private fun Assistant() {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Texting (optional)", style = MaterialTheme.typography.titleMedium)
-                Text(if (smsOk) "Allowed. Choose who it may text in Device → Assistant → Texting, or on a person's page."
+                Text(if (smsOk) "Allowed. Choose who it may text in People → Texting, or on a person's page."
                     else "Let the assistant read and send texts with people you choose. A text is never sent without your say-so.",
                     style = MaterialTheme.typography.bodyMedium)
             }

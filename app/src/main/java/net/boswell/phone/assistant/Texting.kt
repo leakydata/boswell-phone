@@ -28,7 +28,7 @@ data class TextContact(val name: String, val number: String,
  * Texting, within limits the code enforces (not just the model's
  * instructions):
  *
- *  - only contacts the person chose in Device -> Assistant -> Texting;
+ *  - only contacts the person chose in People -> Texting;
  *  - reading is texts to and from those contacts;
  *  - sending is never automatic: a text is held and shown as a
  *    notification with Send, and goes only when they tap Send or answer
@@ -71,8 +71,8 @@ object Texting {
 
     /** Texts with chosen contacts: those of the last [hours], or without hours the latest [latest] whenever they were. */
     fun read(c: Context, who: String?, hours: Int?, latest: Int = 20): String {
-        if (!enabled(c)) return "texting is off (Device -> Assistant -> Texting)"
-        if (!canRead(c)) return "Boswell isn't allowed to read texts yet (Device -> Assistant -> Texting)"
+        if (!enabled(c)) return "texting is off (People -> Texting)"
+        if (!canRead(c)) return "Boswell isn't allowed to read texts yet (People -> Texting)"
         val allowed = if (who != null) listOfNotNull(find(c, who)) else all(c)
         if (allowed.isEmpty()) return if (who != null) "$who isn't one of the contacts chosen for texting" else "no contacts are chosen for texting"
         val byDigits = allowed.associateBy { digits(it.number) }
@@ -104,9 +104,9 @@ object Texting {
      * 10-second chance to cancel.
      */
     fun prepare(c: Context, who: String, text: String, direct: Boolean = false): String {
-        if (!enabled(c)) return "texting is off (Device -> Assistant -> Texting)"
+        if (!enabled(c)) return "texting is off (People -> Texting)"
         val to = find(c, who) ?: return "$who isn't one of the contacts chosen for texting, so I can't text them; I can make a draft instead (draft_message)"
-        if (!canSend(c)) return "Boswell isn't allowed to send texts yet (Device -> Assistant -> Texting); I can make a draft instead"
+        if (!canSend(c)) return "Boswell isn't allowed to send texts yet (People -> Texting); I can make a draft instead"
         if (to.mode == "auto" && direct) return AutoSend.start(c, to, text.trim())
         val id = (System.currentTimeMillis() % 100_000).toInt() + 500_000
         pending = Pending(to, text.trim(), System.currentTimeMillis(), id)

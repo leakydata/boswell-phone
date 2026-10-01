@@ -6,8 +6,8 @@ import org.junit.Test
 
 class TextingTest {
     @Test fun `numbers compare by their last ten digits`() {
-        assertEquals("7174402538", Texting.digits("+1 (717) 440-2538"))
-        assertEquals(Texting.digits("717-440-2538"), Texting.digits("17174402538"))
+        assertEquals("5555550123", Texting.digits("+1 (555) 555-0123"))
+        assertEquals(Texting.digits("555-555-0123"), Texting.digits("15555550123"))
     }
 
     @Test fun `only a real yes sends`() {

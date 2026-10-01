@@ -20,7 +20,7 @@ class ClipperTest {
     private fun frame(v: Short) = ShortArray(320) { v }
 
     @Test fun `a clip is filed when thirty seconds have been held`() {
-        val c = Clipper(tmp.root, "c4b3fd7f1e91", now = { 1_790_000_000.0 })
+        val c = Clipper(tmp.root, "aabbccddeeff", now = { 1_790_000_000.0 })
         var written: File? = null
         for (i in 0 until 1500) {                 // 1500 x 20 ms = 30 s
             val f = c.add(i.toLong(), frame(i.toShort()))
@@ -38,7 +38,7 @@ class ClipperTest {
         assertEquals(0L, times.firstMs)
         assertEquals(1499L * 20, times.lastMs)
         assertFalse(times.timeKnown)
-        assertEquals("c4b3fd7f1e91", times.deviceId)
+        assertEquals("aabbccddeeff", times.deviceId)
     }
 
     @Test fun `flush writes what is held and names never collide`() {
