@@ -32,7 +32,7 @@ data class VoiceGroup(val key: Long, val voiceprints: Int, val seconds: Double, 
  *
  * Starts empty. Nothing is imported from the desktop.
  */
-class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", null, 4) {
+class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", null, 5) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""
@@ -62,6 +62,7 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         db.execSQL("CREATE INDEX vp_person ON voiceprints(person_id)")
         db.execSQL(MERGES)
         db.execSQL(REJECTIONS)
+        db.execSQL(ASSIGNED)
         db.execSQL("""
             CREATE TABLE matches (
                 id            INTEGER PRIMARY KEY,
@@ -81,6 +82,7 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         if (oldVersion < 2) db.execSQL("ALTER TABLE voiceprints ADD COLUMN source_cluster INTEGER")
         if (oldVersion < 3) db.execSQL(MERGES)
         if (oldVersion < 4) db.execSQL(REJECTIONS)
+        if (oldVersion < 5) db.execSQL(ASSIGNED)
     }
 
     override fun onConfigure(db: SQLiteDatabase) = db.setForeignKeyConstraintsEnabled(true)
@@ -325,11 +327,20 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
     fun currentPerson(clip: String, label: String, recorded: Long?): Long? =
         readableDatabase.rawQuery("SELECT person_id FROM voiceprints WHERE clip = ? AND speaker = ? LIMIT 1", arrayOf(clip, label)).use { c ->
             if (c.moveToFirst()) c.getLong(0) else null
+        } ?: readableDatabase.rawQuery("SELECT person_id FROM assigned WHERE clip = ? AND speaker = ?", arrayOf(clip, label)).use { c ->
+            if (c.moveToFirst()) resolve(c.getLong(0)) else null
         } ?: recorded?.let(::resolve)
+
+    /** Name a voice that has no voiceprint (or add to one that has): this clip voice is this person. */
+    fun assign(clip: String, speaker: String, personId: Long) {
+        writableDatabase.execSQL("INSERT OR REPLACE INTO assigned(clip, speaker, person_id) VALUES (?, ?, ?)", arrayOf<Any>(clip, speaker, personId))
+    }
 
     companion object {
         private const val MERGES = "CREATE TABLE IF NOT EXISTS merges (from_id INTEGER PRIMARY KEY, into_id INTEGER NOT NULL)"
         /** "Not them" and "No" answers: this voice in this clip is not this person, so never suggest or match it again. */
+        /** A voice someone named that has no voiceprint to file (too short to embed): who it is, directly. */
+        private const val ASSIGNED = "CREATE TABLE IF NOT EXISTS assigned (clip TEXT NOT NULL, speaker TEXT NOT NULL, person_id INTEGER NOT NULL, PRIMARY KEY (clip, speaker))"
         private const val REJECTIONS = "CREATE TABLE IF NOT EXISTS rejections (clip TEXT NOT NULL, speaker TEXT NOT NULL, person_id INTEGER NOT NULL, PRIMARY KEY (clip, speaker, person_id))"
 
         fun pack(v: FloatArray): ByteArray = ByteBuffer.allocate(v.size * 4).order(ByteOrder.LITTLE_ENDIAN).apply { v.forEach { putFloat(it) } }.array()

@@ -351,6 +351,13 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
     }
 
     /** The loudest-evidence voiceprint of a conversation voice, to enrol it when someone names it. */
+    /** Every clip voice in a conversation that carries [key]: (clip, label, voiceprint or null, seconds). */
+    fun slotsOf(conversation: Long, key: String): List<Triple<Pair<String, String>, FloatArray?, Double>> = readableDatabase.rawQuery("""
+        SELECT s.clip, s.label, s.emb, s.seconds FROM clip_speakers s JOIN clips c ON c.name = s.clip WHERE c.conversation = ? AND s.conv_key = ?""",
+        arrayOf(conversation.toString(), key)).use { c ->
+        buildList { while (c.moveToNext()) add(Triple(c.getString(0) to c.getString(1), c.getBlob(2)?.let(SpeakerStore::unpack), c.getDouble(3))) }
+    }
+
     fun voiceOf(conversation: Long, key: String): Triple<FloatArray, Double, String>? = readableDatabase.rawQuery("""
         SELECT s.emb, s.seconds, s.clip FROM clip_speakers s JOIN clips c ON c.name = s.clip
         WHERE c.conversation = ? AND s.conv_key = ? AND s.emb IS NOT NULL ORDER BY s.seconds DESC LIMIT 1""",

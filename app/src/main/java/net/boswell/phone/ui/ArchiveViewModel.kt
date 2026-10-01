@@ -301,9 +301,8 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         val pid = v?.personId
         if (pid != null && v.named.not()) speakers.name(pid, name)
         else {
-            val (emb, secs, clip) = archive.voiceOf(conversation, key) ?: return@actVoices
             val target = speakers.people().firstOrNull { it.name == name }?.id ?: speakers.newPerson(name)
-            speakers.addVoiceprint(target, emb, secs, clip, labelOf(conversation, key, clip), "confirmed")
+            fileVoice(conversation, key, target)
         }
     }
 
@@ -311,10 +310,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     fun confirmGuess(conversation: Long, key: String, person: Person) = actVoices {
         val v = _conv.value.voices[key]
         if (v?.personId != null && !v.named) speakers.name(v.personId, person.name ?: return@actVoices)
-        else {
-            val (emb, secs, clip) = archive.voiceOf(conversation, key) ?: return@actVoices
-            speakers.addVoiceprint(person.id, emb, secs, clip, labelOf(conversation, key, clip), "confirmed")
-        }
+        else fileVoice(conversation, key, person.id)
     }
 
     /** A screen talking. Kept and still collected, never given a person's name. */
@@ -325,6 +321,20 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
             speakers.newPerson(null).also { speakers.addVoiceprint(it, emb, secs, clip, labelOf(conversation, key, clip), "auto") }
         }
         speakers.setKind(pid, "media")
+    }
+
+    /**
+     * A voice named in a conversation, everywhere it speaks there: the longest
+     * stretch with a voiceprint becomes a confirmed sample, and every clip
+     * voice under that key -- including ones too short to have a voiceprint,
+     * which naming used to silently skip -- is assigned to the person.
+     */
+    private fun fileVoice(conversation: Long, key: String, person: Long) {
+        val slots = archive.slotsOf(conversation, key)
+        slots.filter { it.second != null }.maxByOrNull { it.third }?.let { (slot, emb, secs) ->
+            runCatching { speakers.addVoiceprint(person, emb!!, secs, slot.first, slot.second, "confirmed") }
+        }
+        for ((slot, _, _) in slots) speakers.assign(slot.first, slot.second, person)
     }
 
     private fun labelOf(conversation: Long, key: String, clip: String): String? =
