@@ -295,7 +295,9 @@ fun ConversationCard(c: Conversation, voices: Map<String, Voice>, selected: Bool
                 Spacer(Modifier.weight(1f))
                 Faces(c.speakers.mapNotNull { voices[it] })
             }
-            Text(c.snippet, style = MaterialTheme.typography.bodyLarge, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            c.title?.let { Text(it, style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold) }
+            Text(c.summary ?: c.snippet, style = MaterialTheme.typography.bodyLarge, maxLines = 3, overflow = TextOverflow.Ellipsis,
+                color = if (c.summary != null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
             val names = c.speakers.mapNotNull { voices[it] }.filter { it.named }.map { it.name }
             if (names.isNotEmpty() || c.sounds.isNotEmpty()) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

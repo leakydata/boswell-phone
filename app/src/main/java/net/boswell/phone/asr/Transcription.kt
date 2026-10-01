@@ -20,8 +20,13 @@ object Transcription {
 
     private fun prefs(c: Context) = c.getSharedPreferences("boswell", Context.MODE_PRIVATE)
 
-    fun cloud(c: Context): Boolean = prefs(c).getBoolean("cloud_transcribe", false)
-    fun setCloud(c: Context, on: Boolean) = prefs(c).edit().putBoolean("cloud_transcribe", on).apply()
+    /** Where words come from: the phone; the cloud when someone besides the owner speaks; or the cloud for everything. */
+    enum class Mode { PHONE, OTHERS, ALL }
+
+    fun mode(c: Context): Mode = prefs(c).getString("cloud_mode", null)?.let { runCatching { Mode.valueOf(it) }.getOrNull() }
+        ?: if (prefs(c).getBoolean("cloud_transcribe", false)) Mode.ALL else Mode.PHONE
+    fun setMode(c: Context, m: Mode) = prefs(c).edit().putString("cloud_mode", m.name).apply()
+    fun cloud(c: Context): Boolean = mode(c) == Mode.ALL
 
     fun dailyCap(c: Context): Double = prefs(c).getFloat("cloud_transcribe_cap", 1.0f).toDouble()
     fun setDailyCap(c: Context, usd: Double) = prefs(c).edit().putFloat("cloud_transcribe_cap", usd.toFloat()).apply()
@@ -44,5 +49,14 @@ object Transcription {
         if (rest.isEmpty()) f.delete() else f.writeText(rest.joinToString("\n"))
     }
 
-    fun wantsCloud(c: Context, clip: String): Boolean = cloud(c) || requested(c, clip)
+    /**
+     * [othersSpeak]: someone other than the owner (and not a TV) talks in the
+     * clip. That's where the phone is weakest -- people across the room, over
+     * each other -- and the owner's own dictation is where it does best.
+     */
+    fun wantsCloud(c: Context, clip: String, othersSpeak: Boolean): Boolean = when (mode(c)) {
+        Mode.ALL -> true
+        Mode.OTHERS -> othersSpeak
+        Mode.PHONE -> false
+    } || requested(c, clip)
 }

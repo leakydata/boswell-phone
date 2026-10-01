@@ -52,6 +52,7 @@ class RoutinesWorker(context: Context, params: WorkerParameters) : CoroutineWork
             }
             if (AssistantPrefs.promises(c)) notice(life)
             if (AssistantPrefs.meetingBriefs(c)) meetings(life)
+            runCatching { ConversationNotes.run(c) }
         } finally { life.close() }
         Result.success()
     }

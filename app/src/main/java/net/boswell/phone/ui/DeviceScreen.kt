@@ -404,22 +404,26 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
             Section("Transcription") {
                 val tctx = LocalContext.current
                 val T = net.boswell.phone.asr.Transcription
-                var cloudOn by remember { mutableStateOf(T.cloud(tctx)) }
+                var mode by remember { mutableStateOf(T.mode(tctx)) }
+                val cloudOn = mode != net.boswell.phone.asr.Transcription.Mode.PHONE
                 var cap by remember { mutableStateOf(T.dailyCap(tctx)) }
                 var spent by remember { mutableStateOf(0.0) }
                 val hasKey = remember { net.boswell.phone.assistant.Secrets.has(tctx, net.boswell.phone.assistant.Secrets.OPENROUTER) }
-                LaunchedEffect(cloudOn) {
+                LaunchedEffect(mode) {
                     spent = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                         val st = net.boswell.phone.assistant.AssistantStore(tctx); try { st.spentToday(T.PURPOSE) } finally { st.close() }
                     }
                 }
                 SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                    SegmentedButton(selected = !cloudOn, onClick = { cloudOn = false; T.setCloud(tctx, false) },
-                        shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("On this phone") }
-                    SegmentedButton(selected = cloudOn, enabled = hasKey, onClick = { cloudOn = true; T.setCloud(tctx, true) },
-                        shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Cloud") }
+                    for ((i, m) in listOf(net.boswell.phone.asr.Transcription.Mode.PHONE to "Phone", net.boswell.phone.asr.Transcription.Mode.OTHERS to "With others", net.boswell.phone.asr.Transcription.Mode.ALL to "Everything").withIndex()) {
+                        SegmentedButton(selected = mode == m.first, enabled = m.first == net.boswell.phone.asr.Transcription.Mode.PHONE || hasKey,
+                            onClick = { mode = m.first; T.setMode(tctx, m.first) },
+                            shape = SegmentedButtonDefaults.itemShape(i, 3)) { Text(m.second) }
+                    }
                 }
-                Text(if (cloudOn) "Words come from ${T.ENGINE.label} in the cloud: more accurate in testing, about $0.09 per hour of speech. " +
+                Text(if (cloudOn) (if (mode == net.boswell.phone.asr.Transcription.Mode.OTHERS) "Recordings where someone besides you is talking go to ${T.ENGINE.label} in the cloud, " +
+                        "where the phone is weakest (people across the room, talking over each other). What you say on your own stays on the phone. "
+                    else "Words come from ${T.ENGINE.label} in the cloud. ") + "More accurate in testing, about $0.09 per hour of speech. " +
                         "The audio of clips with speech goes to OpenRouter; who's speaking is still worked out on this phone. " +
                         "If the cloud can't be reached, or today's limit is reached, the phone transcribes instead."
                     else "Private: audio never leaves the phone. To fix a clip the phone got wrong, select it in Recordings and choose More → Redo in the cloud." +
@@ -626,6 +630,9 @@ private fun AssistantRoutines() {
         }
         Switch(checked = on, onCheckedChange = set)
     }
+    var titles by remember { mutableStateOf(P.titles(ctx)) }
+    Toggle("Title each conversation", "A short title and a one-line summary on Today, a few minutes after a conversation ends. About a tenth of a cent each.",
+        titles) { titles = it; P.setTitles(ctx, it) }
     Toggle("Notice promises", "Every few hours, promises in what was said (yours and others') become to-dos under Promises, and facts about people are remembered.",
         promises) { promises = it; P.setPromises(ctx, it) }
     Toggle("Brief before meetings", "Shortly before a calendar event, what was last said about its people or topic.", meetings) { meetings = it; P.setMeetingBriefs(ctx, it) }
@@ -667,6 +674,31 @@ private fun BackupRow() {
     if (p != null) LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth())
     else OutlinedButton(onClick = { create.launch(net.boswell.phone.backup.Backup.suggestedName()) }) { Text("Back up…") }
     result?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+
+    // Weekly, into a folder: the copy that's there when the phone isn't.
+    val A = net.boswell.phone.backup.AutoBackup
+    var folder by remember { mutableStateOf(A.folderName(ctx)) }
+    var autoMsg by remember { mutableStateOf(A.lastResult(ctx)?.let { r -> if (A.last(ctx) > 0) "$r, ${Fmt.ago(A.last(ctx) / 1000.0)}" else r }) }
+    var autoBusy by remember { mutableStateOf(false) }
+    val pick = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()) { tree ->
+        if (tree != null) runCatching { A.setFolder(ctx, tree); folder = A.folderName(ctx) }.onFailure { autoMsg = "Couldn't use that folder: ${it.message}" }
+    }
+    Text("Automatic backups", style = MaterialTheme.typography.bodyLarge)
+    Text(if (folder == null) "Once a week, while the phone charges, into a folder you choose; the newest ${A.KEEP} are kept. " +
+            "For a copy that survives losing the phone, choose a folder your cloud storage app keeps in sync. API keys are never included."
+        else "Weekly into \"$folder\" while charging, keeping the newest ${A.KEEP}. API keys are never included.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        OutlinedButton(onClick = { pick.launch(null) }) { Text(if (folder == null) "Choose a folder" else "Change folder") }
+        if (folder != null) {
+            TextButton(enabled = !autoBusy, onClick = {
+                autoBusy = true
+                scope.launch(kotlinx.coroutines.Dispatchers.IO) { autoMsg = A.runNow(ctx); autoBusy = false }
+            }) { Text(if (autoBusy) "Backing up…" else "Back up now") }
+            TextButton(onClick = { A.setFolder(ctx, null); folder = null; autoMsg = null }) { Text("Turn off") }
+        }
+    }
+    autoMsg?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
 }
 
 /**

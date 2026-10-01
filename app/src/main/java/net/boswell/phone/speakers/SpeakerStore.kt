@@ -331,6 +331,10 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         buildList { while (c.moveToNext()) add(Link(c.getLong(0), c.str(1), c.getString(2), c.getString(3))) }
     }
 
+    fun kindOf(personId: Long): String? = readableDatabase.rawQuery("SELECT kind FROM people WHERE id = ?", arrayOf(personId.toString())).use { c ->
+        if (c.moveToFirst() && !c.isNull(0)) c.getString(0) else null
+    }
+
     fun nameOf(personId: Long): String? = readableDatabase.rawQuery("SELECT name FROM people WHERE id = ?", arrayOf(personId.toString())).use { c ->
         if (c.moveToFirst() && !c.isNull(0)) c.getString(0) else null
     }

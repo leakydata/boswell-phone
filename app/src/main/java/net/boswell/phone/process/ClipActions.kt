@@ -46,7 +46,8 @@ object ClipActions {
         val seg = t.segments[i]
         val heard = seg.original ?: seg.text
         val clean = text.trim().replace(Regex("\\s+"), " ")
-        val updated = if (clean == heard || clean.isEmpty()) seg.copy(text = heard, original = null) else seg.copy(text = clean, original = heard)
+        val updated = if (clean == heard || clean.isEmpty()) seg.copy(text = heard, original = null, edited = false)
+            else seg.copy(text = clean, original = heard, edited = true)
         net.boswell.phone.audio.writeAtomically(f, TranscriptJson.json.encodeToString(Transcript.serializer(),
             t.copy(segments = t.segments.toMutableList().also { it[i] = updated })).toByteArray())
         val speakers = SpeakerStore(context)

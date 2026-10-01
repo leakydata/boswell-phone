@@ -102,6 +102,13 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
         val waiting = if (backlogWaits(applicationContext, left)) left.count { isDownload(it) } else 0
         ProcessingRepository.state.value = ProcessingState(false, left.size - waiting, done, waitingForCharger = waiting)
         if (waiting > 0) ChargerKick.schedule(applicationContext)
+        if (redoCloud + redoPhone > 0) {
+            val n = redoCloud + redoPhone
+            net.boswell.phone.assistant.AssistantNotify.post(applicationContext, net.boswell.phone.assistant.AssistantNotify.ANSWERS,
+                "Redo finished",
+                if (redoPhone == 0) "$n recording${if (n == 1) "" else "s"} transcribed again in the cloud."
+                else "$redoCloud in the cloud; $redoPhone on the phone instead, because $redoWhy.")
+        }
         Result.success()
     }
 
@@ -122,6 +129,11 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
     private fun verdictFor(hasSpeech: Boolean, tags: List<net.boswell.phone.sound.SoundTag>): String =
         if (hasSpeech || net.boswell.phone.sound.Sounds.verdict(tags) == net.boswell.phone.sound.Sounds.Verdict.KEEP) "keep" else "empty"
 
+    // "Redo in the cloud" results this run, reported when the run ends.
+    private var redoCloud = 0
+    private var redoPhone = 0
+    private var redoWhy: String? = null
+
     /** Words Boswell should know, read once per run (names change rarely). */
     private val vocabulary by lazy { runCatching { net.boswell.phone.asr.Vocabulary.all(applicationContext) }.getOrDefault(emptyList()) }
 
@@ -139,10 +151,10 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
             writeAtomically(File(out, wav.nameWithoutExtension + ".json"), TranscriptJson.json.encodeToString(Transcript.serializer(), t).toByteArray())
             return
         }
-        val cloud = cloudWords(wav, pcm, diarizer)
+        val d = diarizer.run(audio)
+        val cloud = cloudWords(wav, pcm, diarizer, othersSpeak(d, store))
         val heard = cloud ?: asr.transcribe(audio)
         val words = net.boswell.phone.asr.Vocabulary.apply(heard, vocabulary)
-        val d = diarizer.run(audio)
         // A line the vocabulary changed keeps what was heard, as a hand edit does (and can be restored the same way).
         val segments = Lines.build(words, d.turns).map { seg ->
             if (words === heard) seg
@@ -196,27 +208,51 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
      * means transcribe on the phone (not wanted, no key, over the day's cap,
      * or the call failed -- nothing waits on the network).
      */
-    private fun cloudWords(wav: File, pcm: ShortArray, diarizer: net.boswell.phone.diarize.Diarizer): List<net.boswell.phone.asr.Word>? {
+    /**
+     * Someone besides the owner speaks for a second or more: a voice that
+     * isn't theirs (or can't be told), and isn't one marked as a TV. Without
+     * a known owner, anyone counts.
+     */
+    private fun othersSpeak(d: net.boswell.phone.diarize.Diarization, store: SpeakerStore): Boolean {
+        val owner = net.boswell.phone.assistant.AssistantPrefs.owner(applicationContext)
+        return d.speakers.any { s ->
+            if (s.seconds < 1.0) return@any false
+            val vp = s.voiceprint?.takeIf { Matching.usable(it) } ?: return@any true
+            val r = store.match(vp)
+            val pid = r.personId.takeIf { r.decision == Matching.Decision.MATCHED }
+            when {
+                owner == null -> true
+                pid == owner -> false
+                pid != null && store.kindOf(pid) == "media" -> false
+                else -> true
+            }
+        }
+    }
+
+    private fun cloudWords(wav: File, pcm: ShortArray, diarizer: net.boswell.phone.diarize.Diarizer, othersSpeak: Boolean): List<net.boswell.phone.asr.Word>? {
         val ctx = applicationContext
         val t = net.boswell.phone.asr.Transcription
-        if (!t.wantsCloud(ctx, wav.name)) return null
+        if (!t.wantsCloud(ctx, wav.name, othersSpeak)) return null
+        val redo = t.requested(ctx, wav.name)
         t.handled(ctx, wav.name)
-        val key = net.boswell.phone.assistant.Secrets.get(ctx, net.boswell.phone.assistant.Secrets.OPENROUTER) ?: return null
+        fun fellBack(why: String): List<net.boswell.phone.asr.Word>? { if (redo) { redoPhone++; redoWhy = why }; return null }
+        val key = net.boswell.phone.assistant.Secrets.get(ctx, net.boswell.phone.assistant.Secrets.OPENROUTER) ?: return fellBack("no OpenRouter key")
         val store = net.boswell.phone.assistant.AssistantStore(ctx)
         try {
             if (store.spentToday(t.PURPOSE) >= t.dailyCap(ctx)) {
                 ProcessingRepository.state.value = ProcessingRepository.state.value.copy(lastError = "cloud transcription paused: today's limit reached")
-                return null
+                return fellBack("today's cloud limit was reached")
             }
             val empty = kotlinx.serialization.json.JsonObject(emptyMap())
             return runCatching { net.boswell.phone.asr.SpeechOnly.transcribe(key, t.ENGINE, pcm, diarizer, applicationContext.cacheDir) }.fold(
                 { (words, cost) ->
                     store.logCall(t.PURPOSE, t.ENGINE.id, net.boswell.phone.assistant.LlmReply(null, emptyList(), empty, cost, 0, 0))
+                    if (redo) redoCloud++
                     words
                 },
                 { e ->
                     store.logCall(t.PURPOSE, t.ENGINE.id, null, e.message ?: e.toString())
-                    null
+                    fellBack("the cloud didn't answer (${e.message ?: "error"})")
                 })
         } finally { store.close() }
     }

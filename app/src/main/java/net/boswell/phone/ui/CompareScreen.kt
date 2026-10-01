@@ -57,9 +57,19 @@ import java.io.File
 data class CompareRow(val clip: String, val started: Double?, val phone: String, val cloud: String? = null, val seconds: Double = 0.0,
                       val cost: Double = 0.0, val error: String? = null)
 
+/** One engine's score against the person's corrections: errors over reference words, on how many recordings. */
+data class Score(val engine: String, val errors: Int, val words: Int, val clips: Int) {
+    val rate get() = if (words == 0) 0.0 else errors.toDouble() / words
+}
+
 data class CompareState(
     val engine: CloudAsr.Engine = CloudAsr.Engine.PARAKEET,
     val running: Boolean = false,
+    val keys: Int = 0,
+    val keyWords: Int = 0,
+    val scoring: Boolean = false,
+    val scores: List<Score> = emptyList(),
+    val scoreNote: String? = null,
     val rows: List<CompareRow> = emptyList(),
     val hasKey: Boolean = false,
 ) {
@@ -76,6 +86,52 @@ class CompareViewModel(app: Application) : AndroidViewModel(app) {
     val state = MutableStateFlow(CompareState(hasKey = Secrets.has(app, Secrets.OPENROUTER)))
 
     fun setEngine(e: CloudAsr.Engine) = state.update { it.copy(engine = e) }
+
+    init {
+        viewModelScope.launch(Dispatchers.IO) {
+            val keys = net.boswell.phone.asr.Accuracy.keys(getApplication())
+            state.update { it.copy(keys = keys.size, keyWords = keys.sumOf { k -> CloudAsr.words(k.reference).size }) }
+        }
+    }
+
+    /**
+     * Score the phone, Parakeet and Nova-3 against the person's corrections.
+     * What an engine already wrote for a recording is used as is; the cloud
+     * engines are run on the rest. The phone is scored only where it was the
+     * one that transcribed (running it again here would hold a second copy
+     * of its model in memory).
+     */
+    fun score() = viewModelScope.launch(Dispatchers.IO) {
+        val app = getApplication<Application>()
+        val key = Secrets.get(app, Secrets.OPENROUTER) ?: return@launch
+        val keys = net.boswell.phone.asr.Accuracy.keys(app).filter { net.boswell.phone.audio.ClipAudio.exists(CaptureService.clipsDir(app), it.clip) }
+        state.update { it.copy(scoring = true, scores = emptyList(), scoreNote = null) }
+        val engines = listOf(CloudAsr.Engine.PARAKEET, CloudAsr.Engine.NOVA)
+        val texts = HashMap<String, MutableMap<String, String>>()   // engine -> clip -> text
+        for (k in keys) for ((e, t) in k.known) texts.getOrPut(e) { HashMap() }[k.clip] = t
+        val gate = Semaphore(4)
+        var cost = 0.0
+        keys.flatMap { k -> engines.filter { texts[it.label]?.containsKey(k.clip) != true }.map { k to it } }.map { (k, e) ->
+            async {
+                gate.withPermit {
+                    val f = File.createTempFile("score", ".wav", app.cacheDir)
+                    val r = runCatching {
+                        net.boswell.phone.audio.Wav.write(f, net.boswell.phone.audio.ClipAudio.readPcm(CaptureService.clipsDir(app), k.clip), 16_000)
+                        CloudAsr.transcribe(key, e, f)
+                    }.also { f.delete() }
+                    AssistantStore(app).use { it.logCall("compare", e.id, r.getOrNull()?.let { x -> LlmReply(null, emptyList(), kotlinx.serialization.json.JsonObject(emptyMap()), x.cost, 0, 0) }, r.exceptionOrNull()?.message) }
+                    r.getOrNull()?.let { x -> synchronized(texts) { texts.getOrPut(e.label) { HashMap() }[k.clip] = x.text; cost += x.cost } }
+                }
+            }
+        }.awaitAll()
+        val scores = texts.map { (engine, byClip) ->
+            var errs = 0; var words = 0
+            for (k in keys) byClip[k.clip]?.let { h -> val (e, n) = net.boswell.phone.asr.Accuracy.errors(k.reference, h); errs += e; words += n }
+            Score(engine, errs, words, byClip.keys.count { c -> keys.any { it.clip == c } })
+        }.filter { it.clips > 0 }.sortedBy { it.rate }
+        state.update { it.copy(scoring = false, scores = scores,
+            scoreNote = "${keys.size} corrected recording${if (keys.size == 1) "" else "s"} · ${"$%.4f".format(cost)}") }
+    }
 
     /** Transcribe these clips (or the 10 latest with speech) in the cloud and set each beside the phone's version. */
     fun run(clips: List<String>?) = viewModelScope.launch(Dispatchers.IO) {
@@ -131,6 +187,27 @@ fun CompareScreen(clips: List<String>?, onBack: () -> Unit) {
     }) { pad ->
         LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = pad.calculateTopPadding() + 8.dp, bottom = pad.calculateBottomPadding() + 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
+                    Column(Modifier.padding(16.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Score against your corrections", style = MaterialTheme.typography.titleMedium)
+                        if (s.keys == 0) Text("Fix a few lines that came out wrong (tap a line in a conversation). Each recording you correct becomes an answer key, " +
+                            "and this measures how many words each engine gets wrong against what was really said.", style = MaterialTheme.typography.bodySmall)
+                        else {
+                            Text("${s.keys} recording${if (s.keys == 1) "" else "s"} you've corrected, ${s.keyWords} words. Lines you left alone count as right. " +
+                                "Parakeet and Nova-3 transcribe them in the cloud (a cent or two).", style = MaterialTheme.typography.bodySmall)
+                            if (s.scoring) LinearProgressIndicator(Modifier.fillMaxWidth())
+                            else Button(onClick = { vm.score() }, enabled = s.hasKey) { Text(if (s.scores.isEmpty()) "Score" else "Score again") }
+                            for (sc in s.scores) Row {
+                                Text(sc.engine, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                                Text("${"%.1f".format(sc.rate * 100)}% words wrong" + if (sc.clips < s.keys) " (${sc.clips} rec.)" else "",
+                                    style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                            }
+                            s.scoreNote?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        }
+                    }
+                }
+            }
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Transcribe the same clips with a cloud engine and see where it and the phone differ. Your transcripts aren't changed.",

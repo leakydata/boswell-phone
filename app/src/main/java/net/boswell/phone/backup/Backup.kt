@@ -39,7 +39,8 @@ object Backup {
     private const val MANIFEST = "boswell-backup.json"
     private val DATABASES = listOf("speakers.db", "todo.db", "life.db", "assistant.db")
     private val FOLDERS = listOf("clips", "transcripts")
-    private val SKIP_PREFS = setOf("setup_done", "calendar_id", "last_sync", "last_sync_result", "omi_battery_band", "restored")
+    private val SKIP_PREFS = setOf("setup_done", "calendar_id", "last_sync", "last_sync_result", "omi_battery_band", "restored",
+        "backup_folder", "backup_last", "backup_last_result")   // a folder permission belongs to this install
     private val json = Json { prettyPrint = false }
 
     data class Summary(val recordings: Int, val bytes: Long, val keys: Boolean, val created: Long)

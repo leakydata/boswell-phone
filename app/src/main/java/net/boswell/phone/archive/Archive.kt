@@ -23,7 +23,9 @@ data class ClipRow(val name: String, val started: Double, val ended: Double, val
                    val audio: Boolean, val conversation: Long?, val topSound: String?, val bytes: Long)
 
 data class Conversation(val id: Long, val started: Double, val ended: Double, val clips: Int, val speechSeconds: Double,
-                        val speakers: List<String>, val snippet: String, val sounds: List<String>)
+                        val speakers: List<String>, val snippet: String, val sounds: List<String>,
+                        /** From the assistant (ConversationNotes), when made. */
+                        val title: String? = null, val summary: String? = null)
 
 data class LineRow(val id: Long, val clip: String, val t0: Double, val t1: Double, val offset: Double,
                    val speaker: String?, val personId: Long?, val text: String, val original: String? = null,

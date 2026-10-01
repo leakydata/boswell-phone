@@ -146,8 +146,14 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
 
     fun shiftDay(by: Long) = showDay(_day.value.day.plusDays(by).coerceAtMost(LocalDate.now()))
 
+    /** Titles and summaries the assistant made (ConversationNotes), where there are any. */
+    private fun withNotes(convs: List<net.boswell.phone.archive.Conversation>): List<net.boswell.phone.archive.Conversation> {
+        val notes = runCatching { net.boswell.phone.assistant.AssistantStore(getApplication()).use { it.notes(convs.map { c -> c.id }) } }.getOrDefault(emptyMap())
+        return convs.map { c -> notes[c.id]?.let { n -> c.copy(title = n.title, summary = n.summary.ifBlank { null }) } ?: c }
+    }
+
     private suspend fun loadDay(d: LocalDate) {
-        val (convs, ribbon, days) = withContext(Dispatchers.IO) { Triple(archive.conversations(d), archive.clips(d), archive.days().map { it.first }) }
+        val (convs, ribbon, days) = withContext(Dispatchers.IO) { Triple(withNotes(archive.conversations(d)), archive.clips(d), archive.days().map { it.first }) }
         val vs = withContext(Dispatchers.IO) { voices(convs.flatMap { it.speakers }) }
         val todos = withContext(Dispatchers.IO) { dueOn(d) }
         _day.value = DayState(d, days, convs, ribbon, vs, loading = false, todos = todos)
@@ -180,7 +186,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     private var ticker: Job? = null
 
     fun openConversation(id: Long, keepPlayer: Boolean = false) = viewModelScope.launch {
-        val c = withContext(Dispatchers.IO) { archive.conversation(id) } ?: return@launch
+        val c = withContext(Dispatchers.IO) { archive.conversation(id)?.let { withNotes(listOf(it)).first() } } ?: return@launch
         val lines = withContext(Dispatchers.IO) { archive.lines(id) }
         val keys = lines.mapNotNull { it.speaker }.distinct()
         val vs = withContext(Dispatchers.IO) { voices(keys) }
@@ -414,7 +420,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
 
     fun openPerson(id: Long) = viewModelScope.launch {
         val p = withContext(Dispatchers.IO) { speakers.person(id) }
-        val convs = withContext(Dispatchers.IO) { archive.conversationsWith("p$id") }
+        val convs = withContext(Dispatchers.IO) { withNotes(archive.conversationsWith("p$id")) }
         val groups = withContext(Dispatchers.IO) { speakers.groups(id) }
         _person.value = PersonState(p, convs, groups)
     }

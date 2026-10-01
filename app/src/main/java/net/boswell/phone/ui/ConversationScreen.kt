@@ -127,6 +127,14 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
         LazyColumn(state = list, contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = pad.calculateTopPadding() + 4.dp, bottom = pad.calculateBottomPadding() + 16.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp)) {
             // Whose words these are: the phone's, the cloud's (Parakeet), or some of each after a Redo.
+            s.conversation?.title?.let { title ->
+                item {
+                    Column(Modifier.padding(bottom = 8.dp)) {
+                        Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                        s.conversation?.summary?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    }
+                }
+            }
             val clipsAll = s.lines.map { it.clip }.distinct()
             val cloudClips = s.lines.filter { it.cloud }.map { it.clip }.distinct().size
             if (clipsAll.isNotEmpty()) item {

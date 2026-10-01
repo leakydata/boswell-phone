@@ -15,16 +15,34 @@ data class Bookmark(val id: Long, val at: Double, val note: String?)
  * here -- when, why, which model, tokens, cost -- so what left the phone is
  * always visible, and the daily budget has something to count.
  */
-class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db", null, 2) {
+class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db", null, 3) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE calls (id INTEGER PRIMARY KEY, at REAL, purpose TEXT, model TEXT, prompt_tokens INTEGER, completion_tokens INTEGER, cost REAL, error TEXT)")
         db.execSQL("CREATE TABLE exchanges (id INTEGER PRIMARY KEY, at REAL, source TEXT, question TEXT, answer TEXT, cost REAL, error INTEGER)")
         db.execSQL("CREATE TABLE bookmarks (id INTEGER PRIMARY KEY, at REAL, note TEXT)")
         db.execSQL(TRIGGER_HITS)
+        db.execSQL(NOTES)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) db.execSQL(TRIGGER_HITS)
+        if (oldVersion < 3) db.execSQL(NOTES)
+    }
+
+    /** A conversation's title and summary, made when it had [clips] recordings (more later means make it again). */
+    data class Note(val title: String, val summary: String, val clips: Int)
+
+    fun setNote(conversation: Long, clips: Int, title: String, summary: String) {
+        writableDatabase.insertWithOnConflict("conv_notes", null, ContentValues().apply {
+            put("id", conversation); put("clips", clips); put("title", title); put("summary", summary); put("made", now())
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun notes(ids: Collection<Long>): Map<Long, Note> {
+        if (ids.isEmpty()) return emptyMap()
+        return readableDatabase.rawQuery("SELECT id, title, summary, clips FROM conv_notes WHERE id IN (${ids.joinToString(",")})", null).use { c ->
+            buildMap { while (c.moveToNext()) put(c.getLong(0), Note(c.getString(1), c.getString(2), c.getInt(3))) }
+        }
     }
 
     /** True the first time a (clip, line, trigger) is seen; a line never fires the same trigger twice. */
@@ -92,6 +110,7 @@ class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db
 }
 
 private const val TRIGGER_HITS = "CREATE TABLE IF NOT EXISTS trigger_hits (clip TEXT, start REAL, trigger INTEGER, at REAL, PRIMARY KEY (clip, start, trigger))"
+private const val NOTES = "CREATE TABLE IF NOT EXISTS conv_notes (id INTEGER PRIMARY KEY, clips INTEGER, title TEXT, summary TEXT, made REAL)"
 
 /** Assistant settings. The API key itself lives in [Secrets]. */
 object AssistantPrefs {
@@ -130,6 +149,10 @@ object AssistantPrefs {
     fun setRecapHour(c: Context, h: Int) = p(c).edit().putInt("recap_hour", h).apply()
 
     /** Notice promises in what was said and file them as to-dos. */
+    /** A title and one-line summary for each finished conversation (Today). */
+    fun titles(c: Context) = p(c).getBoolean("conv_titles", true)
+    fun setTitles(c: Context, on: Boolean) = p(c).edit().putBoolean("conv_titles", on).apply()
+
     fun promises(c: Context) = p(c).getBoolean("promises", true)
     fun setPromises(c: Context, on: Boolean) = p(c).edit().putBoolean("promises", on).apply()
 

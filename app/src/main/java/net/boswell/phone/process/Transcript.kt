@@ -34,6 +34,8 @@ data class Segment(
     val text: String,
     /** What the transcriber heard, kept when the text was corrected by hand. */
     val original: String? = null,
+    /** Corrected by the person (not by the vocabulary): the text is an answer key. */
+    val edited: Boolean = false,
 )
 
 @Serializable
