@@ -63,6 +63,41 @@ object TranscriptJson {
 object Lines {
     fun label(i: Int) = "SPEAKER_%02d".format(i)
 
+    /** How far from an attributed word an orphan may still be given to its speaker. */
+    const val ORPHAN_REACH = 3.0
+
+    private fun nearestSpeaker(words: List<Word>, spk: List<Int?>, i: Int): Int? {
+        var best: Int? = null
+        var bestGap = ORPHAN_REACH
+        for (j in words.indices) {
+            val s = spk[j] ?: continue
+            if (j == i) continue
+            val gap = if (j < i) words[i].start - words[j].end else words[j].start - words[i].end
+            if (gap.coerceAtLeast(0.0) <= bestGap) { bestGap = gap.coerceAtLeast(0.0); best = s }
+        }
+        return best
+    }
+
+    /**
+     * The same rule for transcripts written before it: an unattributed line
+     * takes the speaker of the nearest attributed line in its clip (within
+     * ORPHAN_REACH), or the clip's only speaker. Returns null if nothing changed.
+     */
+    fun attributeOrphans(segments: List<Segment>): List<Segment>? {
+        if (segments.none { it.speaker == null }) return null
+        val labels = segments.mapNotNull { it.speaker }.distinct()
+        if (labels.isEmpty()) return null
+        var changed = false
+        val out = segments.mapIndexed { i, s ->
+            if (s.speaker != null) return@mapIndexed s
+            val to = if (labels.size == 1) labels[0] else segments.withIndex().filter { it.value.speaker != null && it.index != i }
+                .map { (j, o) -> o.speaker to (if (j < i) s.start - o.end else o.start - s.end).coerceAtLeast(0.0) }
+                .filter { it.second <= ORPHAN_REACH }.minByOrNull { it.second }?.first
+            if (to != null) { changed = true; s.copy(speaker = to) } else s
+        }
+        return if (changed) out else null
+    }
+
     /**
      * Give every word to the speaker whose turn it falls in (the one overlapping
      * it most, when two talk at once), or the nearest turn within a second,
@@ -83,6 +118,13 @@ object Lines {
             val d = minOf(kotlin.math.abs(mid - near.start), kotlin.math.abs(mid - near.end))
             return if (d <= 1.0) near.speaker else null
         }
+        // A word outside every turn (a clip's edge, a gap the segmenter called
+        // silence) goes to whoever spoke nearest it, rather than to nobody.
+        val spk = words.map(::speakerFor).toMutableList()
+        val known = spk.filterNotNull().distinct()
+        for (i in words.indices) if (spk[i] == null) {
+            spk[i] = if (known.size == 1) known[0] else nearestSpeaker(words, spk, i)
+        }
         val out = mutableListOf<Segment>()
         var cur: MutableList<Word>? = null
         var curSpk: Int? = null
@@ -91,8 +133,8 @@ object Lines {
             out += Segment(c.first().start, c.last().end, curSpk?.let(::label), c.joinToString(" ") { it.text })
             cur = null
         }
-        for (w in words) {
-            val s = speakerFor(w)
+        for ((wi, w) in words.withIndex()) {
+            val s = spk[wi]
             val c = cur
             if (c == null || s != curSpk || w.start - c.last().end > pause || w.end - c.first().start > maxLine) {
                 flush()

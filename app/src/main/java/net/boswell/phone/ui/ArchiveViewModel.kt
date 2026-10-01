@@ -90,6 +90,13 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     private var searchJob: Job? = null
 
     init {
+        // Once: lines older transcripts left without a speaker get the nearest one's.
+        val prefs = app.getSharedPreferences("boswell", android.content.Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("orphans_attributed_v1", false)) viewModelScope.launch(Dispatchers.IO) {
+            runCatching { net.boswell.phone.speakers.VoiceReview(app).recheck() }
+            prefs.edit().putBoolean("orphans_attributed_v1", true).apply()
+            refresh(force = true)
+        }
         refresh()
         // New transcripts and new clips both change what the day shows.
         viewModelScope.launch { ProcessingRepository.state.distinctUntilChangedBy { it.done to it.running }.collect { refresh() } }
@@ -443,6 +450,15 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Save hand corrections for several lines at once, then refresh what shows them. */
+    fun speakersInClip(clip: String): List<Pair<String, String?>> = archive.speakersInClip(clip)
+
+    /** "Who said this?" for a line nobody was attributed to. */
+    fun assignLine(line: LineRow, label: String) = viewModelScope.launch {
+        withContext(Dispatchers.IO) { net.boswell.phone.process.ClipActions.setLineSpeaker(getApplication(), line.clip, line.offset, label) }
+        _conv.value.conversation?.let { openConversation(it.id, keepPlayer = true) }
+        loadDay(_day.value.day)
+    }
+
     fun editLines(edits: List<Pair<LineRow, String>>) = viewModelScope.launch {
         withContext(Dispatchers.IO) {
             for ((line, text) in edits) net.boswell.phone.process.ClipActions.editLine(getApplication(), line.clip, line.offset, text)

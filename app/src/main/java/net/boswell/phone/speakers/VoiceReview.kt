@@ -66,7 +66,9 @@ class VoiceReview(private val context: Context) {
         val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.getOrNull() ?: return 0
         if (t.speakers.isEmpty()) return 0
         var matched = 0
-        var changed = false
+        // Lines left without a speaker by an older transcript get the nearest one's.
+        val orphansFixed = net.boswell.phone.process.Lines.attributeOrphans(t.segments)
+        var changed = orphansFixed != null
         val updated = t.speakers.mapValues { (label, sp) ->
             val emb = t.embeddings[label]?.toFloatArray() ?: return@mapValues sp
             if (store.decidedByHand(t.clip, label)) return@mapValues sp
@@ -86,7 +88,8 @@ class VoiceReview(private val context: Context) {
                 sp.copy(score = r.score, decision = r.decision.name.lowercase(), margin = r.margin, candidates = candidates)
             }
         }
-        if (changed) writeAtomically(f, TranscriptJson.json.encodeToString(Transcript.serializer(), t.copy(speakers = updated)).toByteArray())
+        if (changed) writeAtomically(f, TranscriptJson.json.encodeToString(Transcript.serializer(),
+            t.copy(speakers = updated, segments = orphansFixed ?: t.segments)).toByteArray())
         return matched
     }
 

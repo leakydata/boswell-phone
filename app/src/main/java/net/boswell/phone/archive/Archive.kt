@@ -228,6 +228,12 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
 
     // --------------------------------------------------------------- queries
 
+    /** The voices heard in a clip: (label, conversation key). */
+    fun speakersInClip(clip: String): List<Pair<String, String?>> = readableDatabase.rawQuery(
+        "SELECT label, conv_key FROM clip_speakers WHERE clip = ? ORDER BY label", arrayOf(clip)).use { c ->
+        buildList { while (c.moveToNext()) add(c.getString(0) to (if (c.isNull(1)) null else c.getString(1))) }
+    }
+
     /** What one voice said in one clip, in order. */
     fun linesOf(clip: String, label: String): List<String> = readableDatabase.rawQuery(
         "SELECT text FROM lines WHERE clip = ? AND label = ? ORDER BY t0", arrayOf(clip, label)).use { c ->

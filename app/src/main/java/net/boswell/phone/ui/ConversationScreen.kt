@@ -64,6 +64,7 @@ import net.boswell.phone.ui.theme.Voices
 fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack: () -> Unit, onPerson: (Long) -> Unit) {
     val s by vm.conv.collectAsStateWithLifecycle()
     var who by remember { mutableStateOf<String?>(null) }
+    var orphan by remember { mutableStateOf<LineRow?>(null) }
     var lineMenu by remember { mutableStateOf<List<LineRow>?>(null) }
     var confirmDelete by remember { mutableStateOf<List<String>?>(null) }
     val ctx = androidx.compose.ui.platform.LocalContext.current
@@ -132,7 +133,7 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
                 val newSpeaker = prev?.speaker != line.speaker || line.t0 - (prev?.t1 ?: 0.0) > 30
                 val merged = if (turn.size == 1) line else line.copy(text = turn.joinToString(" ") { it.text }, t1 = turn.last().t1)
                 Bubble(merged, s.voices[line.speaker], newSpeaker, turn.any { it.id == s.playingLine },
-                    onTap = { vm.playLine(line) }, onWho = { line.speaker?.let { who = it } }, onLong = { lineMenu = turn.toList() }, edited = turn.any { it.original != null })
+                    onTap = { vm.playLine(line) }, onWho = { if (line.speaker != null) who = line.speaker else orphan = line }, onLong = { lineMenu = turn.toList() }, edited = turn.any { it.original != null })
             }
             if (s.lines.isEmpty() && c != null) item { Text("No words were transcribed in this conversation.", Modifier.padding(16.dp)) }
         }
@@ -157,6 +158,7 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
     who?.let { key ->
         WhoSheet(vm, s, key, onDismiss = { who = null }, onPerson = { pid -> who = null; onPerson(pid) })
     }
+    orphan?.let { line -> OrphanSheet(vm, s, line, onDismiss = { orphan = null }) }
 }
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
@@ -312,6 +314,36 @@ private fun WhoSheet(vm: ArchiveViewModel, s: ConversationState, key: String, on
                 Button(enabled = name.isNotBlank(), onClick = { vm.nameVoice(conv.id, key, name.trim()); done() }) { Text("Save") }
             }
             if (!v.media) TextButton(onClick = { vm.markMedia(conv.id, key); done() }) { Text("It's a TV, video or radio") }
+        }
+    }
+}
+
+/**
+ * "Who said this?" for a line no speaker was found for (a word or two at a
+ * recording's edge): the voices heard in the same recording to choose from.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OrphanSheet(vm: ArchiveViewModel, s: ConversationState, line: LineRow, onDismiss: () -> Unit) {
+    val options = remember(line.clip) { vm.speakersInClip(line.clip) }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Who said this?", style = MaterialTheme.typography.titleLarge)
+            Text("\u201c${line.text}\u201d", style = MaterialTheme.typography.bodyLarge)
+            OutlinedButton(onClick = { vm.playLine(line) }) { Icon(Icons.Filled.PlayArrow, null); Text("Hear it") }
+            if (options.isEmpty()) Text("No voice in this recording was clear enough to tell who's speaking, so there's no one to file it under.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            else Text("Voices heard in the same recording:", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            for ((label, key) in options) {
+                val v = key?.let { s.voices[it] }
+                Surface(onClick = { vm.assignLine(line, label); onDismiss() }, shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (v != null) { Avatar(v, 36); Spacer(Modifier.width(12.dp)) }
+                        Text(v?.name ?: "Another voice", style = MaterialTheme.typography.titleMedium)
+                    }
+                }
+            }
         }
     }
 }

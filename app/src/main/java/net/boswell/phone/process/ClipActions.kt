@@ -54,6 +54,19 @@ object ClipActions {
         try { archive.sync(speakers) } finally { speakers.close(); archive.close() }
     }
 
+    /** File a line nobody was attributed to under one of its clip's speakers. */
+    fun setLineSpeaker(context: Context, clip: String, start: Double, label: String) {
+        val f = File(ProcessingWorker.transcriptsDir(context), clip.removeSuffix(".wav") + ".json")
+        val t = TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText())
+        val i = t.segments.indexOfFirst { kotlin.math.abs(it.start - start) < 0.001 }
+        if (i < 0 || label !in t.speakers) return
+        net.boswell.phone.audio.writeAtomically(f, TranscriptJson.json.encodeToString(Transcript.serializer(),
+            t.copy(segments = t.segments.toMutableList().also { it[i] = it[i].copy(speaker = label) })).toByteArray())
+        val speakers = SpeakerStore(context)
+        val archive = Archive(context)
+        try { archive.sync(speakers, force = true) } finally { speakers.close(); archive.close() }
+    }
+
     /** Throw the transcripts away so the background pass transcribes these clips again. Hand corrections go with them. */
     fun retranscribe(context: Context, clips: Collection<String>) {
         val tdir = ProcessingWorker.transcriptsDir(context)
