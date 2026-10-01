@@ -18,6 +18,7 @@ object ConversationNotes {
     /** At most this many a run, newest first, so a big backlog spreads out. */
     private const val PER_RUN = 12
     private const val MIN_LINES = 3
+    private const val MIN_SECONDS = 60.0
     /** Notes made before the current prompt are made again (2026-10-01: "you", not the owner's name). */
     private const val PROMPT_SINCE = 1_790_885_000.0
 
@@ -32,6 +33,8 @@ object ConversationNotes {
             val convs = days.flatMap { archive.conversations(it) }
                 // Finished: nothing new for a while, so the title won't be stale in a minute.
                 .filter { now - it.ended > Archive.CONVERSATION_GAP * 3 }
+                // A minute or more: shorter ones read fine from their opening words.
+                .filter { it.ended - it.started >= MIN_SECONDS }
             val notes = store.notes(convs.map { it.id })
             for (conv in convs.filter { notes[it.id]?.let { n -> n.clips != it.clips || n.made < PROMPT_SINCE } ?: true }.take(PER_RUN)) {
                 val text = Assistant(c).lines(archive, speakers, conv.started - 1, conv.ended + 1)

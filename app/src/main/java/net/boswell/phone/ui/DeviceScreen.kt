@@ -631,7 +631,7 @@ private fun AssistantRoutines() {
         Switch(checked = on, onCheckedChange = set)
     }
     var titles by remember { mutableStateOf(P.titles(ctx)) }
-    Toggle("Title each conversation", "A short title and a one-line summary on Today, a few minutes after a conversation ends. About a tenth of a cent each.",
+    Toggle("Title each conversation", "A short title and a one-line summary on Today for conversations of a minute or more, a few minutes after they end. About a tenth of a cent each; briefs and recaps read them too.",
         titles) { titles = it; P.setTitles(ctx, it) }
     Toggle("Notice promises", "Every few hours, promises in what was said (yours and others') become to-dos under Promises, and facts about people are remembered.",
         promises) { promises = it; P.setPromises(ctx, it) }
