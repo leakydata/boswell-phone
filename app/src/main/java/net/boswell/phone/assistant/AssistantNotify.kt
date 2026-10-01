@@ -75,7 +75,7 @@ object AssistantNotify {
         fun go(t: TextToSpeech) {
             val v = voiceName?.let { n -> t.voices?.firstOrNull { it.name == n } }
             if (v != null) t.voice = v else t.language = Locale.getDefault()
-            t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "boswell")
+            t.speak(SpeechText.clean(text), TextToSpeech.QUEUE_FLUSH, null, "boswell")
         }
         val t = tts
         if (t != null && ttsReady) { go(t); return }
