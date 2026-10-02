@@ -34,3 +34,11 @@
 -dontwarn java.beans.**
 -dontwarn javax.security.sasl.**
 -dontwarn javax.security.auth.callback.**
+
+# Google's code scanner (ML Kit) finds its components by name at runtime; shrinking
+# them made GmsBarcodeScanning.getClient() crash with a NullPointerException.
+-keep class com.google.mlkit.** { *; }
+-keep class com.google.android.gms.internal.mlkit_code_scanner.** { *; }
+-keep class com.google.android.gms.internal.mlkit_vision_common.** { *; }
+-keep class com.google.firebase.components.** { *; }
+-dontwarn com.google.mlkit.**
