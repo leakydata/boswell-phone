@@ -54,7 +54,8 @@ object Backup {
         val tmp = File(c.cacheDir, "backup-db").apply { deleteRecursively(); mkdirs() }
         var written = 0L
         val created = System.currentTimeMillis() / 1000
-        val recordings = files.count { it.first.startsWith("files/transcripts/") }
+        var recordings = 0
+        var bytes = 0L
         try {
             c.contentResolver.openOutputStream(uri)!!.use { raw ->
                 ZipOutputStream(raw.buffered()).use { zip ->
@@ -62,7 +63,7 @@ object Backup {
                     // The manifest goes first, so a restore can refuse a wrong file before reading the rest.
                     put(MANIFEST, json.encodeToString(JsonObject.serializer(), buildJsonObject {
                         put("format", FORMAT); put("app", c.packageManager.getPackageInfo(c.packageName, 0).versionName ?: ""); put("created", created)
-                        put("recordings", recordings); put("keys", includeKeys)
+                        put("recordings", files.count { it.first.startsWith("files/transcripts/") }); put("keys", includeKeys)
                     }).toByteArray())
                     put("settings.json", json.encodeToString(JsonObject.serializer(), prefsToJson(c)).toByteArray())
                     if (includeKeys) put("keys.json", json.encodeToString(JsonObject.serializer(), buildJsonObject {
@@ -77,19 +78,41 @@ object Backup {
                         zip.putNextEntry(ZipEntry("databases/$name")); out.inputStream().use { it.copyTo(zip) }; zip.closeEntry()
                     }
                     for ((name, f) in files) {
-                        // Audio is already compressed; storing it saves the time of deflating it again.
-                        val e = ZipEntry(name)
-                        if (f.name.endsWith(".ogg")) {
-                            e.method = ZipEntry.STORED; e.size = f.length(); e.compressedSize = f.length()
-                            e.crc = java.util.zip.CRC32().also { crc -> f.inputStream().use { i -> val b = ByteArray(65536); while (true) { val n = i.read(b); if (n < 0) break; crc.update(b, 0, n) } } }.value
-                        }
-                        zip.putNextEntry(e); f.inputStream().use { it.copyTo(zip) }; zip.closeEntry()
-                        written += f.length(); progress(written.toFloat() / total)
+                        val listed = f.length()
+                        val n = putFile(zip, name, f)
+                        if (n != null) { bytes += n; if (name.startsWith("files/transcripts/")) recordings++ }
+                        // A file gone since the listing still counts toward progress, so the bar ends full.
+                        written += listed; progress((written.toFloat() / total).coerceAtMost(1f))
                     }
                 }
             }
         } finally { tmp.deleteRecursively() }
-        return Summary(recordings, total, includeKeys, created)
+        return Summary(recordings, bytes, includeKeys, created)
+    }
+
+    /**
+     * Add [f] to [zip] as [name]; its size, or null if it no longer exists.
+     * Recording goes on during a backup, and compacting a clip deletes its
+     * .wav once the .ogg is written, so a listed file can vanish. Everything
+     * is read from the one open file, so it can't vanish halfway either.
+     */
+    internal fun putFile(zip: ZipOutputStream, name: String, f: File): Long? {
+        val input = try { java.io.FileInputStream(f) } catch (e: java.io.FileNotFoundException) { return null }
+        input.use {
+            val ch = input.channel
+            val size = ch.size()
+            val e = ZipEntry(name)
+            // Audio is already compressed; storing it saves the time of deflating it again.
+            if (f.name.endsWith(".ogg")) {
+                e.method = ZipEntry.STORED; e.size = size; e.compressedSize = size
+                val crc = java.util.zip.CRC32(); val b = ByteArray(65536)
+                while (true) { val n = input.read(b); if (n < 0) break; crc.update(b, 0, n) }
+                e.crc = crc.value
+                ch.position(0)
+            }
+            zip.putNextEntry(e); input.copyTo(zip); zip.closeEntry()
+            return size
+        }
     }
 
     /** Read only the manifest: what a backup holds, or null if it isn't one. */
