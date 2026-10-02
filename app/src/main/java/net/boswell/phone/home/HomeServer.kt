@@ -3,7 +3,9 @@ package net.boswell.phone.home
 import android.content.Context
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -123,10 +125,32 @@ object HomeServer {
     }
 
     /**
+     * The vocabulary as the X-Boswell-Hotwords header: a JSON array of strings, so the
+     * server's recognizer can favor names it would otherwise mishear. Headers must be
+     * ASCII, so anything else is escaped as \uXXXX (still valid JSON); capped so a long
+     * list of people can't push the request past a server's header limit.
+     */
+    internal fun hotwordsHeader(terms: List<String>): String {
+        val kept = mutableListOf<JsonPrimitive>()
+        var length = 2
+        for (t in terms.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(300)) {
+            val item = asciiJson(JsonPrimitive(t).toString())
+            if (length + item.length + 1 > 6000) break
+            kept += JsonPrimitive(t); length += item.length + 1
+        }
+        return asciiJson(JsonArray(kept).toString())
+    }
+
+    private fun asciiJson(s: String) = buildString {
+        for (ch in s) if (ch.code < 0x80) append(ch) else append("\\u").append(ch.code.toString(16).padStart(4, '0'))
+    }
+
+    /**
      * Send one recording (its compact Ogg if there is one: ~30 KB per 30 s) and get
      * back its words, speakers with voiceprints in [voiceModel], and sounds.
+     * [hotwords] are names and words the recognizer should listen for.
      */
-    fun analyze(c: Context, audio: File, clip: String, voiceModel: String): Result {
+    fun analyze(c: Context, audio: File, clip: String, voiceModel: String, hotwords: List<String>): Result {
         val base = url(c) ?: throw Unavailable("not paired")
         val key = Secrets.get(c, KEY) ?: throw Unavailable("not paired", notPaired = true)
         val conn = try {
@@ -134,6 +158,7 @@ object HomeServer {
                 doOutput = true
                 setFixedLengthStreamingMode(audio.length())
                 setRequestProperty("Authorization", "Bearer $key")
+                if (hotwords.isNotEmpty()) setRequestProperty("X-Boswell-Hotwords", hotwordsHeader(hotwords))
                 setRequestProperty("Content-Type", if (audio.name.endsWith(".ogg")) "audio/ogg" else "audio/wav")
                 outputStream.use { o -> audio.inputStream().use { it.copyTo(o) } }
             }

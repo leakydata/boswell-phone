@@ -187,7 +187,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
         val audio = net.boswell.phone.audio.ClipAudio.ogg(clips, wav.name).takeIf { it.exists() }
             ?: net.boswell.phone.audio.ClipAudio.file(clips, wav.name) ?: error("no audio")
         val r = net.boswell.phone.home.HomeServer.analyze(applicationContext, audio, wav.name,
-            net.boswell.phone.diarize.VoiceModels.active(applicationContext).id)
+            net.boswell.phone.diarize.VoiceModels.active(applicationContext).id, vocabulary)
         if (r.speech <= net.boswell.phone.diarize.Diarizer.SPEECH_MIN_S) {
             val t = Transcript(wav.name, System.currentTimeMillis() / 1000.0, emptyList(), emptyMap(), emptyMap(),
                 engine = r.engine, processMs = System.currentTimeMillis() - t0, sounds = r.sounds, verdict = verdictFor(false, r.sounds))
