@@ -26,6 +26,8 @@
                 <action android:name="net.boswell.phone.debug.DEMO" />
                 <action android:name="net.boswell.phone.debug.MIGRATE" />
                 <action android:name="net.boswell.phone.debug.BENCH_ID" />
+                <action android:name="net.boswell.phone.debug.HOME_PAIR" />
+                <action android:name="net.boswell.phone.debug.PROCESS" />
                 <action android:name="net.boswell.phone.debug.TEXTING" />
                 <action android:name="net.boswell.phone.debug.RECHECK" />
                 <action android:name="net.boswell.phone.debug.CLOUD_REDO" />

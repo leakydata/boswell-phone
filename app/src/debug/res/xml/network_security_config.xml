@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds also reach a home server through `adb reverse` (localhost). -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">ts.net</domain>
+        <domain>localhost</domain>
+        <domain>127.0.0.1</domain>
+    </domain-config>
+</network-security-config>

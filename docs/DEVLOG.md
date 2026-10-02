@@ -371,3 +371,24 @@ warnings for the Omi and phone offer a switch to Sync mode when very low.
   however they arrive; the 39 short ones already saved were removed at the
   user's request, their recordings kept labeled by assignment.
 
+## Milestone 10: the home server (2026-10-02)
+
+- **boswell-server** (github.com/leakydata/boswell-server): the person's own
+  computer does the heavy work on its GPU. On an RTX 4090, under a second per
+  30 s recording: pyannote 3.1 (~0.27 s), Parakeet TDT 0.6B v3 full precision
+  via onnx-asr (~0.18 s; the int8 sherpa build silently ran on the CPU at
+  2.5 s), the phone's own voiceprint models (< 0.2 s), CED-Mini (~0.18 s).
+- **The phone stays in charge:** the server returns the raw ingredients (words,
+  speakers with turns and voiceprints in the phone's active model, sounds),
+  and ProcessingWorker assembles them through the same `finish()` the phone's
+  own models use, matching voices against its own people.
+- **Pairing:** a 10-minute, single-use code from the server's screen (as a QR
+  code, scanned with Google's code scanner, or typed) is traded for a
+  per-phone key, kept with Secrets and stored on the server only as a hash.
+- **Reached over Tailscale**; cleartext is allowed only for *.ts.net (the
+  tunnel is WireGuard-encrypted). Fallback when home is unreachable: the
+  phone's own models (loaded only then), or keep the recordings for home.
+- **Tested end to end on the phone** through `adb reverse`: paired in 14 ms,
+  four recordings transcribed through the server in ~1.4 s each, uploads of
+  ~30 KB each.
+

@@ -29,7 +29,9 @@ import java.io.File
 
 data class ProcessingState(val running: Boolean = false, val pending: Int = 0, val done: Int = 0, val current: String? = null, val lastError: String? = null,
                            /** Downloaded clips held back until the phone is charging. */
-                           val waitingForCharger: Int = 0)
+                           val waitingForCharger: Int = 0,
+                           /** Clips kept for the home server, which couldn't be reached (HomeServer.Fallback.WAIT). */
+                           val waitingForHome: Int = 0)
 
 object ProcessingRepository {
     val state = MutableStateFlow(ProcessingState())
@@ -49,7 +51,10 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
     override suspend fun doWork(): Result = withContext(Dispatchers.Default) {
         val models = ModelStore(applicationContext)
         val needed = listOf(ModelCatalog.ASR, ModelCatalog.SEGMENTATION, ModelCatalog.VOICEPRINT)
-        if (!needed.all(models::isInstalled)) {
+        val localReady = needed.all(models::isInstalled)
+        // With the home server the phone's own models are only a fallback: not needed, and not loaded unless used.
+        val home = net.boswell.phone.home.HomeServer.enabled(applicationContext)
+        if (!home && !localReady) {
             ProcessingRepository.state.value = ProcessingState(lastError = "models not installed")
             return@withContext Result.success()
         }
@@ -58,13 +63,15 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
         val out = transcriptsDir(applicationContext)
         val store = SpeakerStore(applicationContext)
         var done = 0
-        val tagger = if (models.isInstalled(net.boswell.phone.sound.SoundTagger.ID)) net.boswell.phone.sound.SoundTagger(models) else null
+        val tagger = if (!home && models.isInstalled(net.boswell.phone.sound.SoundTagger.ID)) net.boswell.phone.sound.SoundTagger(models) else null
         // Clips transcribed before tagging was installed get tags without being
         // transcribed again.
         if (tagger != null) backfillSounds(out, clips, tagger)
-        LocalAsr(models).use { asr ->
-            net.boswell.phone.diarize.VoiceModels.ort(applicationContext, models).use { ort ->
-                val diarizer = ort.diarizer()
+        var local: Local? = null
+        fun local(): Local = local ?: Local(models, applicationContext).also { local = it }
+        val forHome = mutableSetOf<String>()
+        var homeTrouble: String? = null
+        try {
                 var deferred = 0
                 while (!isStopped) {
                     // A question asked on the Omi goes first: the backlog waits
@@ -73,13 +80,23 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
                     while (!isStopped && net.boswell.phone.capture.CaptureRepository.state.value.asking != null) kotlinx.coroutines.delay(250)
                     val all = pending(clips, out)
                     val waitCharger = backlogWaits(applicationContext, all)
-                    val todo = if (waitCharger) all.filter { !isDownload(it) } else all
+                    val todo = (if (waitCharger) all.filter { !isDownload(it) } else all).filter { it.name !in forHome }
                     deferred = all.size - todo.size
                     ProcessingRepository.state.value = ProcessingState(true, todo.size, done, waitingForCharger = deferred)
                     val wav = todo.firstOrNull() ?: break
                     ProcessingRepository.state.value = ProcessingState(true, todo.size, done, wav.name)
                     try {
-                        process(wav, asr, diarizer, store, out, tagger)
+                        val t = net.boswell.phone.asr.Transcription
+                        if (home && !t.requested(applicationContext, wav.name)) {
+                            try {
+                                processHome(wav, store, out)
+                            } catch (e: net.boswell.phone.home.HomeServer.Unavailable) {
+                                homeTrouble = e.message
+                                if (net.boswell.phone.home.HomeServer.fallback(applicationContext) == net.boswell.phone.home.HomeServer.Fallback.PHONE && localReady)
+                                    processLocal(wav, local(), store, out, tagger ?: localTagger(models))
+                                else { forHome += wav.name; continue }
+                            }
+                        } else process(wav, local(), store, out, tagger)
                         // Deleted while it was being worked on: drop the result, leave no trace.
                         if (!net.boswell.phone.audio.ClipAudio.exists(clips, wav.name)) File(out, wav.nameWithoutExtension + ".json").delete()
                         else afterTranscript(clips, wav.name, File(out, wav.nameWithoutExtension + ".json"))
@@ -94,13 +111,21 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
                     done++
                     runCatching { setForeground(foreground("Transcribing… ${todo.size - 1} left")) }
                 }
-            }
+        } finally {
+            local?.close()
+            homeTagger?.close()
         }
         store.close()
         tagger?.close()
+        // Kept for home: try again once there's a network, a little later.
+        if (forHome.isNotEmpty()) {
+            enqueueLater(applicationContext)
+            net.boswell.phone.capture.CaptureRepository.log("home server unavailable (${homeTrouble}); ${forHome.size} recordings wait for it")
+        }
         val left = pending(clips, out)
         val waiting = if (backlogWaits(applicationContext, left)) left.count { isDownload(it) } else 0
-        ProcessingRepository.state.value = ProcessingState(false, left.size - waiting, done, waitingForCharger = waiting)
+        ProcessingRepository.state.value = ProcessingState(false, left.size - waiting - forHome.size, done, waitingForCharger = waiting,
+            waitingForHome = forHome.size, lastError = homeTrouble?.let { "home server: $it" })
         if (waiting > 0) ChargerKick.schedule(applicationContext)
         if (redoCloud + redoPhone > 0) {
             val n = redoCloud + redoPhone
@@ -137,8 +162,44 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
     /** Words Boswell should know, read once per run (names change rarely). */
     private val vocabulary by lazy { runCatching { net.boswell.phone.asr.Vocabulary.all(applicationContext) }.getOrDefault(emptyList()) }
 
-    private fun process(wav: File, asr: LocalAsr, diarizer: net.boswell.phone.diarize.Diarizer, store: SpeakerStore, out: File,
-                        tagger: net.boswell.phone.sound.SoundTagger?) {
+    /** The phone's own models (and the cloud's words, when wanted), loaded only when a clip needs them. */
+    private class Local(models: ModelStore, c: Context) : AutoCloseable {
+        val asr = LocalAsr(models)
+        val ort = net.boswell.phone.diarize.VoiceModels.ort(c, models)
+        val diarizer = ort.diarizer()
+        override fun close() { ort.close(); asr.close() }
+    }
+
+    private var homeTagger: net.boswell.phone.sound.SoundTagger? = null
+    private fun localTagger(models: ModelStore) = homeTagger ?: (if (models.isInstalled(net.boswell.phone.sound.SoundTagger.ID))
+        net.boswell.phone.sound.SoundTagger(models).also { homeTagger = it } else null)
+
+    private fun process(wav: File, local: Local, store: SpeakerStore, out: File, tagger: net.boswell.phone.sound.SoundTagger?) =
+        processLocal(wav, local, store, out, tagger)
+
+    /**
+     * On the home server: upload the recording (its compact Ogg, ~30 KB) and put
+     * its words, speakers and sounds together here exactly as for the phone's own.
+     */
+    private fun processHome(wav: File, store: SpeakerStore, out: File) {
+        val t0 = System.currentTimeMillis()
+        val clips = wav.parentFile!!
+        val audio = net.boswell.phone.audio.ClipAudio.ogg(clips, wav.name).takeIf { it.exists() }
+            ?: net.boswell.phone.audio.ClipAudio.file(clips, wav.name) ?: error("no audio")
+        val r = net.boswell.phone.home.HomeServer.analyze(applicationContext, audio, wav.name,
+            net.boswell.phone.diarize.VoiceModels.active(applicationContext).id)
+        if (r.speech <= net.boswell.phone.diarize.Diarizer.SPEECH_MIN_S) {
+            val t = Transcript(wav.name, System.currentTimeMillis() / 1000.0, emptyList(), emptyMap(), emptyMap(),
+                engine = r.engine, processMs = System.currentTimeMillis() - t0, sounds = r.sounds, verdict = verdictFor(false, r.sounds))
+            writeAtomically(File(out, wav.nameWithoutExtension + ".json"), TranscriptJson.json.encodeToString(Transcript.serializer(), t).toByteArray())
+            return
+        }
+        finish(wav, t0, r.heard, r.diarization, r.sounds, r.engine, store, out)
+    }
+
+    private fun processLocal(wav: File, local: Local, store: SpeakerStore, out: File, tagger: net.boswell.phone.sound.SoundTagger?) {
+        val asr = local.asr
+        val diarizer = local.diarizer
         val t0 = System.currentTimeMillis()
         val pcm = net.boswell.phone.audio.ClipAudio.readPcm(wav.parentFile!!, wav.name)
         val audio = FloatArray(pcm.size) { pcm[it] / 32768f }
@@ -154,6 +215,19 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
         val d = diarizer.run(audio)
         val cloud = cloudWords(wav, pcm, diarizer, othersSpeak(d, store))
         val heard = cloud ?: asr.transcribe(audio)
+        val tags = tagger?.tag(audio)
+        val engine = (if (cloud != null) "${net.boswell.phone.asr.Transcription.ENGINE.id} (cloud)" else "nemotron-3.5-asr-1120ms-int8") +
+            " + pyannote-seg-3.0 + ${net.boswell.phone.diarize.VoiceModels.active(applicationContext).id}" + (if (tags != null) " + ced-mini" else "")
+        finish(wav, t0, heard, d, tags, engine, store, out)
+    }
+
+    /**
+     * Words and speakers -> the transcript, wherever they came from: lines by
+     * speaker, the vocabulary's fixes, voices matched against this phone's
+     * people, and the voice triggers.
+     */
+    private fun finish(wav: File, t0: Long, heard: List<net.boswell.phone.asr.Word>, d: net.boswell.phone.diarize.Diarization,
+                       tags: List<net.boswell.phone.sound.SoundTag>?, engine: String, store: SpeakerStore, out: File) {
         val words = net.boswell.phone.asr.Vocabulary.apply(heard, vocabulary)
         // A line the vocabulary changed keeps what was heard, as a hand edit does (and can be restored the same way).
         val segments = Lines.build(words, d.turns).map { seg ->
@@ -161,8 +235,6 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
             else heard.filter { (it.start + it.end) / 2 in seg.start..seg.end }.joinToString(" ") { it.text }
                 .let { h -> if (h.isNotBlank() && h != seg.text) seg.copy(original = h) else seg }
         }
-        val tags = tagger?.tag(audio)
-
         val speakers = LinkedHashMap<String, SpeakerId>()
         val embeddings = LinkedHashMap<String, List<Float>>()
         for (s in d.speakers) {
@@ -190,8 +262,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
             )
         }
         val t = Transcript(wav.name, System.currentTimeMillis() / 1000.0, segments, speakers, embeddings,
-            engine = (if (cloud != null) "${net.boswell.phone.asr.Transcription.ENGINE.id} (cloud)" else "nemotron-3.5-asr-1120ms-int8") +
-                " + pyannote-seg-3.0 + wespeaker-r34" + (if (tags != null) " + ced-mini" else ""),
+            engine = engine,
             processMs = System.currentTimeMillis() - t0,
             sounds = tags, verdict = tags?.let { verdictFor(segments.isNotEmpty(), it) })
         writeAtomically(File(out, wav.nameWithoutExtension + ".json"), TranscriptJson.json.encodeToString(Transcript.serializer(), t).toByteArray())
@@ -311,6 +382,15 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
             val bm = context.getSystemService(android.os.BatteryManager::class.java)
             if (bm?.isCharging == true) return false
             return pending.count { isDownload(it) } > BIG_DOWNLOAD
+        }
+
+        /** Try again later with a network (recordings kept for the home server). */
+        fun enqueueLater(context: Context) {
+            val req = OneTimeWorkRequestBuilder<ProcessingWorker>()
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(androidx.work.NetworkType.CONNECTED).setRequiresBatteryNotLow(true).build())
+                .setInitialDelay(5, java.util.concurrent.TimeUnit.MINUTES)
+                .build()
+            WorkManager.getInstance(context).enqueueUniqueWork("$WORK-home", ExistingWorkPolicy.KEEP, req)
         }
 
         fun enqueue(context: Context) {

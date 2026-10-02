@@ -92,6 +92,18 @@ class DebugReceiver : BroadcastReceiver() {
                     } finally { pending.finish() }
                 }.start()
             }
+            // am broadcast -a net.boswell.phone.debug.HOME_PAIR --es url http://localhost:8765 --es code 123456
+            "net.boswell.phone.debug.HOME_PAIR" -> {
+                val pending = goAsync()
+                Thread {
+                    try {
+                        val r = net.boswell.phone.home.HomeServer.pair(context, intent.getStringExtra("url") ?: "", intent.getStringExtra("code") ?: "")
+                        android.util.Log.i("Boswell", "home pair: ${r ?: "ok, " + runCatching { net.boswell.phone.home.HomeServer.health(context) }.getOrElse { it.message }}")
+                    } finally { pending.finish() }
+                }.start()
+            }
+            // am broadcast -a net.boswell.phone.debug.PROCESS   (transcribe what's pending now)
+            "net.boswell.phone.debug.PROCESS" -> net.boswell.phone.process.ProcessingWorker.enqueue(context)
             // am broadcast -a net.boswell.phone.debug.DEMO   (a made-up day for screenshots; refuses if recordings exist)
             "net.boswell.phone.debug.DEMO" -> {
                 val pending = goAsync()

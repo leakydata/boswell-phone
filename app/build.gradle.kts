@@ -132,6 +132,8 @@ dependencies {
     // Email over IMAP/SMTP with an app password (any provider, no Google project needed).
     implementation(libs.android.mail)
     implementation(libs.android.activation)
+    // Scanning the home server's pairing QR code (Google's scanner: no camera permission for the app).
+    implementation(libs.code.scanner)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

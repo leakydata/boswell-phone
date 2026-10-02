@@ -401,6 +401,10 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
         }
 
         item {
+            Section("Home server") { HomeServerSection() }
+        }
+
+        item {
             Section("Transcription") {
                 val tctx = LocalContext.current
                 val T = net.boswell.phone.asr.Transcription
@@ -771,5 +775,97 @@ private fun EmailSettings() {
         }
     }) { Text("Sign in") }
     message?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+}
+
+/**
+ * Boswell Server on the person's own computer: pair (scan its QR code, or type the
+ * address and code), use it for every recording, and choose what happens when
+ * home can't be reached.
+ */
+@Composable
+private fun HomeServerSection() {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val H = net.boswell.phone.home.HomeServer
+    var paired by remember { mutableStateOf(H.paired(ctx)) }
+    var enabled by remember { mutableStateOf(H.enabled(ctx)) }
+    var fallback by remember { mutableStateOf(H.fallback(ctx)) }
+    var status by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var manual by remember { mutableStateOf(false) }
+    var server by remember { mutableStateOf("") }
+    var code by remember { mutableStateOf("") }
+
+    fun pairWith(url: String, c: String) {
+        busy = true; status = null
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val problem = H.pair(ctx, url, c)
+            status = problem ?: runCatching { H.health(ctx) }.getOrElse { "Paired, but the server didn't answer: ${it.message}" }
+            paired = H.paired(ctx); enabled = H.enabled(ctx); busy = false
+            if (problem == null) net.boswell.phone.process.ProcessingWorker.enqueue(ctx)
+        }
+    }
+
+    Text("Let your own computer do the heavy work: a Boswell Server with an NVIDIA graphics card transcribes, separates speakers " +
+        "and makes voiceprints in under a second per recording, with larger models, and the phone saves the battery. " +
+        "Recordings go only to your computer, over Tailscale.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    if (!paired) {
+        Text("On the computer, run boswell-server and press p to show a pairing code. Install Tailscale on this phone and sign in " +
+            "with the same account as the computer.", style = MaterialTheme.typography.bodySmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(enabled = !busy, onClick = {
+                com.google.mlkit.vision.codescanner.GmsBarcodeScanning.getClient(ctx).startScan()
+                    .addOnSuccessListener { b ->
+                        val qr = b.rawValue?.let(H::parseQr)
+                        if (qr == null) status = "That isn't a Boswell Server code." else pairWith(qr.first, qr.second)
+                    }
+                    .addOnFailureListener { status = "Couldn't scan: ${it.message}" }
+            }) { Text("Scan the code") }
+            OutlinedButton(enabled = !busy, onClick = { manual = !manual }) { Text("Type it") }
+        }
+        if (manual) {
+            OutlinedTextField(value = server, onValueChange = { server = it.trim() }, label = { Text("Address, e.g. http://my-pc.tail1234.ts.net:8765") },
+                singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(value = code, onValueChange = { code = it.filter(Char::isDigit).take(6) }, label = { Text("Code") }, singleLine = true,
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number))
+            Button(enabled = !busy && server.isNotBlank() && code.length == 6, onClick = { pairWith(server, code) }) { Text("Pair") }
+        }
+    } else {
+        Text("Paired with ${H.url(ctx)}", style = MaterialTheme.typography.bodyMedium)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Process recordings at home", style = MaterialTheme.typography.bodyLarge)
+                Text("Every recording goes to your computer; the phone puts the result together and recognizes people as usual.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Switch(checked = enabled, onCheckedChange = {
+                enabled = it; H.setEnabled(ctx, it)
+                net.boswell.phone.process.ProcessingWorker.enqueue(ctx)
+            })
+        }
+        Text("When your computer can't be reached", style = MaterialTheme.typography.bodyMedium)
+        Row {
+            for ((f, label) in listOf(net.boswell.phone.home.HomeServer.Fallback.PHONE to "Use the phone", net.boswell.phone.home.HomeServer.Fallback.WAIT to "Wait for home")) {
+                FilterChip(selected = fallback == f, onClick = { fallback = f; H.setFallback(ctx, f) }, label = { Text(label) },
+                    modifier = Modifier.padding(end = 6.dp))
+            }
+        }
+        Text(if (fallback == net.boswell.phone.home.HomeServer.Fallback.WAIT) "Recordings wait on the phone and go home when it's reachable again: no battery spent on them meanwhile."
+            else "The phone transcribes them itself until home is back.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(enabled = !busy, onClick = {
+                busy = true
+                scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    status = runCatching { H.health(ctx) }.getOrElse { "Can't reach it: ${it.message}. Is the computer on, and Tailscale on here?" }
+                    busy = false
+                }
+            }) { Text("Test") }
+            TextButton(onClick = { H.forget(ctx); paired = false; enabled = false; status = null }) { Text("Unpair") }
+        }
+    }
+    if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+    status?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
 }
 

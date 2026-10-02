@@ -45,6 +45,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -139,10 +140,12 @@ fun TodayScreen(vm: ArchiveViewModel, pad: PaddingValues, onOpen: (Long) -> Unit
             Text(summary, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
-        if ((proc.running && proc.pending > 0) || proc.waitingForCharger > 0) item {
+        if ((proc.running && proc.pending > 0) || proc.waitingForCharger > 0 || proc.waitingForHome > 0) item {
+            val atHome = net.boswell.phone.home.HomeServer.enabled(LocalContext.current)
             Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
                 Text(listOfNotNull(
-                    if (proc.running && proc.pending > 0) "Transcribing on your phone · ${proc.pending} left" else null,
+                    if (proc.running && proc.pending > 0) (if (atHome) "Transcribing at home" else "Transcribing on your phone") + " · ${proc.pending} left" else null,
+                    if (proc.waitingForHome > 0) "${proc.waitingForHome} recordings are waiting for your home server" else null,
                     if (proc.waitingForCharger > 0) "${proc.waitingForCharger} downloaded clips will be transcribed when the phone is charging" else null,
                 ).joinToString("\n"), Modifier.padding(horizontal = 14.dp, vertical = 10.dp), style = MaterialTheme.typography.bodyMedium)
             }
