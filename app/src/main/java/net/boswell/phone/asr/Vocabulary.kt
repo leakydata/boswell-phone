@@ -12,7 +12,8 @@ import android.content.Context
  *  1. the same letters in other case or with spaces ("omi", "boss well") --
  *     safe, so always;
  *  2. a run of two or three words that sounds like the term and is spelled
- *     close to it ("bos well");
+ *     close to it ("bos well"), where any common word among them is spelled
+ *     as it is in the term ("Dan will" stays, never "Daniel");
  *  3. a single word one letter off a term of seven letters or more
  *     ("Bozwell"); shorter names are too easily someone else ("Nethan" was
  *     "and Ethan" in testing).
@@ -111,6 +112,9 @@ object Vocabulary {
                         sl == tl -> true                                         // 1: case or spaces only
                         n == 1 && sl in COMMON -> false
                         n >= 2 && span.all { letters(it) in COMMON } -> false     // "oh me": every piece is a real word
+                        // A real word in a split must be in the term as heard ("bos well"); one that isn't
+                        // was heard right on its own, so "Dan will" is not "Daniel".
+                        n >= 2 && span.any { letters(it) in COMMON && letters(it) !in tl } -> false
                         n >= 2 -> kotlin.math.abs(sl.length - tl.length) <= 2 && soundKey(sl) == tKey && similarity(sl, tl) >= 0.7   // 2
                         else -> tl.length >= 7 && distance(sl, tl) <= 1 && sl.first() == tl.first()   // 3
                     }

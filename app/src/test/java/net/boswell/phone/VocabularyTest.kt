@@ -19,6 +19,11 @@ class VocabularyTest {
         assertEquals("oh me oh my", fix("oh me oh my"))
         assertEquals("the army moved", fix("the army moved"))
     }
+    @Test fun `a common word heard right is not merged into a name`() =
+        assertEquals("Maybe Daddy Dan will take ya.", Vocabulary.apply("Maybe Daddy Dan will take ya.".split(" ").mapIndexed { i, w -> Word(w, i.toDouble(), i + 0.5) },
+            terms + "Daniel").joinToString(" ") { it.text })
+    @Test fun `a split with an uncommon piece is still joined`() = assertEquals("ask Boswell about it", fix("ask Bos all about it"))
+    @Test fun `a long term one letter off is fixed`() = assertEquals("ask Boswell", fix("ask Bozwell"))
     @Test fun `already right is untouched`() = assertEquals("Omi and Boswell", fix("Omi and Boswell"))
     @Test fun `times span the replaced words`() {
         val w = Vocabulary.apply(listOf(Word("bos", 1.0, 1.4), Word("well,", 1.4, 1.9), Word("hi", 2.0, 2.2)), listOf("Boswell"))
