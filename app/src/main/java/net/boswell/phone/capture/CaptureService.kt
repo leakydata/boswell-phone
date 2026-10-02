@@ -233,7 +233,7 @@ class CaptureService : LifecycleService() {
         val run = RunTracker()
         val frameMs = frameSamples * 1000 / OmiUuids.SAMPLE_RATE
         val clip = Clipper(clipsDir(this), info.address.lowercase().filter { it in "0123456789abcdef" },
-            frameMs = frameMs).also { it.bootId = run.id }
+            clipSeconds = clipSecondsNow(), frameMs = frameMs).also { it.bootId = run.id }
         clipper = clip
 
         val consumer = lifecycleScope.launch(audioThread) {
@@ -302,6 +302,7 @@ class CaptureService : LifecycleService() {
             while (!conn.disconnected.isCompleted) {
                 delay(1_000)
                 tick++
+                clip.clipSeconds = clipSecondsNow()
                 val now = System.currentTimeMillis()
                 val last = maxOf(CaptureRepository.state.value.lastAudioMillis ?: 0L, began)
 
@@ -387,6 +388,13 @@ class CaptureService : LifecycleService() {
             f.delete(); store.close()
         }
     }
+
+    /**
+     * 10 s clips when the home server does the work: it answers in under a second,
+     * so a sentence shows up about 10 s after it's said instead of up to 30 s.
+     * On the phone, 30 s clips are cheaper to process (one model load per clip).
+     */
+    private fun clipSecondsNow() = if (net.boswell.phone.home.HomeServer.enabled(this)) HOME_CLIP_SECONDS else 30
 
     /**
      * The LED brightness chosen in the app (Device -> Omi), written to the Omi
@@ -745,6 +753,7 @@ class CaptureService : LifecycleService() {
         private const val NOTIFICATION_ID = 1
         /** The mic sleeps after ~3 s of quiet (OMI_VAD_HOLD_MS); a gap longer than that is a pause. */
         private const val PAUSE_CLOSES_CLIP_MS = 4_000L
+        const val HOME_CLIP_SECONDS = 10
         private const val LINK_CHECK_SECONDS = 30
         private const val DRAIN_RETRY_MS = 5 * 60_000L
         private const val LISTENING_ID = 77

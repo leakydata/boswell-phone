@@ -38,10 +38,12 @@ class Clipper(
     private val dir: File,
     private val deviceId: String?,
     private val sampleRate: Int = 16_000,
-    private val clipSeconds: Int = 30,
+    clipSeconds: Int = 30,
     private val frameMs: Int = 20,
     private val now: () -> Double = { System.currentTimeMillis() / 1000.0 },
 ) {
+    /** The longest a clip runs before it's closed; shorter with the home server, for near-live transcripts. */
+    @Volatile var clipSeconds: Int = clipSeconds
     private val chunks = ArrayList<ShortArray>()
     /** The Opus frames behind [chunks], for the compact copy; null once any frame came without one. */
     private var opus: ArrayList<ByteArray>? = ArrayList()
