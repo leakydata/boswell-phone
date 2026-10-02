@@ -324,20 +324,25 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         val v = _conv.value.voices[key]
         val pid = v?.personId ?: run {
             val (emb, secs, clip) = archive.voiceOf(conversation, key) ?: return@act
-            speakers.newPerson(null).also { speakers.addVoiceprint(it, emb, secs, clip, labelOf(conversation, key, clip), "auto") }
+            speakers.newPerson(null).also { p ->
+                if (net.boswell.phone.speakers.Matching.printable(secs)) speakers.addVoiceprint(p, emb, secs, clip, labelOf(conversation, key, clip), "auto")
+                // Too short to be a reference: still marked, just here, by assignment.
+                else for ((slot, _, _) in archive.slotsOf(conversation, key)) speakers.assign(slot.first, slot.second, p)
+            }
         }
         speakers.setKind(pid, "media")
     }
 
     /**
      * A voice named in a conversation, everywhere it speaks there: the longest
-     * stretch with a voiceprint becomes a confirmed sample, and every clip
+     * stretch with a voiceprint becomes a confirmed sample if it's long enough
+     * (Matching.MIN_PRINT_SECONDS), and every clip
      * voice under that key -- including ones too short to have a voiceprint,
      * which naming used to silently skip -- is assigned to the person.
      */
     private fun fileVoice(conversation: Long, key: String, person: Long) {
         val slots = archive.slotsOf(conversation, key)
-        slots.filter { it.second != null }.maxByOrNull { it.third }?.let { (slot, emb, secs) ->
+        slots.filter { it.second != null && net.boswell.phone.speakers.Matching.printable(it.third) }.maxByOrNull { it.third }?.let { (slot, emb, secs) ->
             runCatching { speakers.addVoiceprint(person, emb!!, secs, slot.first, slot.second, "confirmed") }
         }
         for ((slot, _, _) in slots) speakers.assign(slot.first, slot.second, person)

@@ -38,6 +38,8 @@ class Diarizer(
     private val segment: (FloatArray) -> Array<FloatArray>,
     /** Any length of 16 kHz audio in; a 256-d embedding out, or null. */
     private val embed: (FloatArray) -> FloatArray?,
+    /** Each speaker's final voiceprint (who they are); by default the same model as [embed]. */
+    private val identify: (FloatArray) -> FloatArray? = embed,
     private val stepSeconds: Double = 2.0,
     /** Average-linkage cosine similarity above which two clusters are one speaker. */
     private val mergeAt: Double = 0.60,
@@ -130,7 +132,7 @@ class Diarizer(
             .mapIndexed { i, (_, turns) ->
                 val t = turns.map { it.copy(speaker = i) }
                 val secs = t.sumOf { it.end - it.start }
-                val vp = if (secs >= MIN_VOICEPRINT_S) embed(concat(audio, t)) else null
+                val vp = if (secs >= MIN_VOICEPRINT_S) identify(concat(audio, t)) else null
                 DiarizedSpeaker(i, t, secs, vp)
             }
         return Diarization(speakers)

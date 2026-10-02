@@ -32,7 +32,9 @@ data class VoiceGroup(val key: Long, val voiceprints: Int, val seconds: Double, 
  *
  * Starts empty. Nothing is imported from the desktop.
  */
-class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", null, 6) {
+class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", null, 7) {
+    init { Matching.model = net.boswell.phone.diarize.VoiceModels.active(context) }
+
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""
@@ -89,6 +91,18 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
             db.execSQL("ALTER TABLE people ADD COLUMN contact TEXT")
             db.execSQL("ALTER TABLE people ADD COLUMN may_text TEXT")
         }
+        if (oldVersion < 7) {
+            // Short voiceprints saved before Matching.MIN_PRINT_SECONDS: drop them, as long
+            // as the person keeps at least one other (someone known only from short samples
+            // keeps them, or they'd vanish). Their recordings stay labeled by assignment.
+            db.execSQL("""INSERT OR IGNORE INTO assigned(clip, speaker, person_id)
+                SELECT clip, speaker, person_id FROM voiceprints v
+                WHERE seconds IS NOT NULL AND seconds < ${Matching.MIN_PRINT_SECONDS} AND origin != 'manual' AND clip IS NOT NULL AND speaker IS NOT NULL
+                  AND (SELECT COUNT(*) FROM voiceprints w WHERE w.person_id = v.person_id AND (w.seconds IS NULL OR w.seconds >= ${Matching.MIN_PRINT_SECONDS} OR w.origin = 'manual')) > 0""")
+            db.execSQL("""DELETE FROM voiceprints
+                WHERE seconds IS NOT NULL AND seconds < ${Matching.MIN_PRINT_SECONDS} AND origin != 'manual'
+                  AND (SELECT COUNT(*) FROM voiceprints w WHERE w.person_id = voiceprints.person_id AND (w.seconds IS NULL OR w.seconds >= ${Matching.MIN_PRINT_SECONDS} OR w.origin = 'manual')) > 0""")
+        }
     }
 
     override fun onConfigure(db: SQLiteDatabase) = db.setForeignKeyConstraintsEnabled(true)
@@ -97,7 +111,7 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
 
     private fun refs(named: Boolean): List<Matching.Reference> {
         val sql = """SELECT v.id, v.person_id, v.vec FROM voiceprints v JOIN people p ON p.id = v.person_id
-                     WHERE p.name IS ${if (named) "NOT NULL" else "NULL"} AND v.impure = 0 ORDER BY v.id"""
+                     WHERE p.name IS ${if (named) "NOT NULL" else "NULL"} AND v.impure = 0 AND v.dim = ${Matching.model.dim} ORDER BY v.id"""
         return readableDatabase.rawQuery(sql, null).use { c ->
             buildList { while (c.moveToNext()) add(Matching.Reference(c.getLong(0), c.getLong(1), unpack(c.getBlob(2)))) }
         }
@@ -114,7 +128,7 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
     /** Unnamed voices' voiceprints, without the ones of one clip's voice. */
     fun unnamedField(exclude: Pair<String, String>? = null): List<Matching.Reference> {
         val sql = """SELECT v.id, v.person_id, v.vec, v.clip, v.speaker FROM voiceprints v JOIN people p ON p.id = v.person_id
-                     WHERE p.name IS NULL AND v.impure = 0"""
+                     WHERE p.name IS NULL AND v.impure = 0 AND v.dim = ${Matching.model.dim}"""
         return readableDatabase.rawQuery(sql, null).use { c ->
             buildList {
                 while (c.moveToNext()) {
@@ -192,7 +206,7 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
     }
 
     fun people(): List<Person> = readableDatabase.rawQuery("""
-        SELECT p.id, p.name, COUNT(v.id), COALESCE(SUM(v.seconds), 0), p.kind, MAX(v.created) FROM people p
+        SELECT p.id, p.name, SUM(v.dim = ${Matching.model.dim}), COALESCE(SUM(CASE WHEN v.dim = ${Matching.model.dim} THEN v.seconds END), 0), p.kind, MAX(v.created) FROM people p
         LEFT JOIN voiceprints v ON v.person_id = p.id GROUP BY p.id HAVING COUNT(v.id) > 0
         ORDER BY p.name IS NULL, p.name, p.id""", null).use { c ->
         buildList {
@@ -211,7 +225,7 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
     /** A person's voiceprints grouped by the cluster they were named from (or by clip, for single sightings). */
     fun groups(personId: Long): List<VoiceGroup> = readableDatabase.rawQuery("""
         SELECT COALESCE(source_cluster, -id), COUNT(*), COALESCE(SUM(seconds), 0), GROUP_CONCAT(clip, '|'), MIN(created)
-        FROM voiceprints WHERE person_id = ? GROUP BY COALESCE(source_cluster, -id) ORDER BY MIN(created) DESC""",
+        FROM voiceprints WHERE person_id = ? AND dim = ${Matching.model.dim} GROUP BY COALESCE(source_cluster, -id) ORDER BY MIN(created) DESC""",
         arrayOf(personId.toString())).use { c ->
         buildList {
             while (c.moveToNext()) add(VoiceGroup(c.getLong(0), c.getInt(1), c.getDouble(2),
@@ -268,7 +282,7 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
     /** Unnamed voices that are still open questions (not marked TV or ignored), with their voiceprints. */
     fun unnamedClusters(): Map<Long, List<Member>> = readableDatabase.rawQuery("""
         SELECT v.person_id, v.id, v.clip, v.speaker, v.vec, COALESCE(v.seconds, 0) FROM voiceprints v JOIN people p ON p.id = v.person_id
-        WHERE p.name IS NULL AND p.kind IS NULL AND v.impure = 0 ORDER BY v.person_id, v.id""", null).use { c ->
+        WHERE p.name IS NULL AND p.kind IS NULL AND v.impure = 0 AND v.dim = ${Matching.model.dim} ORDER BY v.person_id, v.id""", null).use { c ->
         val out = LinkedHashMap<Long, MutableList<Member>>()
         while (c.moveToNext()) out.getOrPut(c.getLong(0)) { mutableListOf() }
             .add(Member(c.getLong(1), c.str(2), c.str(3), unpack(c.getBlob(4)), c.getDouble(5)))

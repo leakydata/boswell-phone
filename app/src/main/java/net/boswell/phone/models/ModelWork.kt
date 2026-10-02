@@ -54,6 +54,7 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
                 runCatching { setForeground(foreground(spec.name, (done * 100 / spec.totalBytes).toInt())) }
             }
             ModelProgressRepository.set(id, ModelProgress(spec.totalBytes, spec.totalBytes))
+            net.boswell.phone.speakers.VoiceMigration.schedule(applicationContext)
             Result.success()
         } catch (e: Exception) {
             ModelProgressRepository.set(id, ModelProgress(store.installedBytes(id), spec.totalBytes, e.message))

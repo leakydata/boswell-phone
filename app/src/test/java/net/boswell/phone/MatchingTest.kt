@@ -66,4 +66,12 @@ class MatchingTest {
         val fragment = Matching.Reference(2, 9, v(0.9f, 0.43f, 0f))       // an unnamed voice even closer
         assertEquals(Matching.Decision.MATCHED, Matching.match(voice, listOf(me), listOf(fragment)).decision)
     }
+
+    @Test fun `voiceprints from different models never match, and never crash`() {
+        val old = FloatArray(256) { if (it == 0) 1f else 0f }
+        val new = FloatArray(192) { if (it == 0) 1f else 0f }
+        org.junit.Assert.assertEquals(-1.0, net.boswell.phone.speakers.Matching.dot(old, new), 0.0)
+        val r = net.boswell.phone.speakers.Matching.match(old, listOf(net.boswell.phone.speakers.Matching.Reference(1, 7, new)))
+        org.junit.Assert.assertEquals(net.boswell.phone.speakers.Matching.Decision.NONE, r.decision)
+    }
 }

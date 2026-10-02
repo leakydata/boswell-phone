@@ -72,6 +72,26 @@ class DebugReceiver : BroadcastReceiver() {
                     net.boswell.phone.assistant.Texting.contacts(context) + net.boswell.phone.assistant.TextContact(n, num))
                 android.util.Log.i("Boswell", "texting: on, contacts ${net.boswell.phone.assistant.Texting.contacts(context)}, read ${net.boswell.phone.assistant.Texting.canRead(context)}, send ${net.boswell.phone.assistant.Texting.canSend(context)}")
             }
+            // am broadcast -a net.boswell.phone.debug.MIGRATE   (convert voiceprints to the speaker-ID model now, timed)
+            "net.boswell.phone.debug.MIGRATE" -> androidx.work.WorkManager.getInstance(context).enqueue(
+                androidx.work.OneTimeWorkRequestBuilder<net.boswell.phone.speakers.VoiceMigrationWorker>().build())
+            // am broadcast -a net.boswell.phone.debug.BENCH_ID   (time the speaker-ID model on this phone)
+            "net.boswell.phone.debug.BENCH_ID" -> {
+                val pending = goAsync()
+                Thread {
+                    try {
+                        val store = net.boswell.phone.models.ModelStore(context)
+                        net.boswell.phone.diarize.VoiceModels.ort(context, store, forceSpeakerId = true).use { m ->
+                            val rnd = java.util.Random(1)
+                            for (secs in listOf(2, 4, 8, 2, 4, 8)) {
+                                val a = FloatArray(secs * 16_000) { (rnd.nextGaussian() * 0.05).toFloat() }
+                                val t0 = System.nanoTime(); m.identify(a); val t1 = System.nanoTime(); m.voiceprint(a); val t2 = System.nanoTime()
+                                android.util.Log.i("Boswell", "bench ${secs}s: speaker-ID ${(t1 - t0) / 1_000_000} ms, wespeaker ${(t2 - t1) / 1_000_000} ms")
+                            }
+                        }
+                    } finally { pending.finish() }
+                }.start()
+            }
             // am broadcast -a net.boswell.phone.debug.DEMO   (a made-up day for screenshots; refuses if recordings exist)
             "net.boswell.phone.debug.DEMO" -> {
                 val pending = goAsync()

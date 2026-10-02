@@ -55,6 +55,14 @@ MODELS = [
         "source": "WeSpeaker voxceleb_resnet34_LM with pyannote's fbank in-graph (tools/export_voiceprint.py)",
         "files": ["voiceprint.onnx", "NOTICE-voiceprint.txt"],
     },
+    {
+        "id": "speaker-id",
+        "name": "Speaker ID (ReDimNet2-B6)",
+        "purpose": "telling voices apart: about twice as many confident matches",
+        "license": "MIT",
+        "source": "https://github.com/PalabraAI/redimnet2 b6 vb2+vox2 lm, variable-length ONNX (tools/export_redimnet.py)",
+        "files": ["speaker-id-redimnet2-b6.onnx", "LICENSE-redimnet2-MIT.txt"],
+    },
 ]
 
 

@@ -276,7 +276,8 @@ private fun You(vm: MainViewModel, mode: Mode, streaming: Boolean, hasOmi: Boole
     Body("Boswell names the voices it knows. Tell it yours and read a short passage so it recognizes you, and so the assistant knows which voice is you.")
     OutlinedTextField(value = name, onValueChange = setName, label = { Text("Your name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
     if (!hasOmi) { Body("Connect an Omi first (the earlier step) to learn your voice. You can do it later from People."); return }
-    val modelsReady = vm.ui.value.models.filter { it.spec.id == "voiceprint" || it.spec.id == "segmentation" }.all { it.installed }
+    // The speaker-ID model too: the reading isn't kept, so its voiceprint can only be made now.
+    val modelsReady = vm.ui.value.models.filter { it.spec.id in setOf("voiceprint", "segmentation", net.boswell.phone.models.ModelCatalog.SPEAKER_ID) }.all { it.installed }   // speaker-ID listed only when opted in
     if (!modelsReady) { Body("Waiting for the voice model to finish downloading…"); return }
     when {
         enrolled -> Text("Learned your voice ✓ ${result ?: ""}", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)

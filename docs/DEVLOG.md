@@ -343,3 +343,31 @@ warnings for the Omi and phone offer a switch to Sync mode when very low.
   them and open only what matters. Titles only for conversations of a minute
   or more.
 
+## Milestone 9: a better voice model, made optional (2026-10-02)
+
+- **Search:** the best published speaker-embedding models are w2v-BERT 2.0 +
+  MFA (VoxCeleb1-O 0.12% EER, ~600M parameters, GPU) and ReDimNet2-B6 (0.23%,
+  12M parameters, MIT); the phone's WeSpeaker ResNet34-LM is ~0.72%. No
+  hosted option fits: OpenRouter has no speaker-embedding models, Azure retired
+  speaker recognition (2025-09-30), Amazon Voice ID ended (2026-05-20), and
+  pyannoteAI's voiceprints are closed to outside matching.
+- **Measured on desktop Boswell's archive** (`tools/embed_bench.py`,
+  `tools/calibrate_voice.py`), 8 s cap: right person for 92.3% of hand-named
+  voices vs 82.1%; 95.9% vs 93.0% over 387. At a 4 s cap the new model only
+  matches the old one at full length, so the cap stays 8 s. Thresholds were
+  set at equal false-accept rate: 0.78/0.64, margins 0.11/0.19, cluster 0.78,
+  same voice 0.69, likely 0.73.
+- **Cost on the phone:** 3-4x WeSpeaker per voice (int8 quantization broke the
+  model: cosine ~0.09). About double the processing per recording, so it's an
+  opt-in setting, "Better voice recognition".
+- **Design:** WeSpeaker still splits speakers; the speaker-ID model only makes
+  each speaker's final voiceprint. Voiceprints carry their size, so models
+  never mix: different sizes score -1 (a 256 vs 192 comparison crashed the
+  first re-check). VoiceMigration converts transcripts and voiceprints in
+  either direction, then re-checks; it runs as a foreground job (in the
+  background Android froze it). On the user's archive: every label kept, none
+  changed, 7 more short phrases recognized as the owner.
+- **Voiceprints from short speech** (under 3 s) are never saved as references,
+  however they arrive; the 39 short ones already saved were removed at the
+  user's request, their recordings kept labeled by assignment.
+

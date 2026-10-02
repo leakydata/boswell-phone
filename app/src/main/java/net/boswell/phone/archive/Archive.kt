@@ -420,6 +420,6 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
     companion object {
         const val CONVERSATION_GAP = 60.0
         /** web/threads.py SAME_VOICE: two diarized slots are one speaker across a clip boundary. */
-        const val SAME_VOICE = 0.60
+        val SAME_VOICE get() = net.boswell.phone.speakers.Matching.model.sameVoice
     }
 }

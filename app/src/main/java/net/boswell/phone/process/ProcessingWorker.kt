@@ -63,7 +63,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
         // transcribed again.
         if (tagger != null) backfillSounds(out, clips, tagger)
         LocalAsr(models).use { asr ->
-            OrtModels(models.path(ModelCatalog.SEGMENTATION, ".onnx"), models.path(ModelCatalog.VOICEPRINT, "voiceprint.onnx")).use { ort ->
+            net.boswell.phone.diarize.VoiceModels.ort(applicationContext, models).use { ort ->
                 val diarizer = ort.diarizer()
                 var deferred = 0
                 while (!isStopped) {

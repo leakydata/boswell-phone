@@ -42,6 +42,7 @@ data class ModelCatalog(
         const val ASR = "asr-nemotron-1120"
         const val SEGMENTATION = "segmentation"
         const val VOICEPRINT = "voiceprint"
+        const val SPEAKER_ID = "speaker-id"
 
         private val json = Json { ignoreUnknownKeys = true }
 

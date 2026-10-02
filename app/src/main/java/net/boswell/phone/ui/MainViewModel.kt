@@ -107,6 +107,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         net.boswell.phone.process.CleanupWorker.schedule(getApplication(), true)
         net.boswell.phone.assistant.RoutinesWorker.schedule(getApplication())
         net.boswell.phone.backup.AutoBackup.schedule(getApplication())
+        net.boswell.phone.speakers.VoiceMigration.schedule(getApplication())
         refreshAll()
         viewModelScope.launch { capture.distinctUntilChangedBy { it.clipsWritten }.collect { refreshClips() } }
         viewModelScope.launch { ProcessingRepository.state.distinctUntilChangedBy { it.done to it.running }.collect { refreshClips(); refreshPeople() } }
@@ -370,7 +371,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // --- Models ------------------------------------------------------------
 
     fun refreshModels() {
-        val rows = models.catalog.models.map { ModelRow(it, models.isInstalled(it.id), models.installedBytes(it.id)) }
+        // The speaker-ID model is opt-in (Device -> Better voice recognition): listed, and downloaded, only once chosen.
+        val optIn = net.boswell.phone.diarize.VoiceModels.wanted(getApplication()) == net.boswell.phone.diarize.VoiceModel.SPEAKER_ID
+        val rows = models.catalog.models.filter { it.id != ModelCatalog.SPEAKER_ID || optIn }
+            .map { ModelRow(it, models.isInstalled(it.id), models.installedBytes(it.id)) }
         val ready = listOf(ModelCatalog.ASR, ModelCatalog.SEGMENTATION, ModelCatalog.VOICEPRINT).all(models::isInstalled)
         val before = _ui.value.models.filter { it.installed }.map { it.spec.id }.toSet()
         val after = rows.filter { it.installed }.map { it.spec.id }.toSet()
@@ -382,6 +386,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun download(id: String) = ModelDownloadWorker.enqueue(getApplication(), id, _ui.value.wifiOnly)
+
+    /** Better voice recognition on or off: download the model if needed, then convert (VoiceMigration) on the charger. */
+    fun setBetterVoices(on: Boolean) {
+        val c = getApplication<Application>()
+        val VM = net.boswell.phone.diarize.VoiceModels
+        VM.setWanted(c, if (on) net.boswell.phone.diarize.VoiceModel.SPEAKER_ID else net.boswell.phone.diarize.VoiceModel.WESPEAKER)
+        if (on && !VM.speakerIdInstalled(models)) download(ModelCatalog.SPEAKER_ID)
+        net.boswell.phone.speakers.VoiceMigration.schedule(c)
+        refreshModels()
+    }
 
     fun downloadAll() = _ui.value.models.filter { !it.installed }.forEach { download(it.spec.id) }
 

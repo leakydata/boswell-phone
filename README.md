@@ -73,6 +73,8 @@ one day merge.
 - Speaker diarization and **voiceprints compatible with desktop Boswell** (cosine
   1.0000 against the desktop on 217 speakers).
 - **Teach it your voice** by reading a short passage during setup.
+- **Better voice recognition** (optional): a larger model, ReDimNet2, picked the right person
+  for 92% of hand-checked voices against 82%, for about twice the processing per recording.
 - **"Is this you?"** — a review of voices that are close but not certain, playing only
   that voice's words. One answer covers every recording of it, and every past recording
   is checked again.
@@ -243,6 +245,7 @@ licenses:
 | NVIDIA Nemotron 3.5 ASR (int8) | on-device transcription | OpenMDW-1.1 |
 | pyannote segmentation 3.0 | speech check, who spoke when | MIT |
 | WeSpeaker ResNet34-LM | voiceprints | CC-BY-4.0 |
+| ReDimNet2-B6 *(optional)* | better voice recognition | MIT |
 | CED-Mini | sound tags | Apache-2.0 |
 | NVIDIA Parakeet TDT 0.6B v3 *(cloud, optional)* | cloud transcription | CC-BY-4.0 |
 

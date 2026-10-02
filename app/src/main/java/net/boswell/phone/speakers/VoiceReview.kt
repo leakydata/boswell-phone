@@ -196,8 +196,11 @@ class VoiceReview(private val context: Context) {
             if (s.clusterId != null) store.name(s.clusterId, s.personName)
             else {
                 val t = transcript(s.clip) ?: return
-                val emb = t.embeddings[s.label]?.toFloatArray() ?: return
-                store.addVoiceprint(s.personId, emb, t.speakers[s.label]?.seconds, s.clip, s.label, "confirmed")
+                val emb = t.embeddings[s.label]?.toFloatArray()
+                val secs = t.speakers[s.label]?.seconds
+                // Long enough: a confirmed reference. Shorter: labeled, never a reference.
+                if (emb != null && Matching.printable(secs)) store.addVoiceprint(s.personId, emb, secs, s.clip, s.label, "confirmed")
+                else store.assign(s.clip, s.label, s.personId)
             }
         } finally { store.close() }
     }
@@ -222,6 +225,6 @@ class VoiceReview(private val context: Context) {
         /** Single voices shorter than this are too thin to put to anyone. */
         const val SINGLE_MIN_SECONDS = 1.5
         /** Where "possible" becomes "likely" in the review's wording and order; matching never uses it. */
-        const val LIKELY = 0.65
+        val LIKELY get() = Matching.model.likely
     }
 }

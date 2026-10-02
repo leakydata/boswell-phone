@@ -118,6 +118,25 @@
      "sha256": "97f476fa70b98140c618d84059c35e97bd9a13df9e134005f2f661a8fe1c1bf5"
     }
    ]
+  },
+  {
+   "id": "speaker-id",
+   "name": "Speaker ID (ReDimNet2-B6)",
+   "purpose": "telling voices apart: about twice as many confident matches",
+   "license": "MIT",
+   "source": "https://github.com/PalabraAI/redimnet2 b6 vb2+vox2 lm, variable-length ONNX (tools/export_redimnet.py)",
+   "files": [
+    {
+     "name": "speaker-id-redimnet2-b6.onnx",
+     "size": 51194120,
+     "sha256": "900736cc64a22271fea916317fc12d64588ae3cbe48b5acfc12f176de8f12a35"
+    },
+    {
+     "name": "LICENSE-redimnet2-MIT.txt",
+     "size": 1067,
+     "sha256": "3d5a4bf9936a7d09dd770588c0d7cb116fc16916a0310d71fb1fff5d64562101"
+    }
+   ]
   }
  ]
 }

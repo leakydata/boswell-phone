@@ -9,15 +9,26 @@ import kotlin.math.sqrt
  * are identical to the desktop's, so the numbers carry over as they are.
  */
 object Matching {
-    const val MATCH_HIGH = 0.75
-    const val MATCH_LOW = 0.55
-    const val MARGIN_MIN = 0.15
-    const val MARGIN_STRONG = 0.25
+    /** The voiceprint model in use; every threshold below is its own (VoiceModel). Set when a SpeakerStore opens. */
+    @Volatile var model: net.boswell.phone.diarize.VoiceModel = net.boswell.phone.diarize.VoiceModel.WESPEAKER
+    val MATCH_HIGH get() = model.matchHigh
+    val MATCH_LOW get() = model.matchLow
+    val MARGIN_MIN get() = model.marginMin
+    val MARGIN_STRONG get() = model.marginStrong
     /** An unnamed voice joins an unnamed cluster at or above this. */
-    const val CLUSTER_MIN = 0.75
+    val CLUSTER_MIN get() = model.clusterMin
     const val MIN_VECTOR_NORM = 1e-6
     /** Voices with less speech than this are not filed into clusters (pipeline.scan_voices). */
     const val MIN_CLUSTER_SECONDS = 3.0
+    /**
+     * Shortest speech kept as a voiceprint, however it arrives (named by hand,
+     * confirmed in review, marked as a TV). A shorter voice is still matched
+     * against the voiceprints, and can still be labeled -- it just never
+     * becomes a reference, because a second or two of "yeah" makes an
+     * unreliable one that pulls other voices toward that person.
+     */
+    const val MIN_PRINT_SECONDS = 3.0
+    fun printable(seconds: Double?) = seconds != null && seconds >= MIN_PRINT_SECONDS
 
     enum class Decision { MATCHED, UNCERTAIN, NONE }
 
@@ -52,6 +63,8 @@ object Matching {
      * collapse to zero exactly where coverage is best.
      */
     fun match(vec: FloatArray, refs: List<Reference>, field: List<Reference> = emptyList()): Result {
+        @Suppress("NAME_SHADOWING") val refs = refs.filter { it.vec.size == vec.size }
+        @Suppress("NAME_SHADOWING") val field = field.filter { it.vec.size == vec.size }
         if (!usable(vec) || refs.isEmpty()) return Result(Decision.NONE, emptyList(), 0.0, 0.0)
         val v = unit(vec)
         val best = HashMap<Long, Candidate>()
@@ -101,5 +114,13 @@ object Matching {
 
     fun unit(v: FloatArray): FloatArray { val n = norm(v); return if (n > 0) FloatArray(v.size) { (v[it] / n).toFloat() } else v }
 
-    fun dot(a: FloatArray, b: FloatArray): Double { var s = 0.0; for (i in a.indices) s += a[i] * b[i]; return s }
+    /**
+     * Cosine of two unit vectors. Vectors from different models (different
+     * sizes) are not comparable: they score -1, so they never match -- an old
+     * transcript's voiceprint meeting the new model's used to crash a re-check.
+     */
+    fun dot(a: FloatArray, b: FloatArray): Double {
+        if (a.size != b.size) return -1.0
+        var s = 0.0; for (i in a.indices) s += a[i] * b[i]; return s
+    }
 }

@@ -462,6 +462,19 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
             Section("On-device models") {
                 Text("Everything runs on this phone. Models download from the boswell-phone GitHub release and are checked before use.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val vctx = LocalContext.current
+                var better by remember { mutableStateOf(net.boswell.phone.diarize.VoiceModels.wanted(vctx) == net.boswell.phone.diarize.VoiceModel.SPEAKER_ID) }
+                val converting = net.boswell.phone.diarize.VoiceModels.wanted(vctx) != net.boswell.phone.diarize.VoiceModels.active(vctx)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Better voice recognition", style = MaterialTheme.typography.bodyLarge)
+                        Text("A larger voice model (ReDimNet2): picked the right person for 92% of voices in testing, against 82%. " +
+                            "It takes about twice the processing, and battery, per recording. Your voices are converted once, on the charger." +
+                            if (converting) " Converting your voices: it finishes on the charger." else "",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(checked = better, onCheckedChange = { better = it; vm.setBetterVoices(it) })
+                }
                 for (m in ui.models) {
                     val p = progress[m.spec.id]
                     Column {

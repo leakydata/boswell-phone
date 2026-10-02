@@ -97,12 +97,18 @@ object Enrollment {
         require(audio.size >= (16_000 * MIN_SECONDS).toInt()) { "need at least 8 seconds of speech" }
         val models = ModelStore(context)
         require(models.isInstalled(ModelCatalog.VOICEPRINT) && models.isInstalled(ModelCatalog.SEGMENTATION)) { "the voiceprint model isn't downloaded yet" }
-        val vp = OrtModels(models.path(ModelCatalog.SEGMENTATION, ".onnx"), models.path(ModelCatalog.VOICEPRINT, "voiceprint.onnx")).use { it.voiceprint(audio) }
-            ?: error("couldn't make a voiceprint from that audio")
-        require(Matching.usable(vp)) { "couldn't make a voiceprint from that audio" }
+        // A voiceprint from every installed model: the reading isn't kept, so this is the only
+        // chance to make one with the speaker-ID model too (VoiceMigration converts the rest).
+        val (vp, idVp) = net.boswell.phone.diarize.VoiceModels.ort(context, models, forceSpeakerId = true).use { m ->
+            m.voiceprint(audio) to (if (m.identity == net.boswell.phone.diarize.VoiceModel.SPEAKER_ID) m.identify(audio) else null)
+        }
+        if (vp == null || !Matching.usable(vp)) error("couldn't make a voiceprint from that audio")
         val id = claimName(context, name)
         val store = SpeakerStore(context)
-        try { store.addVoiceprint(id, vp, audio.size / 16_000.0, "enrollment", null, "manual") } finally { store.close() }
+        try {
+            store.addVoiceprint(id, vp, audio.size / 16_000.0, "enrollment", null, "manual")
+            idVp?.takeIf { Matching.usable(it) }?.let { store.addVoiceprint(id, it, audio.size / 16_000.0, "enrollment", null, "manual") }
+        } finally { store.close() }
         net.boswell.phone.capture.CaptureRepository.log("learned the voice of $name (%.0f s)".format(audio.size / 16_000.0))
         // Past recordings get another look with the new sample.
         runCatching { net.boswell.phone.speakers.VoiceReview(context).recheck() }
