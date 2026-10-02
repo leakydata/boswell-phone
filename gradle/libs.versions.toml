@@ -15,8 +15,10 @@ navigation = "2.10.2"
 media3 = "1.11.1"
 androidMail = "1.6.8"
 codeScanner = "16.1.0"
+fragment = "1.9.1"
 
 [libraries]
+androidx-fragment = { module = "androidx.fragment:fragment", version.ref = "fragment" }
 code-scanner = { module = "com.google.android.gms:play-services-code-scanner", version.ref = "codeScanner" }
 android-mail = { module = "com.sun.mail:android-mail", version.ref = "androidMail" }
 android-activation = { module = "com.sun.mail:android-activation", version.ref = "androidMail" }

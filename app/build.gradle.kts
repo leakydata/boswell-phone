@@ -134,6 +134,8 @@ dependencies {
     implementation(libs.android.activation)
     // Scanning the home server's pairing QR code (Google's scanner: no camera permission for the app).
     implementation(libs.code.scanner)
+    // The scanner pulls an old Fragment that breaks registerForActivityResult; pin a current one.
+    implementation(libs.androidx.fragment)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
