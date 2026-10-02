@@ -126,7 +126,7 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
     ) { pad ->
         LazyColumn(state = list, contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = pad.calculateTopPadding() + 4.dp, bottom = pad.calculateBottomPadding() + 16.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            // Whose words these are: the phone's, the cloud's (Parakeet), or some of each after a Redo.
+            // Whose words these are: the phone's, the cloud's (Parakeet), the home server's, or a mix (after a Redo, or home being away).
             s.conversation?.title?.let { title ->
                 item {
                     Column(Modifier.padding(bottom = 8.dp)) {
@@ -136,13 +136,8 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
                 }
             }
             val clipsAll = s.lines.map { it.clip }.distinct()
-            val cloudClips = s.lines.filter { it.cloud }.map { it.clip }.distinct().size
             if (clipsAll.isNotEmpty()) item {
-                Text(when (cloudClips) {
-                    0 -> "Transcribed on the phone"
-                    clipsAll.size -> "Transcribed in the cloud (Parakeet)"
-                    else -> "$cloudClips of ${clipsAll.size} recordings transcribed in the cloud (Parakeet), the rest on the phone"
-                }, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 6.dp))
+                Text(transcribedBy(s.lines), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 6.dp))
             }
             item {
                 @OptIn(ExperimentalLayoutApi::class)
@@ -212,7 +207,7 @@ private fun Bubble(line: LineRow, v: Voice?, header: Boolean, playing: Boolean, 
             Spacer(Modifier.width(6.dp))
             Text(v?.name ?: "Unattributed", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold,
                 color = if (v?.named == true) color else MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("  ${Fmt.time(line.t0)}" + if (line.cloud) " · cloud" else "", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("  ${Fmt.time(line.t0)}" + when { line.home -> " · home"; line.cloud -> " · cloud"; else -> "" }, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Surface(
             modifier = Modifier.padding(start = 28.dp, end = 24.dp).clip(RoundedCornerShape(16.dp))
@@ -389,4 +384,14 @@ private fun OrphanSheet(vm: ArchiveViewModel, s: ConversationState, line: LineRo
             }
         }
     }
+}
+
+/** Where a conversation's recordings were transcribed: one place, or how many in each (most first). */
+internal fun transcribedBy(lines: List<net.boswell.phone.archive.LineRow>): String {
+    val where = lines.distinctBy { it.clip }.groupingBy { if (it.home) "at home" else if (it.cloud) "in the cloud" else "on the phone" }.eachCount()
+    return if (where.size == 1) when (where.keys.single()) {
+        "at home" -> "Transcribed at home (your computer)"
+        "in the cloud" -> "Transcribed in the cloud (Parakeet)"
+        else -> "Transcribed on the phone"
+    } else "Transcribed " + where.entries.sortedByDescending { it.value }.joinToString(", ") { "${it.value} ${it.key}" }
 }

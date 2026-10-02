@@ -30,7 +30,9 @@ data class Conversation(val id: Long, val started: Double, val ended: Double, va
 data class LineRow(val id: Long, val clip: String, val t0: Double, val t1: Double, val offset: Double,
                    val speaker: String?, val personId: Long?, val text: String, val original: String? = null,
                    /** Transcribed in the cloud (Parakeet) rather than on the phone. */
-                   val cloud: Boolean = false)
+                   val cloud: Boolean = false,
+                   /** Transcribed on the home server (the person's own computer). */
+                   val home: Boolean = false)
 
 data class SearchHit(val line: LineRow, val conversation: Long?, val snippet: String)
 
@@ -46,13 +48,13 @@ data class SearchHit(val line: LineRow, val conversation: Long?, val snippet: St
  * CONVERSATION_GAP of the previous one ending: the desktop's measured value,
  * after 300 s turned an evening into one 183-minute "conversation".
  */
-class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive.db", null, 4) {
+class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive.db", null, 5) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE clips (
             name TEXT PRIMARY KEY, started REAL, ended REAL, seconds REAL, time_known INTEGER,
             speech INTEGER, verdict TEXT, audio INTEGER, bytes INTEGER, conversation INTEGER,
-            top_sound TEXT, indexed_mtime INTEGER, cloud INTEGER)""")
+            top_sound TEXT, indexed_mtime INTEGER, cloud INTEGER, home INTEGER)""")
         db.execSQL("CREATE INDEX clips_started ON clips(started)")
         db.execSQL("CREATE INDEX clips_conv ON clips(conversation)")
         db.execSQL("""CREATE TABLE clip_speakers (
@@ -144,8 +146,9 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
             val sound = net.boswell.phone.audio.ClipAudio.file(wav.parentFile!!, name)
             put("audio", if (sound != null) 1 else 0); put("bytes", sound?.length() ?: 0L)
             put("top_sound", top?.label); put("indexed_mtime", stamp)
-            // Whose words: the cloud engine's ("parakeet-… (cloud)") or the phone's.
+            // Whose words: the cloud engine's ("parakeet-… (cloud)"), the home server's ("… (home)") or the phone's.
             put("cloud", if (t?.engine?.contains("(cloud)") == true) 1 else 0)
+            put("home", if (t?.engine?.contains("(home)") == true) 1 else 0)
         })
         t ?: return
         for (seg in t.segments) {
@@ -338,7 +341,7 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
 
     /** Lines of a conversation with each one's conversation-level speaker key. */
     fun lines(conversation: Long): List<LineRow> = readableDatabase.rawQuery("""
-        SELECT l.id, l.clip, l.t0, l.t1, l.offset, s.conv_key, s.person_id, l.text, l.original, c.cloud FROM lines l
+        SELECT l.id, l.clip, l.t0, l.t1, l.offset, s.conv_key, s.person_id, l.text, l.original, c.cloud, c.home FROM lines l
         JOIN clips c ON c.name = l.clip LEFT JOIN clip_speakers s ON s.clip = l.clip AND s.label = l.label
         WHERE c.conversation = ? ORDER BY l.t0""", arrayOf(conversation.toString())).use { c ->
         buildList { while (c.moveToNext()) add(c.toLine()) }
@@ -350,7 +353,8 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
         return LineRow(getLong(0), getString(1), getDouble(2), getDouble(3), getDouble(4), key,
             key?.takeIf { it.startsWith("p") }?.drop(1)?.toLongOrNull(), getString(7),
             if (originalIdx >= 0 && !isNull(originalIdx)) getString(originalIdx) else null,
-            getColumnIndex("cloud").let { i -> i >= 0 && !isNull(i) && getInt(i) == 1 })
+            getColumnIndex("cloud").let { i -> i >= 0 && !isNull(i) && getInt(i) == 1 },
+            getColumnIndex("home").let { i -> i >= 0 && !isNull(i) && getInt(i) == 1 })
     }
 
     /** The best guess for a voice nobody named: its top candidate, if any. */
