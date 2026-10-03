@@ -100,6 +100,9 @@ class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db
         buildList { while (c.moveToNext()) add(Exchange(c.getLong(0), c.getDouble(1), c.getString(2), if (c.isNull(3)) null else c.getString(3), c.getString(4), c.getDouble(5), c.getInt(6) == 1)) }
     }
 
+    /** Every past question and answer, gone (what they cost stays in the usage log). */
+    fun clearExchanges() = writableDatabase.execSQL("DELETE FROM exchanges")
+
     fun addBookmark(at: Double, note: String? = null): Long =
         writableDatabase.insert("bookmarks", null, ContentValues().apply { put("at", at); put("note", note) })
 

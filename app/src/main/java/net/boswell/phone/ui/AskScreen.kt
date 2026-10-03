@@ -64,17 +64,26 @@ class AskViewModel(app: Application) : AndroidViewModel(app) {
         val (ex, spent) = withContext(Dispatchers.IO) {
             val s = AssistantStore(getApplication()); try { s.exchanges() to s.spentToday() } finally { s.close() }
         }
+        // "Started" until something is asked after it, or until a new question would start fresh anyway.
+        val since = AssistantPrefs.topicSince(getApplication())
+        val fresh = since > 0 && System.currentTimeMillis() / 1000.0 - since < Assistant.FOLLOW_UP_SECONDS && ex.none { it.at >= since && (it.source == "typed" || it.source == "button") }
         state.value = state.value.copy(exchanges = ex, spentToday = spent, ready = Assistant(getApplication()).ready(),
-            budget = AssistantPrefs.budget(getApplication()))
+            budget = AssistantPrefs.budget(getApplication()), freshTopic = fresh)
     }
 
     fun newTopic() {
         AssistantPrefs.newTopic(getApplication())
-        state.value = state.value.copy(freshTopic = true)
+        refresh()
+    }
+
+    /** Delete every past question and answer, and start fresh. */
+    fun clearHistory() = viewModelScope.launch {
+        withContext(Dispatchers.IO) { val st = AssistantStore(getApplication()); try { st.clearExchanges() } finally { st.close() } }
+        AssistantPrefs.newTopic(getApplication())
+        refresh()
     }
 
     fun ask(q: String) = viewModelScope.launch {
-        state.value = state.value.copy(freshTopic = false)
         state.value = state.value.copy(thinking = true)
         withContext(Dispatchers.IO) { Assistant(getApplication()).ask(q, "typed") }
         state.value = state.value.copy(thinking = false)
@@ -114,7 +123,6 @@ fun AskScreen(pad: PaddingValues, onSetup: () -> Unit, onUsage: () -> Unit = {},
                         Text("Follow-up questions within 15 minutes carry on the same conversation. Start a new topic to begin fresh.",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Row {
-                            androidx.compose.material3.TextButton(onClick = { vm.newTopic() }) { Text(if (s.freshTopic) "New topic started ✓" else "New topic") }
                             androidx.compose.material3.TextButton(onClick = onLogs) { Text("Logs") }
                             androidx.compose.material3.TextButton(onClick = onUsage) { Text("AI usage") }
                         }
@@ -122,6 +130,19 @@ fun AskScreen(pad: PaddingValues, onSetup: () -> Unit, onUsage: () -> Unit = {},
                 }
             }
         }
+        // Right above the box, so they're there without scrolling back through old answers.
+        var confirmClear by remember { mutableStateOf(false) }
+        if (s.ready) Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            androidx.compose.material3.TextButton(onClick = { vm.newTopic() }) { Text(if (s.freshTopic) "New topic started ✓" else "New topic") }
+            androidx.compose.material3.TextButton(onClick = { confirmClear = true }, enabled = s.exchanges.isNotEmpty()) { Text("Clear history") }
+        }
+        if (confirmClear) androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("Clear history?") },
+            text = { Text("Deletes every past question and answer here. Your recordings and what the AI has cost stay.") },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { vm.clearHistory(); confirmClear = false }) { Text("Clear") } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
+        )
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(value = q, onValueChange = { q = it }, placeholder = { Text(if (s.ready) "What did we decide about…" else "Add an API key (Device → Assistant) to ask") },
                 modifier = Modifier.weight(1f), maxLines = 4, enabled = s.ready)
