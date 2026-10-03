@@ -68,6 +68,35 @@ object ClipActions {
         try { archive.sync(speakers, force = true) } finally { speakers.close(); archive.close() }
     }
 
+    /**
+     * "Not Boswell": what was taken for Boswell's own voice in these clips
+     * goes back to the voices it was heard in, and those are matched and
+     * filed like any other voice. The clips are never labeled Boswell's again,
+     * not even when transcribed again, and nothing learned from them is kept.
+     */
+    fun notBoswell(context: Context, clips: Collection<String>) {
+        val tdir = ProcessingWorker.transcriptsDir(context)
+        val speakers = SpeakerStore(context)
+        val archive = Archive(context)
+        try {
+            for (clip in clips) {
+                val f = File(tdir, clip.removeSuffix(".wav") + ".json")
+                val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.getOrNull() ?: continue
+                if (t.speakers.values.none(BoswellLines::isBoswell)) continue
+                speakers.notBoswell(listOf(t.clip))
+                val segments = t.segments.map { if (it.speaker == BoswellLines.LABEL) it.copy(speaker = it.diarized, diarized = null) else it }
+                val ids = LinkedHashMap<String, SpeakerId>()
+                for ((label, sp) in t.speakers) {
+                    if (label == BoswellLines.LABEL) continue
+                    ids[label] = if (BoswellLines.isBoswell(sp)) ProcessingWorker.identify(speakers, t.clip, label, t.embeddings[label]?.toFloatArray(), sp.seconds) else sp
+                }
+                net.boswell.phone.audio.writeAtomically(f, TranscriptJson.json.encodeToString(Transcript.serializer(),
+                    t.copy(segments = Lines.attributeOrphans(segments) ?: segments, speakers = ids)).toByteArray())
+            }
+            archive.sync(speakers, force = true)
+        } finally { speakers.close(); archive.close() }
+    }
+
     /** Throw the transcripts away so the background pass transcribes these clips again. Hand corrections go with them. */
     fun retranscribe(context: Context, clips: Collection<String>) {
         val tdir = ProcessingWorker.transcriptsDir(context)

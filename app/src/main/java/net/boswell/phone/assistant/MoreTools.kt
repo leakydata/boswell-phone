@@ -144,7 +144,8 @@ class MoreTools(private val context: Context, private val userWords: String? = n
                 val text = c.getString(2)
                 for (k in kinds) for (m in (patterns[k] ?: continue).findAll(text)) {
                     if (k == "number" && m.value.filter { it.isDigit() }.length < 2) continue
-                    val who = c.getString(3)?.takeIf { it.startsWith("p") }?.drop(1)?.toLongOrNull()?.let(speakers::nameOf) ?: "someone"
+                    val who = if (c.getString(3) == Archive.BOSWELL) net.boswell.phone.process.BoswellLines.AS_SAID_BY
+                        else c.getString(3)?.takeIf { it.startsWith("p") }?.drop(1)?.toLongOrNull()?.let(speakers::nameOf) ?: "someone"
                     out.appendLine("$k: ${m.value.trim()} — ${at(c.getDouble(1))} $who [L${c.getLong(0)}]: \"${text.take(160)}\"")
                 }
             }

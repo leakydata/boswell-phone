@@ -28,6 +28,8 @@ class TriggerEngine(private val context: Context) {
         try {
             for ((i, seg) in t.segments.withIndex()) {
                 val label = seg.speaker
+                // Boswell's own spoken answer ("…say Hey Boswell…") is never a request.
+                if (label == net.boswell.phone.process.BoswellLines.LABEL || net.boswell.phone.process.BoswellLines.isBoswell(label?.let { t.speakers[it] })) continue
                 val person = label?.let { speakers.currentPerson(t.clip, it, t.speakers[it]?.personId) }
                 for (trig in triggers) {
                     val phrase = Triggers.match(trig, seg.text) ?: continue
@@ -48,6 +50,7 @@ class TriggerEngine(private val context: Context) {
                         saidAt = said,
                         fileOnly = trig.action == Trigger.Action.TODO || trig.action == Trigger.Action.CALENDAR,
                         display = seg.text,
+                        asked = said to clipStarted + seg.end,
                     )
                     if (a.text == Assistant.NONE) continue
                     AssistantNotify.post(context, AssistantNotify.ANSWERS, "Heard \"$phrase\"", a.text)

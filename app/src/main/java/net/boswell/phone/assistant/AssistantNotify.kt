@@ -71,17 +71,71 @@ object AssistantNotify {
 
     fun cancel(c: Context, id: Int) = c.getSystemService(NotificationManager::class.java).cancel(id)
 
+    /**
+     * Everything Boswell says aloud goes through here -- answers, reminders,
+     * the voice preview -- so every utterance is noted (AssistantStore's
+     * spoken table): when it started and ended, the exact words, and the
+     * voice. The Omi hears the phone too, and that is how a recording
+     * transcribed later tells Boswell's voice from a person's (BoswellLines).
+     */
     fun speak(c: Context, text: String, voiceName: String? = AssistantPrefs.ttsVoice(c)) {
-        fun go(t: TextToSpeech) {
+        val app = c.applicationContext
+        engine(app) { t ->
+            if (t == null) return@engine
             val v = voiceName?.let { n -> t.voices?.firstOrNull { it.name == n } }
             if (v != null) t.voice = v else t.language = Locale.getDefault()
-            t.speak(SpeechText.clean(text), TextToSpeech.QUEUE_FLUSH, null, "boswell")
+            val said = SpeechText.clean(text)
+            val id = "boswell-${utterances.incrementAndGet()}"
+            pending[id] = said to (t.voice?.name ?: voiceName)
+            t.speak(said, TextToSpeech.QUEUE_FLUSH, null, id)
         }
+    }
+
+    /** Spoken (or just finished, within BoswellLines.AFTER) right now: the Omi may be hearing Boswell. */
+    fun speakingNow(): Boolean = System.currentTimeMillis() < speakingUntil + (net.boswell.phone.process.BoswellLines.AFTER * 1000).toLong()
+
+    private val utterances = java.util.concurrent.atomic.AtomicLong()
+    /** Utterance id -> (the words, the voice), until it starts. */
+    private val pending = java.util.concurrent.ConcurrentHashMap<String, Pair<String, String?>>()
+    /** Utterance id -> its row in the spoken table, while it plays. */
+    private val rows = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    @Volatile private var speakingUntil = 0L
+
+    private fun now() = System.currentTimeMillis() / 1000.0
+
+    /**
+     * Notes each utterance as it plays. The row is written when it starts,
+     * with a guess at its end (about 0.45 s a word), so an answer is on record
+     * even if the app dies mid-sentence; the real end replaces the guess.
+     * A flushed utterance ends where it was cut off.
+     */
+    private fun listener(app: Context) = object : android.speech.tts.UtteranceProgressListener() {
+        override fun onStart(id: String) {
+            val (said, voice) = pending.remove(id) ?: return
+            val at = now()
+            val guess = at + said.split(' ').size * 0.45 + 1.0
+            speakingUntil = (guess * 1000).toLong()
+            runCatching { AssistantStore(app).use { it.addSpoken(at, guess, said, voice) } }.onSuccess { rows[id] = it }
+        }
+        override fun onDone(id: String) = ended(id)
+        override fun onStop(id: String, interrupted: Boolean) = ended(id)
+        @Deprecated("Deprecated in Java") override fun onError(id: String) = ended(id)
+        private fun ended(id: String) {
+            pending.remove(id)
+            speakingUntil = System.currentTimeMillis()
+            val row = rows.remove(id) ?: return
+            runCatching { AssistantStore(app).use { it.endSpoken(row, now()) } }
+        }
+    }
+
+    /** The one TextToSpeech, made once (with the listener that notes what it says); null if it couldn't start. */
+    private fun engine(app: Context, use: (TextToSpeech?) -> Unit) {
         val t = tts
-        if (t != null && ttsReady) { go(t); return }
-        tts = TextToSpeech(c.applicationContext) { status ->
+        if (t != null && ttsReady) { use(t); return }
+        tts = TextToSpeech(app) { status ->
             ttsReady = status == TextToSpeech.SUCCESS
-            if (ttsReady) tts?.let(::go)
+            tts?.takeIf { ttsReady }?.setOnUtteranceProgressListener(listener(app))
+            use(tts?.takeIf { ttsReady })
         }
     }
 
@@ -104,11 +158,6 @@ object AssistantNotify {
                     VoiceOption(v.name, "Voice ${i + 1}" + (gender?.let { " · $it" } ?: "") + region, !v.isNetworkConnectionRequired)
                 }
         }
-        val t = tts
-        if (t != null && ttsReady) { done(list(t)); return }
-        tts = TextToSpeech(c.applicationContext) { status ->
-            ttsReady = status == TextToSpeech.SUCCESS
-            done(if (ttsReady) tts?.let(::list).orEmpty() else emptyList())
-        }
+        engine(c.applicationContext) { t -> done(t?.let(::list).orEmpty()) }
     }
 }

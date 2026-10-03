@@ -22,9 +22,11 @@ object Accuracy {
         .mapNotNull { f -> runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.getOrNull() }
         .filter { t -> t.segments.any { it.edited } }
         .map { t ->
-            val reference = t.segments.joinToString(" ") { it.text }
+            // People's speech only: Boswell's own voice (synthetic, near-perfectly recognized) would flatter every engine.
+            val said = t.segments.filter { it.speaker != net.boswell.phone.process.BoswellLines.LABEL }
+            val reference = said.joinToString(" ") { it.text }
             // What the engine that transcribed it wrote: the heard text of corrected lines, the rest as they stand.
-            val heard = t.segments.joinToString(" ") { if (it.edited) it.original ?: it.text else it.text }
+            val heard = said.joinToString(" ") { if (it.edited) it.original ?: it.text else it.text }
             val by = if (t.engine.contains("(cloud)")) CloudAsr.Engine.PARAKEET.label else PHONE
             Key(t.clip, reference, mapOf(by to heard))
         }

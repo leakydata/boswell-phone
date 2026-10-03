@@ -206,7 +206,7 @@ private fun Bubble(line: LineRow, v: Voice?, header: Boolean, playing: Boolean, 
             if (v != null) Avatar(v, 22) else Spacer(Modifier.size(22.dp))
             Spacer(Modifier.width(6.dp))
             Text(v?.name ?: "Unattributed", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold,
-                color = if (v?.named == true) color else MaterialTheme.colorScheme.onSurfaceVariant)
+                color = if (v?.named == true || v?.boswell == true) color else MaterialTheme.colorScheme.onSurfaceVariant)
             Text("  ${Fmt.time(line.t0)}" + when { line.home -> " · home"; line.cloud -> " · cloud"; else -> "" }, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Surface(
@@ -310,6 +310,7 @@ private fun PlayerBar(s: ConversationState, vm: ArchiveViewModel) {
 private fun WhoSheet(vm: ArchiveViewModel, s: ConversationState, key: String, onDismiss: () -> Unit, onPerson: (Long) -> Unit) {
     val v = s.voices[key] ?: return
     val conv = s.conversation ?: return
+    if (v.boswell) { BoswellSheet(vm, s, key, conv.id, onDismiss); return }
     val guess = s.guesses[key]
     var name by remember(key) { mutableStateOf("") }
     val done = { onDismiss() }
@@ -357,13 +358,42 @@ private fun WhoSheet(vm: ArchiveViewModel, s: ConversationState, key: String, on
 }
 
 /**
+ * Boswell's own spoken answers, which the Omi heard: nothing to name. If it
+ * wasn't Boswell, "Not Boswell" makes those lines ordinary voices again.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BoswellSheet(vm: ArchiveViewModel, s: ConversationState, key: String, conversation: Long, onDismiss: () -> Unit) {
+    val v = s.voices[key] ?: return
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Avatar(v, 44)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(v.name, style = MaterialTheme.typography.titleLarge)
+                    Text("Spoken answers, heard by the Omi", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                OutlinedButton(onClick = { s.lines.firstOrNull { it.speaker == key }?.let(vm::playLine) }) {
+                    Icon(Icons.Filled.PlayArrow, null); Text("Hear")
+                }
+            }
+            Text("These lines are what Boswell said aloud. They stay in the transcript but don't count as anyone talking.",
+                style = MaterialTheme.typography.bodyMedium)
+            TextButton(onClick = { vm.notBoswell(conversation); onDismiss() }) { Text("Not Boswell") }
+        }
+    }
+}
+
+/**
  * "Who said this?" for a line no speaker was found for (a word or two at a
  * recording's edge): the voices heard in the same recording to choose from.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun OrphanSheet(vm: ArchiveViewModel, s: ConversationState, line: LineRow, onDismiss: () -> Unit) {
-    val options = remember(line.clip) { vm.speakersInClip(line.clip) }
+    // One entry per voice: Boswell's can be heard as more than one diarized voice.
+    val options = remember(line.clip) { vm.speakersInClip(line.clip).distinctBy { it.second ?: it.first } }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Who said this?", style = MaterialTheme.typography.titleLarge)

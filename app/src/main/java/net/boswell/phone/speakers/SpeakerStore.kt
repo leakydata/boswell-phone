@@ -32,7 +32,7 @@ data class VoiceGroup(val key: Long, val voiceprints: Int, val seconds: Double, 
  *
  * Starts empty. Nothing is imported from the desktop.
  */
-class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", null, 7) {
+class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", null, 8) {
     init { Matching.model = net.boswell.phone.diarize.VoiceModels.active(context) }
 
 
@@ -67,6 +67,8 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         db.execSQL(MERGES)
         db.execSQL(REJECTIONS)
         db.execSQL(ASSIGNED)
+        db.execSQL(BOSWELL_VOICE)
+        db.execSQL(NOT_BOSWELL)
         db.execSQL("""
             CREATE TABLE matches (
                 id            INTEGER PRIMARY KEY,
@@ -103,6 +105,7 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
                 WHERE seconds IS NOT NULL AND seconds < ${Matching.MIN_PRINT_SECONDS} AND origin != 'manual'
                   AND (SELECT COUNT(*) FROM voiceprints w WHERE w.person_id = voiceprints.person_id AND (w.seconds IS NULL OR w.seconds >= ${Matching.MIN_PRINT_SECONDS} OR w.origin = 'manual')) > 0""")
         }
+        if (oldVersion < 8) { db.execSQL(BOSWELL_VOICE); db.execSQL(NOT_BOSWELL) }
     }
 
     override fun onConfigure(db: SQLiteDatabase) = db.setForeignKeyConstraintsEnabled(true)
@@ -266,6 +269,7 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         db.beginTransaction()
         try {
             for (c in clips) db.execSQL("DELETE FROM voiceprints WHERE clip = ? AND origin = 'auto'", arrayOf(c))
+            for (c in clips) db.execSQL("DELETE FROM boswell_voice WHERE clip = ?", arrayOf(c))
             // Unnamed voices left with nothing are gone entirely.
             db.execSQL("DELETE FROM people WHERE name IS NULL AND id NOT IN (SELECT DISTINCT person_id FROM voiceprints)")
             db.setTransactionSuccessful()
@@ -322,6 +326,114 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
+
+    // ------------------------------------------------------------- Boswell
+
+    /**
+     * Boswell's own voice, learned from recordings where what it said lined
+     * up with the words heard (BoswellLines), one set per text-to-speech
+     * voice: a new voice is learned afresh. Kept apart from `voiceprints`, so
+     * it can never be a person, an unnamed voice, or anyone's competition.
+     */
+    fun addBoswellPrint(voice: String, vec: FloatArray, seconds: Double, clip: String, speaker: String) {
+        if (!Matching.usable(vec)) return
+        val v = Matching.unit(vec)
+        val db = writableDatabase
+        db.execSQL("DELETE FROM boswell_voice WHERE clip = ? AND speaker = ?", arrayOf(clip, speaker))
+        db.insert("boswell_voice", null, ContentValues().apply {
+            put("voice", voice); put("vec", pack(v)); put("dim", v.size); put("seconds", seconds)
+            put("clip", clip); put("speaker", speaker); put("created", now())
+        })
+        pruneBoswell(voice, v.size)
+    }
+
+    /** The most recent are enough: the voice doesn't change, only the room. */
+    private fun pruneBoswell(voice: String, dim: Int) = writableDatabase.execSQL(
+        """DELETE FROM boswell_voice WHERE voice = ? AND dim = ? AND id NOT IN
+            (SELECT id FROM boswell_voice WHERE voice = ? AND dim = ? ORDER BY created DESC LIMIT $BOSWELL_PRINTS)""",
+        arrayOf<Any>(voice, dim, voice, dim))
+
+    /**
+     * People someone named for Boswell's voice before it knew itself
+     * (BoswellLines.isBoswellName), never [owner]: whether or not they have
+     * a voiceprint under the model in use.
+     */
+    fun boswellNamed(owner: Long?): List<Long> = readableDatabase.rawQuery("SELECT id, name FROM people WHERE name IS NOT NULL", null).use { c ->
+        buildList { while (c.moveToNext()) if (net.boswell.phone.process.BoswellLines.isBoswellName(c.getString(1)) && c.getLong(0) != owner) add(c.getLong(0)) }
+    }
+
+    /**
+     * A person who was really Boswell's voice stops being a person: their
+     * voiceprints long enough to be references (any model's) become Boswell's
+     * learned voice for [voice], and everything that made them someone goes --
+     * the person, voiceprints, assignments, "not them" answers, and the voices
+     * merged into them. Safe to repeat.
+     */
+    fun retireAsBoswell(personIds: Collection<Long>, voice: String) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            for (pid in personIds) {
+                // Every id that resolves to them: transcripts and assignments may hold an older one.
+                val all = mutableSetOf(pid)
+                var frontier = listOf(pid)
+                while (frontier.isNotEmpty()) {
+                    frontier = frontier.flatMap { into ->
+                        db.rawQuery("SELECT from_id FROM merges WHERE into_id = ?", arrayOf(into.toString())).use { c ->
+                            buildList { while (c.moveToNext()) add(c.getLong(0)) }
+                        }
+                    }.filter { all.add(it) }
+                }
+                db.execSQL("""INSERT INTO boswell_voice(voice, vec, dim, seconds, clip, speaker, created)
+                    SELECT ?, vec, dim, seconds, clip, speaker, created FROM voiceprints v
+                    WHERE person_id = ? AND impure = 0 AND seconds >= ${Matching.MIN_PRINT_SECONDS}
+                      AND NOT EXISTS (SELECT 1 FROM boswell_voice b WHERE b.clip IS v.clip AND b.speaker IS v.speaker AND b.dim = v.dim)""",
+                    arrayOf<Any>(voice, pid))
+                val ids = all.joinToString(",")
+                db.execSQL("DELETE FROM voiceprints WHERE person_id = ?", arrayOf<Any>(pid))
+                db.execSQL("DELETE FROM assigned WHERE person_id IN ($ids)")
+                db.execSQL("DELETE FROM rejections WHERE person_id IN ($ids)")
+                db.execSQL("DELETE FROM merges WHERE into_id IN ($ids) OR from_id IN ($ids)")
+                db.execSQL("DELETE FROM people WHERE id = ?", arrayOf<Any>(pid))
+            }
+            db.rawQuery("SELECT DISTINCT dim FROM boswell_voice WHERE voice = ?", arrayOf(voice)).use { c ->
+                buildList { while (c.moveToNext()) add(c.getInt(0)) }
+            }.forEach { pruneBoswell(voice, it) }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    /** Boswell's voice learned before the phone knew which TTS voice it was: it's the one in use now. */
+    fun adoptBoswellPrints(voice: String) =
+        writableDatabase.execSQL("UPDATE boswell_voice SET voice = ? WHERE voice = ?", arrayOf<Any>(voice, UNKNOWN_VOICE))
+
+    /** Boswell's voiceprints for one TTS voice, under the model in use. */
+    fun boswellPrints(voice: String): List<FloatArray> = readableDatabase.rawQuery(
+        "SELECT vec FROM boswell_voice WHERE voice = ? AND dim = ${Matching.model.dim}", arrayOf(voice)).use { c ->
+        buildList { while (c.moveToNext()) add(unpack(c.getBlob(0))) }
+    }
+
+    /** How alike [vec] is to Boswell's voice (best print), or null with nothing learned yet. */
+    fun boswellScore(vec: FloatArray, voice: String?): Double? {
+        if (voice == null || !Matching.usable(vec)) return null
+        val v = Matching.unit(vec)
+        return boswellPrints(voice).maxOfOrNull { Matching.dot(v, it) }
+    }
+
+    /**
+     * "Not Boswell": these recordings are never labeled Boswell's again (not
+     * when transcribed again either), and anything learned from them goes.
+     */
+    fun notBoswell(clips: Collection<String>) {
+        val db = writableDatabase
+        for (c in clips) {
+            db.execSQL("INSERT OR IGNORE INTO not_boswell(clip) VALUES (?)", arrayOf(c))
+            db.execSQL("DELETE FROM boswell_voice WHERE clip = ?", arrayOf(c))
+        }
+    }
+
+    fun isNotBoswell(clip: String): Boolean =
+        readableDatabase.rawQuery("SELECT 1 FROM not_boswell WHERE clip = ?", arrayOf(clip)).use { it.moveToFirst() }
 
     // ------------------------------------------------------------ contacts
 
@@ -387,6 +499,13 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         /** "Not them" and "No" answers: this voice in this clip is not this person, so never suggest or match it again. */
         /** A voice someone named that has no voiceprint to file (too short to embed): who it is, directly. */
         private const val ASSIGNED = "CREATE TABLE IF NOT EXISTS assigned (clip TEXT NOT NULL, speaker TEXT NOT NULL, person_id INTEGER NOT NULL, PRIMARY KEY (clip, speaker))"
+        private const val BOSWELL_VOICE = """CREATE TABLE IF NOT EXISTS boswell_voice (id INTEGER PRIMARY KEY, voice TEXT NOT NULL, vec BLOB NOT NULL,
+            dim INTEGER NOT NULL, seconds REAL, clip TEXT, speaker TEXT, created REAL)"""
+        private const val NOT_BOSWELL = "CREATE TABLE IF NOT EXISTS not_boswell (clip TEXT PRIMARY KEY)"
+        /** The TTS voice of Boswell prints learned before any answer was spoken (BoswellPerson): whichever speaks first. */
+        const val UNKNOWN_VOICE = "?"
+        /** Boswell voiceprints kept per TTS voice and model. */
+        private const val BOSWELL_PRINTS = 30
         private const val REJECTIONS = "CREATE TABLE IF NOT EXISTS rejections (clip TEXT NOT NULL, speaker TEXT NOT NULL, person_id INTEGER NOT NULL, PRIMARY KEY (clip, speaker, person_id))"
 
         fun pack(v: FloatArray): ByteArray = ByteBuffer.allocate(v.size * 4).order(ByteOrder.LITTLE_ENDIAN).apply { v.forEach { putFloat(it) } }.array()

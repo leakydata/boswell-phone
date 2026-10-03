@@ -7,7 +7,9 @@ import android.database.sqlite.SQLiteOpenHelper
 import java.time.LocalDate
 import java.time.ZoneId
 
-data class Exchange(val id: Long, val at: Double, val source: String, val question: String?, val answer: String, val cost: Double, val error: Boolean)
+data class Exchange(val id: Long, val at: Double, val source: String, val question: String?, val answer: String, val cost: Double, val error: Boolean,
+                    /** When the question was asked (wall clock): a spoken one from its first word to its last, a typed one when sent. Null before these were kept. */
+                    val askedFrom: Double? = null, val askedTo: Double? = null)
 data class Bookmark(val id: Long, val at: Double, val note: String?)
 
 /**
@@ -15,18 +17,52 @@ data class Bookmark(val id: Long, val at: Double, val note: String?)
  * here -- when, why, which model, tokens, cost -- so what left the phone is
  * always visible, and the daily budget has something to count.
  */
-class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db", null, 3) {
+class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db", null, 5) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE calls (id INTEGER PRIMARY KEY, at REAL, purpose TEXT, model TEXT, prompt_tokens INTEGER, completion_tokens INTEGER, cost REAL, error TEXT)")
-        db.execSQL("CREATE TABLE exchanges (id INTEGER PRIMARY KEY, at REAL, source TEXT, question TEXT, answer TEXT, cost REAL, error INTEGER)")
+        db.execSQL("CREATE TABLE exchanges (id INTEGER PRIMARY KEY, at REAL, source TEXT, question TEXT, answer TEXT, cost REAL, error INTEGER, asked_from REAL, asked_to REAL)")
         db.execSQL("CREATE TABLE bookmarks (id INTEGER PRIMARY KEY, at REAL, note TEXT)")
         db.execSQL(TRIGGER_HITS)
         db.execSQL(NOTES)
+        db.execSQL(SPOKEN)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) db.execSQL(TRIGGER_HITS)
         if (oldVersion < 3) db.execSQL(NOTES)
+        if (oldVersion < 4) db.execSQL(SPOKEN)
+        if (oldVersion < 5) {
+            db.execSQL("ALTER TABLE exchanges ADD COLUMN asked_from REAL")
+            db.execSQL("ALTER TABLE exchanges ADD COLUMN asked_to REAL")
+        }
+    }
+
+    /**
+     * Something Boswell said aloud: when (wall clock) and the exact text, so
+     * its voice can be told apart in recordings transcribed later. Kept for
+     * [SPOKEN_DAYS], longer than any recording waits to be transcribed.
+     */
+    fun addSpoken(started: Double, ended: Double, text: String, voice: String?): Long {
+        writableDatabase.execSQL("DELETE FROM spoken WHERE started < ?", arrayOf<Any>(now() - SPOKEN_DAYS * 86_400.0))
+        return writableDatabase.insert("spoken", null, ContentValues().apply {
+            put("started", started); put("ended", ended); put("text", text); put("voice", voice)
+        })
+    }
+
+    /** The utterance finished (or was cut off) at [ended]. */
+    fun endSpoken(id: Long, ended: Double) =
+        writableDatabase.execSQL("UPDATE spoken SET ended = ? WHERE id = ?", arrayOf<Any>(ended, id))
+
+    /** The text-to-speech voice Boswell last spoke with, up to [before]: whose learned voice to listen for. */
+    fun lastVoice(before: Double): String? = readableDatabase.rawQuery(
+        "SELECT voice FROM spoken WHERE started <= ? AND voice IS NOT NULL ORDER BY started DESC LIMIT 1", arrayOf(before.toString())).use { c ->
+        if (c.moveToFirst()) c.getString(0) else null
+    }
+
+    /** What Boswell said overlapping [from, to), in order. */
+    fun spoken(from: Double, to: Double): List<net.boswell.phone.process.BoswellLines.Spoken> = readableDatabase.rawQuery(
+        "SELECT started, ended, text, voice FROM spoken WHERE ended >= ? AND started < ? ORDER BY started", arrayOf(from.toString(), to.toString())).use { c ->
+        buildList { while (c.moveToNext()) add(net.boswell.phone.process.BoswellLines.Spoken(c.getDouble(0), c.getDouble(1), c.getString(2), if (c.isNull(3)) null else c.getString(3))) }
     }
 
     /** A conversation's title and summary, made when it had [clips] recordings (more later means make it again). */
@@ -95,15 +131,25 @@ class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db
         }
     }
 
-    fun addExchange(source: String, question: String?, answer: String, cost: Double, error: Boolean = false): Long =
+    fun addExchange(source: String, question: String?, answer: String, cost: Double, error: Boolean = false, asked: Pair<Double, Double>? = null): Long =
         writableDatabase.insert("exchanges", null, ContentValues().apply {
             put("at", now()); put("source", source); put("question", question); put("answer", answer); put("cost", cost); put("error", if (error) 1 else 0)
+            asked?.let { put("asked_from", it.first); put("asked_to", it.second) }
         })
 
     fun exchanges(limit: Int = 100): List<Exchange> = readableDatabase.rawQuery(
-        "SELECT id, at, source, question, answer, cost, error FROM exchanges ORDER BY at DESC LIMIT ?", arrayOf(limit.toString())).use { c ->
-        buildList { while (c.moveToNext()) add(Exchange(c.getLong(0), c.getDouble(1), c.getString(2), if (c.isNull(3)) null else c.getString(3), c.getString(4), c.getDouble(5), c.getInt(6) == 1)) }
+        "SELECT $EXCHANGE FROM exchanges ORDER BY at DESC LIMIT ?", arrayOf(limit.toString())).use { c ->
+        buildList { while (c.moveToNext()) add(c.toExchange()) }
     }
+
+    /** Questions and answers since [from], oldest first. */
+    fun exchangesSince(from: Double): List<Exchange> = readableDatabase.rawQuery(
+        "SELECT $EXCHANGE FROM exchanges WHERE at >= ? ORDER BY at", arrayOf(from.toString())).use { c ->
+        buildList { while (c.moveToNext()) add(c.toExchange()) }
+    }
+
+    private fun android.database.Cursor.toExchange() = Exchange(getLong(0), getDouble(1), getString(2), if (isNull(3)) null else getString(3), getString(4),
+        getDouble(5), getInt(6) == 1, if (isNull(7)) null else getDouble(7), if (isNull(8)) null else getDouble(8))
 
     /** Every past question and answer, gone (what they cost stays in the usage log). */
     fun clearExchanges() = writableDatabase.execSQL("DELETE FROM exchanges")
@@ -119,6 +165,9 @@ class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db
 
 private const val TRIGGER_HITS = "CREATE TABLE IF NOT EXISTS trigger_hits (clip TEXT, start REAL, trigger INTEGER, at REAL, PRIMARY KEY (clip, start, trigger))"
 private const val NOTES = "CREATE TABLE IF NOT EXISTS conv_notes (id INTEGER PRIMARY KEY, clips INTEGER, title TEXT, summary TEXT, made REAL)"
+private const val SPOKEN = "CREATE TABLE IF NOT EXISTS spoken (id INTEGER PRIMARY KEY, started REAL, ended REAL, text TEXT, voice TEXT)"
+private const val SPOKEN_DAYS = 30
+private const val EXCHANGE = "id, at, source, question, answer, cost, error, asked_from, asked_to"
 
 /** Assistant settings. The API key itself lives in [Secrets]. */
 object AssistantPrefs {

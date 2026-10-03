@@ -54,7 +54,8 @@ object VoiceMigration {
 
     /** The speech of one speaker in one clip, from their lines' times. */
     private fun speech(pcm: ShortArray, t: Transcript, label: String): FloatArray {
-        val spans = t.segments.filter { it.speaker == label }.map { (it.start * 16_000).toInt().coerceIn(0, pcm.size) to (it.end * 16_000).toInt().coerceIn(0, pcm.size) }
+        // Boswell's lines remember the voice they came from: still that voice's speech.
+        val spans = t.segments.filter { it.speaker == label || (it.speaker == net.boswell.phone.process.BoswellLines.LABEL && it.diarized == label) }.map { (it.start * 16_000).toInt().coerceIn(0, pcm.size) to (it.end * 16_000).toInt().coerceIn(0, pcm.size) }
         val out = FloatArray(spans.sumOf { (a, b) -> (b - a).coerceAtLeast(0) })
         var o = 0
         for ((a, b) in spans) for (i in a until b) out[o++] = pcm[i] / 32768f

@@ -51,6 +51,8 @@ class Clipper(
     private var firstMs: Long? = null
     private var lastMs: Long? = null
     private var frames = 0
+    /** When the latest frame arrived: the clip's end, even if it's filed later (closed by a pause). */
+    private var lastArrival: Double? = null
 
     var bootId: Int = 0
     var clipsWritten = 0
@@ -64,6 +66,7 @@ class Clipper(
         val ms = extendedCounter * frameMs
         if (firstMs == null) firstMs = ms
         lastMs = ms
+        lastArrival = now()
         chunks += pcm
         have += pcm.size
         frames++
@@ -79,7 +82,11 @@ class Clipper(
             off += c.size
         }
         val seconds = have / sampleRate.toDouble()
-        val ended = now()
+        // Placed by when its last frame arrived, not when it was filed: a clip
+        // closed by a pause is filed seconds after its audio ended, and dating
+        // it then put every word that much late (Boswell's own answers, matched
+        // by time, missed their window).
+        val ended = lastArrival ?: now()
         val wav = uniqueName(ended.toLong())
         Wav.write(wav, audio, sampleRate)
         // The compact copy kept after transcription: the Omi's own frames, not re-encoded.
@@ -97,6 +104,7 @@ class Clipper(
         frames = 0
         firstMs = null
         lastMs = null
+        lastArrival = null
         clipsWritten++
         return wav
     }

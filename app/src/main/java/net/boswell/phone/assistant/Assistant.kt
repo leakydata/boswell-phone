@@ -66,8 +66,12 @@ class Assistant(private val context: Context) {
     /** The person's own words being answered: texting confirms against these, never the model's. */
     private var currentQuestion: String? = null
 
-    fun ask(question: String, source: String, instruction: String? = null, saidAt: Double? = null, fileOnly: Boolean = source == CAPTURE, display: String? = null): Answer {
+    /** [asked]: when the question was said, first word to last (wall clock); a typed one is asked now. */
+    fun ask(question: String, source: String, instruction: String? = null, saidAt: Double? = null, fileOnly: Boolean = source == CAPTURE, display: String? = null,
+            asked: Pair<Double, Double>? = null): Answer {
         currentQuestion = if (source == "typed" || source == "button") question else null
+        val now = System.currentTimeMillis() / 1000.0
+        @Suppress("NAME_SHADOWING") val asked = asked ?: (now to now)
         val llm = Llm.forAssistant(context) ?: return Answer("Add an OpenRouter key under Device → Assistant first.", 0.0, true)
         val model = llm.name
         val store = AssistantStore(context)
@@ -115,7 +119,7 @@ class Assistant(private val context: Context) {
                     val text = reply.text?.trim().orEmpty().ifEmpty { "I don't have an answer for that." }
                     // A trigger that turned out not to be a request: nothing to record or show.
                     if (instruction != null && text.trim().trimEnd('.').equals("NONE", ignoreCase = true)) return Answer(NONE, cost)
-                    store.addExchange(source, display ?: question, text, cost)
+                    store.addExchange(source, display ?: question, text, cost, asked = asked)
                     return Answer(text, cost)
                 }
                 messages += reply.message
@@ -125,11 +129,11 @@ class Assistant(private val context: Context) {
                 }
             }
             val text = "I looked but ran out of steps before finding an answer."
-            store.addExchange(source, display ?: question, text, cost, error = true)
+            store.addExchange(source, display ?: question, text, cost, error = true, asked = asked)
             return Answer(text, cost, true)
         } catch (e: Exception) {
             val text = "Couldn't reach the assistant: ${e.message?.take(160)}"
-            store.addExchange(source, display ?: question, text, cost, error = true)
+            store.addExchange(source, display ?: question, text, cost, error = true, asked = asked)
             return Answer(text, cost, true)
         } finally {
             speakers.close(); archive.close(); store.close()
@@ -145,6 +149,7 @@ class Assistant(private val context: Context) {
             appendLine("You are Boswell, a personal assistant on ${me ?: "the user"}'s phone. The phone records the conversations around them through a wearable microphone and transcribes them on the device; you can look through that record with tools.")
             appendLine("It is now ${LocalDateTime.now().format(clock)} (${zone.id}); today is ${LocalDate.now()}.")
             if (me != null) appendLine("Lines marked (me) are ${me}, the person you are helping.")
+            appendLine("Lines by ${net.boswell.phone.process.BoswellLines.AS_SAID_BY} are your own earlier answers, spoken aloud by the phone and picked up by the microphone: what you told ${me ?: "the user"}, not something a person said.")
             if (source == "button") appendLine("${me ?: "The user"} asked this out loud just now by tapping the button on their Omi wearable; the phone heard it and transcribed it, so expect small transcription errors in the question. The question itself also appears in the recent lines below.")
             if (source == CAPTURE) appendLine("The user double-tapped the Omi to capture something to remember. File it with add_todo (pick a fitting category; set due only if they said when). Use add_calendar_event instead only if it is clearly an appointment or meeting at a specific time. Then reply with a very short confirmation like 'Added to Errands: pick up prescription (Thu 9:00)'.")
             appendLine("Answers appear as a phone notification: be direct and brief, one to three sentences, unless asked for detail. Say so plainly when the record does not contain the answer; do not invent what was said. Transcripts are machine-made and may contain errors.")
@@ -157,8 +162,10 @@ class Assistant(private val context: Context) {
         }
     }
 
-    /** Lines since [from], "HH:MM Speaker: text", with the owner marked. */
-    fun lines(archive: Archive, speakers: SpeakerStore, from: Double, to: Double = Double.MAX_VALUE): String {
+    /** Lines since [from], "HH:MM Speaker: text", with the owner marked and Boswell's own spoken answers as its. */
+    fun lines(archive: Archive, speakers: SpeakerStore, from: Double, to: Double = Double.MAX_VALUE,
+              /** Leave out lines said in these spans (the watcher: questions already asked and answered). */
+              skip: List<ClosedFloatingPointRange<Double>> = emptyList()): String {
         val owner = AssistantPrefs.owner(context)
         val names = HashMap<Long, String?>()
         val t = DateTimeFormatter.ofPattern("h:mm")
@@ -167,9 +174,11 @@ class Assistant(private val context: Context) {
             WHERE l.t0 >= ? AND l.t0 < ? ORDER BY l.t0 LIMIT 400""", arrayOf(from.toString(), to.toString())).use { c ->
             buildString {
                 while (c.moveToNext()) {
+                    if (skip.any { c.getDouble(0) in it }) continue
                     val key = if (c.isNull(1)) null else c.getString(1)
                     val pid = key?.takeIf { it.startsWith("p") }?.drop(1)?.toLongOrNull()
-                    val who = pid?.let { p -> names.getOrPut(p) { speakers.nameOf(p) } } ?: "someone"
+                    val who = if (key == Archive.BOSWELL) net.boswell.phone.process.BoswellLines.AS_SAID_BY
+                        else pid?.let { p -> names.getOrPut(p) { speakers.nameOf(p) } } ?: "someone"
                     val mark = if (pid != null && pid == owner) " (me)" else ""
                     appendLine("${Instant.ofEpochSecond(c.getDouble(0).toLong()).atZone(zone).format(t)} [L${c.getLong(3)}] $who$mark: ${c.getString(2)}")
                 }
@@ -194,7 +203,7 @@ class Assistant(private val context: Context) {
                 val since = days?.let { System.currentTimeMillis() / 1000.0 - it * 86_400 } ?: 0.0
                 val hits = archive.search(str("query") ?: "", 60).filter { it.line.t0 >= since }.take(25)
                 if (hits.isEmpty()) "no matches" else hits.joinToString("\n") { h ->
-                    val who = h.line.personId?.let(speakers::nameOf) ?: "someone"
+                    val who = if (h.line.speaker == Archive.BOSWELL) net.boswell.phone.process.BoswellLines.AS_SAID_BY else h.line.personId?.let(speakers::nameOf) ?: "someone"
                     "${at(h.line.t0)} (conversation ${h.conversation}) [L${h.line.id}] $who: ${h.line.text}"
                 }
             }

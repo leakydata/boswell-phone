@@ -79,6 +79,8 @@ class VoiceReview(private val context: Context) {
         val orphansFixed = net.boswell.phone.process.Lines.attributeOrphans(t.segments)
         var changed = orphansFixed != null
         val updated = t.speakers.mapValues { (label, sp) ->
+            // Boswell's own voice is nobody to match.
+            if (net.boswell.phone.process.BoswellLines.isBoswell(sp)) return@mapValues sp
             val emb = t.embeddings[label]?.toFloatArray() ?: return@mapValues sp
             if (store.decidedByHand(t.clip, label)) return@mapValues sp
             val now = store.currentPerson(t.clip, label, sp.personId)
@@ -170,7 +172,7 @@ class VoiceReview(private val context: Context) {
             for (f in ProcessingWorker.transcriptsDir(context).listFiles { x -> x.extension == "json" }.orEmpty()) {
                 val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.getOrNull() ?: continue
                 for ((label, sp) in t.speakers) {
-                    if ("${t.clip}|$label" in filed || sp.seconds < SINGLE_MIN_SECONDS) continue
+                    if ("${t.clip}|$label" in filed || sp.seconds < SINGLE_MIN_SECONDS || net.boswell.phone.process.BoswellLines.isBoswell(sp)) continue
                     val emb = t.embeddings[label]?.toFloatArray() ?: continue
                     if (store.decidedByHand(t.clip, label)) continue
                     val now = store.currentPerson(t.clip, label, sp.personId)

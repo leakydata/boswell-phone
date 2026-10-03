@@ -201,7 +201,8 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
             val talk = HashMap<String, Double>()
             // Only voices that said something transcribed: a cough or a second of TV
             // gets a voice of its own but no line, and could never be named from the conversation.
-            db.rawQuery("SELECT conv_key, SUM(seconds) FROM clip_speakers cs WHERE clip IN (${group.joinToString(",") { "?" }}) AND conv_key IS NOT NULL " +
+            // Boswell's own voice is in the transcript, not among who talked.
+            db.rawQuery("SELECT conv_key, SUM(seconds) FROM clip_speakers cs WHERE clip IN (${group.joinToString(",") { "?" }}) AND conv_key IS NOT NULL AND conv_key != '$BOSWELL' " +
                 "AND EXISTS (SELECT 1 FROM lines l WHERE l.clip = cs.clip AND l.label = cs.label) GROUP BY conv_key",
                 group.map { it.name }.toTypedArray()).use { c -> while (c.moveToNext()) talk[c.getString(0)] = c.getDouble(1) }
             val snippet = db.rawQuery("SELECT text FROM lines WHERE clip IN (${group.joinToString(",") { "?" }}) ORDER BY t0 LIMIT 3",
@@ -225,10 +226,16 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
         val voices = mutableListOf<Voice>()
         var anon = 0
         for (clip in clips) {
-            val rows = db.rawQuery("SELECT label, person_id, emb FROM clip_speakers WHERE clip = ?", arrayOf(clip)).use { c ->
-                buildList { while (c.moveToNext()) add(Triple(c.getString(0), if (c.isNull(1)) null else c.getLong(1), c.getBlob(2)?.let(SpeakerStore::unpack))) }
+            val rows = db.rawQuery("SELECT label, person_id, emb, decision FROM clip_speakers WHERE clip = ?", arrayOf(clip)).use { c ->
+                buildList { while (c.moveToNext()) add(Triple(c.getString(0), if (c.isNull(1)) null else c.getLong(1), c.getBlob(2)?.let(SpeakerStore::unpack)) to c.getString(3)) }
             }
-            for ((label, recorded, emb) in rows) {
+            for ((row, decision) in rows) {
+                val (label, recorded, emb) = row
+                // Boswell's voice is one key everywhere, and never stands in for a person's.
+                if (decision == net.boswell.phone.process.BoswellLines.DECISION) {
+                    db.execSQL("UPDATE clip_speakers SET conv_key = ? WHERE clip = ? AND label = ?", arrayOf(BOSWELL, clip, label))
+                    continue
+                }
                 val pid = speakers.currentPerson(clip, label, recorded)
                 val key = when {
                     pid != null -> "p$pid"
@@ -423,6 +430,8 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
 
     companion object {
         const val CONVERSATION_GAP = 60.0
+        /** Boswell's own voice (BoswellLines.KEY): a speaker key, but not a person. */
+        const val BOSWELL = net.boswell.phone.process.BoswellLines.KEY
         /** web/threads.py SAME_VOICE: two diarized slots are one speaker across a clip boundary. */
         val SAME_VOICE get() = net.boswell.phone.speakers.Matching.model.sameVoice
     }

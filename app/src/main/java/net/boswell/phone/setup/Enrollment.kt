@@ -50,6 +50,8 @@ object Enrollment {
      */
     fun feed(pcm: ShortArray) = synchronized(frames) {
         if (!_state.value.active) return
+        // Boswell talking (an answer, a reminder) is not the owner's voice.
+        if (net.boswell.phone.assistant.AssistantNotify.speakingNow()) return
         var s = 0.0
         for (x in pcm) { val v = x / 32768.0; s += v * v }
         val rms = sqrt(s / pcm.size)

@@ -36,6 +36,11 @@ data class Segment(
     val original: String? = null,
     /** Corrected by the person (not by the vocabulary): the text is an answer key. */
     val edited: Boolean = false,
+    /**
+     * Phone addition: for a line of Boswell's own voice ([BoswellLines.LABEL]), the
+     * diarized speaker its words came from, so "Not Boswell" can give them back.
+     */
+    val diarized: String? = null,
 )
 
 @Serializable
@@ -87,12 +92,13 @@ object Lines {
      */
     fun attributeOrphans(segments: List<Segment>): List<Segment>? {
         if (segments.none { it.speaker == null }) return null
-        val labels = segments.mapNotNull { it.speaker }.distinct()
+        // Boswell's lines are its own words, matched to what it said: nothing else joins them.
+        val labels = segments.mapNotNull { it.speaker }.distinct().filter { it != BoswellLines.LABEL }
         if (labels.isEmpty()) return null
         var changed = false
         val out = segments.mapIndexed { i, s ->
             if (s.speaker != null) return@mapIndexed s
-            val to = if (labels.size == 1) labels[0] else segments.withIndex().filter { it.value.speaker != null && it.index != i }
+            val to = if (labels.size == 1) labels[0] else segments.withIndex().filter { it.value.speaker != null && it.value.speaker != BoswellLines.LABEL && it.index != i }
                 .map { (j, o) -> o.speaker to (if (j < i) s.start - o.end else o.start - s.end).coerceAtLeast(0.0) }
                 .filter { it.second <= ORPHAN_REACH }.minByOrNull { it.second }?.first
             if (to != null) { changed = true; s.copy(speaker = to) } else s
@@ -102,11 +108,11 @@ object Lines {
 
     /**
      * Give every word to the speaker whose turn it falls in (the one overlapping
-     * it most, when two talk at once), or the nearest turn within a second,
-     * then join consecutive words of one speaker into lines, breaking on a
-     * change of speaker or a pause.
+     * it most, when two talk at once), or the nearest turn within a second;
+     * a word outside every turn (a clip's edge, a gap the segmenter called
+     * silence) goes to whoever spoke nearest it, rather than to nobody.
      */
-    fun build(words: List<Word>, turns: List<Turn>, pause: Double = 1.0, maxLine: Double = 20.0): List<Segment> {
+    fun speakers(words: List<Word>, turns: List<Turn>): List<Int?> {
         fun speakerFor(w: Word): Int? {
             var best: Turn? = null
             var bestOv = 0.0
@@ -120,31 +126,46 @@ object Lines {
             val d = minOf(kotlin.math.abs(mid - near.start), kotlin.math.abs(mid - near.end))
             return if (d <= 1.0) near.speaker else null
         }
-        // A word outside every turn (a clip's edge, a gap the segmenter called
-        // silence) goes to whoever spoke nearest it, rather than to nobody.
         val spk = words.map(::speakerFor).toMutableList()
         val known = spk.filterNotNull().distinct()
         for (i in words.indices) if (spk[i] == null) {
             spk[i] = if (known.size == 1) known[0] else nearestSpeaker(words, spk, i)
         }
+        return spk
+    }
+
+    /**
+     * Join consecutive words of one speaker ([speakers]) into lines, breaking
+     * on a change of speaker or a pause. Words marked in [boswell] are
+     * Boswell's own voice: their lines are [BoswellLines.LABEL]'s, and
+     * remember the diarized speaker they came from.
+     */
+    fun build(words: List<Word>, turns: List<Turn>, pause: Double = 1.0, maxLine: Double = 20.0, boswell: BooleanArray? = null): List<Segment> {
+        val diar = speakers(words, turns)
         val out = mutableListOf<Segment>()
         var cur: MutableList<Word>? = null
         var curSpk: Int? = null
+        var curDiar: Int? = null
         fun flush() {
             val c = cur ?: return
-            out += Segment(c.first().start, c.last().end, curSpk?.let(::label), c.joinToString(" ") { it.text })
+            out += if (curSpk == BOSWELL) Segment(c.first().start, c.last().end, BoswellLines.LABEL, c.joinToString(" ") { it.text }, diarized = curDiar?.let(::label))
+                else Segment(c.first().start, c.last().end, curSpk?.let(::label), c.joinToString(" ") { it.text })
             cur = null
         }
         for ((wi, w) in words.withIndex()) {
-            val s = spk[wi]
+            val s = if (boswell?.getOrNull(wi) == true) BOSWELL else diar[wi]
             val c = cur
-            if (c == null || s != curSpk || w.start - c.last().end > pause || w.end - c.first().start > maxLine) {
+            if (c == null || s != curSpk || (s == BOSWELL && diar[wi] != curDiar) || w.start - c.last().end > pause || w.end - c.first().start > maxLine) {
                 flush()
                 cur = mutableListOf(w)
                 curSpk = s
+                curDiar = diar[wi]
             } else c += w
         }
         flush()
         return out
     }
+
+    /** Boswell's own words, in [build]: not a diarized speaker index. */
+    private const val BOSWELL = -1
 }

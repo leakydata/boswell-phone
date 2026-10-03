@@ -511,6 +511,8 @@ class CaptureService : LifecycleService() {
                 q.finishAt?.let { if (System.currentTimeMillis() >= it) q.finish() }
             }
             listener.cancel()
+            // The question's span, for the watcher to leave alone: tap to the end of listening.
+            val asked = started / 1000.0 to System.currentTimeMillis() / 1000.0
             CaptureRepository.log("question ended by ${q.endedBy ?: "?"}${if (q.modelListening) " (speech model)" else ""} after %.1f s of audio; longest gap in the stream %.1f s".format(q.seconds, longestGap / 1000.0))
             question = null
             CaptureRepository.update { it.copy(asking = "thinking") }
@@ -525,7 +527,7 @@ class CaptureService : LifecycleService() {
             } else {
                 CaptureRepository.log(if (capture) "captured: $text" else "asked: $text")
                 val source = if (capture) net.boswell.phone.assistant.Assistant.CAPTURE else "button"
-                val a = withContext(kotlinx.coroutines.Dispatchers.IO) { net.boswell.phone.assistant.Assistant(this@CaptureService).ask(text, source) }
+                val a = withContext(kotlinx.coroutines.Dispatchers.IO) { net.boswell.phone.assistant.Assistant(this@CaptureService).ask(text, source, asked = asked) }
                 buzz(if (a.error) 3 else 2)          // the answer is on the phone
                 net.boswell.phone.assistant.AssistantNotify.post(this@CaptureService, net.boswell.phone.assistant.AssistantNotify.ANSWERS,
                     if (capture) "To-do" else text.take(60), a.text)

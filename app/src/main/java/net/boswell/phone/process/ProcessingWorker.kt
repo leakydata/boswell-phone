@@ -61,6 +61,8 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
         runCatching { setForeground(foreground("Transcribing…")) }
         val clips = CaptureService.clipsDir(applicationContext)
         val out = transcriptsDir(applicationContext)
+        // A person named for Boswell's voice becomes Boswell first, so no new clip is filed under them.
+        runCatching { net.boswell.phone.speakers.BoswellPerson.convert(applicationContext) }
         val store = SpeakerStore(applicationContext)
         var done = 0
         val tagger = if (!home && models.isInstalled(net.boswell.phone.sound.SoundTagger.ID)) net.boswell.phone.sound.SoundTagger(models) else null
@@ -223,14 +225,20 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
 
     /**
      * Words and speakers -> the transcript, wherever they came from: lines by
-     * speaker, the vocabulary's fixes, voices matched against this phone's
-     * people, and the voice triggers.
+     * speaker, the vocabulary's fixes, Boswell's own voice, voices matched
+     * against this phone's people, and the voice triggers.
      */
     private fun finish(wav: File, t0: Long, heard: List<net.boswell.phone.asr.Word>, d: net.boswell.phone.diarize.Diarization,
                        tags: List<net.boswell.phone.sound.SoundTag>?, engine: String, store: SpeakerStore, out: File) {
         val words = net.boswell.phone.asr.Vocabulary.apply(heard, vocabulary)
+        // When the clip started, for the voice triggers and to line words up with what Boswell said.
+        val times = runCatching {
+            net.boswell.phone.capture.Clipper.json.decodeFromString(net.boswell.phone.capture.ClipTimes.serializer(),
+                File(wav.parentFile, wav.nameWithoutExtension + ".json").readText())
+        }.getOrNull()
+        val own = ownVoice(wav.name, words, d, times, store)
         // A line the vocabulary changed keeps what was heard, as a hand edit does (and can be restored the same way).
-        val segments = Lines.build(words, d.turns).map { seg ->
+        val segments = Lines.build(words, d.turns, boswell = own.words).map { seg ->
             if (words === heard) seg
             else heard.filter { (it.start + it.end) / 2 in seg.start..seg.end }.joinToString(" ") { it.text }
                 .let { h -> if (h.isNotBlank() && h != seg.text) seg.copy(original = h) else seg }
@@ -239,39 +247,77 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
         val embeddings = LinkedHashMap<String, List<Float>>()
         for (s in d.speakers) {
             val label = Lines.label(s.index)
-            val vp = s.voiceprint
-            if (vp == null || !Matching.usable(vp)) {
-                speakers[label] = SpeakerId(null, 0.0, "none", null, emptyList(), null, s.seconds)
-                continue
-            }
-            embeddings[label] = Matching.unit(vp).toList()
-            val r = store.match(vp)
-            store.logMatch(wav.name, label, r)
-            // A voice nobody can name joins (or starts) an unnamed cluster, so a
-            // recurring stranger becomes one entry to name, not a hundred.
-            val personId = when {
-                r.decision == Matching.Decision.MATCHED -> r.personId
-                s.seconds >= Matching.MIN_CLUSTER_SECONDS -> store.ingestUnknown(vp, wav.name, label, s.seconds)
-                else -> null
-            }
-            speakers[label] = SpeakerId(
-                name = if (r.decision == Matching.Decision.MATCHED) r.personId?.let(store::nameOf) else null,
-                score = r.score, decision = r.decision.name.lowercase(), margin = r.margin,
-                candidates = r.candidates.map { Candidate(it.personId, store.nameOf(it.personId), it.score, it.voiceprintId) },
-                personId = personId, seconds = s.seconds,
-            )
+            val vp = s.voiceprint?.takeIf { Matching.usable(it) }
+            if (vp != null) embeddings[label] = Matching.unit(vp).toList()
+            // Boswell's voice: never matched to anyone, never filed as an unnamed voice (and
+            // out of one it was filed in before, when this clip was transcribed the last time).
+            val score = own.voices[s.index]
+            if (score != null) store.releaseFromCluster(wav.name, label)
+            speakers[label] = score?.let { SpeakerId(BoswellLines.NAME, it, BoswellLines.DECISION, null, emptyList(), null, s.seconds) }
+                ?: identify(store, wav.name, label, vp, s.seconds)
         }
+        val mine = segments.filter { it.speaker == BoswellLines.LABEL }
+        if (mine.isNotEmpty()) speakers[BoswellLines.LABEL] = SpeakerId(BoswellLines.NAME, 1.0, BoswellLines.DECISION, null, emptyList(), null,
+            mine.sumOf { it.end - it.start })
         val t = Transcript(wav.name, System.currentTimeMillis() / 1000.0, segments, speakers, embeddings,
             engine = engine,
             processMs = System.currentTimeMillis() - t0,
             sounds = tags, verdict = tags?.let { verdictFor(segments.isNotEmpty(), it) })
         writeAtomically(File(out, wav.nameWithoutExtension + ".json"), TranscriptJson.json.encodeToString(Transcript.serializer(), t).toByteArray())
         // Voice triggers act on new transcripts only; the line's own time goes with it.
-        val started = runCatching {
-            net.boswell.phone.capture.Clipper.json.decodeFromString(net.boswell.phone.capture.ClipTimes.serializer(),
-                File(wav.parentFile, wav.nameWithoutExtension + ".json").readText()).started
-        }.getOrNull()
-        if (started != null) runCatching { net.boswell.phone.assistant.TriggerEngine(applicationContext).run(t, started) }
+        if (times != null) runCatching { net.boswell.phone.assistant.TriggerEngine(applicationContext).run(t, times.started) }
+    }
+
+    /** Boswell's own voice in one clip: which words are its, and which diarized voices are wholly its (with how sure). */
+    private class Own(val words: BooleanArray, val voices: Map<Int, Double>)
+
+    /**
+     * Find Boswell's own spoken answers in a clip. First by time and words:
+     * what the phone said while this clip was recorded, lined up against the
+     * words heard then (BoswellLines.claim). A diarized voice that is mostly
+     * those words is Boswell's voice, and -- long enough to be a reference --
+     * teaches the phone what it sounds like, per TTS voice. Then by voice: a
+     * diarized voice that sounds like that, clearly more than like anyone
+     * named, is Boswell's even when nothing was said then (a recording from
+     * the Omi's own storage). Never for a recording someone said wasn't.
+     */
+    private fun ownVoice(clip: String, words: List<net.boswell.phone.asr.Word>, d: net.boswell.phone.diarize.Diarization,
+                         times: net.boswell.phone.capture.ClipTimes?, store: SpeakerStore): Own {
+        val mine = BooleanArray(words.size)
+        if (store.isNotBoswell(clip)) return Own(mine, emptyMap())
+        val diar = Lines.speakers(words, d.turns)
+        val (spoken, last) = runCatching {
+            net.boswell.phone.assistant.AssistantStore(applicationContext).use { a ->
+                val spoken = times?.let { a.spoken(it.started - BoswellLines.AFTER, it.ended + BoswellLines.BEFORE) }.orEmpty()
+                spoken to a.lastVoice(times?.ended ?: Double.MAX_VALUE)
+            }
+        }.getOrDefault(emptyList<BoswellLines.Spoken>() to null)
+        if (times != null) {
+            val by = BoswellLines.claim(words, times.started, spoken, diar, times.seconds)
+            for (i in words.indices) mine[i] = by[i] >= 0
+        }
+        // The voice it spoke with here, or the one it spoke with last.
+        val voiceName = spoken.mapNotNull { it.voice }.groupingBy { it }.eachCount().maxByOrNull { it.value }?.key ?: last
+        voiceName?.let(store::adoptBoswellPrints)
+        val voices = HashMap<Int, Double>()
+        for (s in d.speakers) {
+            val idx = words.indices.filter { diar[it] == s.index }
+            val total = idx.sumOf { words[it].end - words[it].start }
+            val ours = idx.filter { mine[it] }.sumOf { words[it].end - words[it].start }
+            val vp = s.voiceprint?.takeIf { Matching.usable(it) }
+            if (total > 0 && ours >= BoswellLines.MOSTLY * total) {
+                voices[s.index] = 1.0
+                // Learned from what it said only, never from a voice match, so a mistake can't teach itself.
+                if (vp != null && voiceName != null && Matching.printable(ours)) store.addBoswellPrint(voiceName, vp, ours, clip, Lines.label(s.index))
+                continue
+            }
+            if (vp == null || s.seconds < 1.0) continue
+            val score = store.boswellScore(vp, voiceName) ?: continue
+            // The closest named person is the rival; unnamed voices aren't, since one of them may be Boswell, filed before it knew itself.
+            if (BoswellLines.soundsLikeBoswell(score, store.match(vp).score, Matching.MATCH_HIGH, Matching.MARGIN_STRONG)) voices[s.index] = score
+        }
+        for (i in words.indices) if (diar[i] in voices) mine[i] = true
+        return Own(mine, voices)
     }
 
     /**
@@ -286,10 +332,13 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
      */
     private fun othersSpeak(d: net.boswell.phone.diarize.Diarization, store: SpeakerStore): Boolean {
         val owner = net.boswell.phone.assistant.AssistantPrefs.owner(applicationContext)
+        val voice = runCatching { net.boswell.phone.assistant.AssistantStore(applicationContext).use { it.lastVoice(Double.MAX_VALUE) } }.getOrNull()
         return d.speakers.any { s ->
             if (s.seconds < 1.0) return@any false
             val vp = s.voiceprint?.takeIf { Matching.usable(it) } ?: return@any true
             val r = store.match(vp)
+            // Boswell's own voice answering isn't someone else.
+            if (store.boswellScore(vp, voice)?.let { BoswellLines.soundsLikeBoswell(it, r.score, Matching.MATCH_HIGH, Matching.MARGIN_STRONG) } == true) return@any false
             val pid = r.personId.takeIf { r.decision == Matching.Decision.MATCHED }
             when {
                 owner == null -> true
@@ -352,6 +401,28 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
         private const val WORK = "process-clips"
 
         fun transcriptsDir(context: Context) = File(context.filesDir, "transcripts").apply { mkdirs() }
+
+        /**
+         * Who one diarized voice is: matched against the people, or -- nobody
+         * it can be named as -- filed in (or as) an unnamed voice, so a
+         * recurring stranger becomes one entry to name, not a hundred.
+         */
+        fun identify(store: SpeakerStore, clip: String, label: String, vp: FloatArray?, seconds: Double): SpeakerId {
+            if (vp == null || !Matching.usable(vp)) return SpeakerId(null, 0.0, "none", null, emptyList(), null, seconds)
+            val r = store.match(vp)
+            store.logMatch(clip, label, r)
+            val personId = when {
+                r.decision == Matching.Decision.MATCHED -> r.personId
+                seconds >= Matching.MIN_CLUSTER_SECONDS -> store.ingestUnknown(vp, clip, label, seconds)
+                else -> null
+            }
+            return SpeakerId(
+                name = if (r.decision == Matching.Decision.MATCHED) r.personId?.let(store::nameOf) else null,
+                score = r.score, decision = r.decision.name.lowercase(), margin = r.margin,
+                candidates = r.candidates.map { Candidate(it.personId, store.nameOf(it.personId), it.score, it.voiceprintId) },
+                personId = personId, seconds = seconds,
+            )
+        }
 
         /**
          * Clips with sound and no transcript. A clip is named by its WAV name

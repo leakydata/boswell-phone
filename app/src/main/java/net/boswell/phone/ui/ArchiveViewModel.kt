@@ -31,7 +31,9 @@ import java.io.File
 import java.time.LocalDate
 
 /** How a conversation-level voice is shown. */
-data class Voice(val key: String, val name: String, val named: Boolean, val personId: Long?, val media: Boolean)
+data class Voice(val key: String, val name: String, val named: Boolean, val personId: Long?, val media: Boolean,
+                 /** Boswell's own spoken answers, heard back by the Omi: shown, never named. */
+                 val boswell: Boolean = false)
 
 data class DayState(
     val day: LocalDate = LocalDate.now(),
@@ -105,6 +107,10 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
             prefs.edit().putBoolean(wave, true).putBoolean("orphans_attributed_v1", true).apply()
             refresh(force = true)
         }
+        // A person once named for Boswell's own voice ("Boswell Male Voice") is Boswell.
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { net.boswell.phone.speakers.BoswellPerson.convert(app) }.onSuccess { if (it > 0) refresh(force = true) }
+        }
         // You are never a TV: undo it if "It's a TV" on one of your lines once marked all of you.
         viewModelScope.launch(Dispatchers.IO) {
             owner()?.let { me -> if (speakers.person(me)?.kind == "media") { speakers.setKind(me, null); refresh(force = true) } }
@@ -127,6 +133,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------------ voices
 
     private fun voice(key: String, people: Map<Long, Person>): Voice {
+        if (key == Archive.BOSWELL) return Voice(key, net.boswell.phone.process.BoswellLines.NAME, false, null, false, boswell = true)
         if (key.startsWith("p")) {
             val id = key.drop(1).toLongOrNull()
             val p = id?.let { people[it] }
@@ -196,7 +203,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         val vs = withContext(Dispatchers.IO) { voices(keys) }
         val guesses = withContext(Dispatchers.IO) {
             val people = speakers.people().associateBy { it.id }
-            keys.filter { vs[it]?.named != true }.mapNotNull { k ->
+            keys.filter { vs[it]?.named != true && vs[it]?.boswell != true }.mapNotNull { k ->
                 archive.guess(id, k)?.let { (pid, score) ->
                     val p = people[speakers.resolve(pid)] ?: return@let null
                     if (p.name != null && score >= 0.55) k to (p to score) else null
@@ -314,6 +321,11 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
             val target = speakers.people().firstOrNull { it.name == name }?.id ?: speakers.newPerson(name)
             fileVoice(conversation, key, target)
         }
+    }
+
+    /** "Not Boswell": its lines in this conversation go back to the voices they were heard in, as ordinary voices. */
+    fun notBoswell(conversation: Long) = actVoices {
+        net.boswell.phone.process.ClipActions.notBoswell(getApplication(), archive.clipsOf(conversation).map { it.name })
     }
 
     /** "Yes, that's them": the guess becomes a confirmed reference covering this condition. */

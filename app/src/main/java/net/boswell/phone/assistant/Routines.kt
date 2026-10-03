@@ -86,7 +86,7 @@ class RoutinesWorker(context: Context, params: WorkerParameters) : CoroutineWork
         val me = AssistantPrefs.owner(c)?.let { id -> SpeakerStore(c).use { it.nameOf(id) } } ?: "the user"
         val reply = runCatching {
             llm.chat(listOf(
-                Llm.system("From this transcript (lines marked (me) are $me), extract JSON only, no prose: " +
+                Llm.system("From this transcript (lines marked (me) are $me; lines by ${net.boswell.phone.process.BoswellLines.AS_SAID_BY} are the phone's assistant talking, never a promise or a fact about anyone), extract JSON only, no prose: " +
                     "{\"promises\":[{\"by\":\"me\" or a name,\"to\":\"me\" or a name,\"what\":\"short, actionable\",\"due\":\"YYYY-MM-DDTHH:MM or null\"}]," +
                     "\"facts\":[{\"person\":\"name\",\"fact\":\"lasting fact: family, birthday, job, likes, plans\"}]}. " +
                     "Only clear commitments to do something (\"I'll send it Friday\", \"can you call me back\" agreed to), not chatter or TV. " +

@@ -339,7 +339,7 @@ fun Avatar(v: Voice, size: Int = 36, modifier: Modifier = Modifier) {
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            if (v.media) "TV" else if (v.named) Voices.initials(v.name) else "?",
+            if (v.media) "TV" else if (v.named || v.boswell) Voices.initials(v.name) else "?",
             color = if (v.media) MaterialTheme.colorScheme.onSurfaceVariant else Color.White,
             fontSize = (size * 0.4).sp, fontWeight = FontWeight.SemiBold,
         )

@@ -41,7 +41,7 @@ object ConversationNotes {
                 if (text.lines().count { it.isNotBlank() } < MIN_LINES) continue
                 val reply = runCatching {
                     llm.chat(listOf(
-                        Llm.system("Title and summarize this conversation for the user's own diary. Lines marked (me) are the user. Reply with JSON only: " +
+                        Llm.system("Title and summarize this conversation for the user's own diary. Lines marked (me) are the user; lines by ${net.boswell.phone.process.BoswellLines.AS_SAID_BY} are the phone's own assistant answering them aloud. Reply with JSON only: " +
                             "{\"title\":\"at most 7 words, about the topic, e.g. Planning Saturday's climb with Sam\"," +
                             "\"summary\":\"one sentence, at most 25 words, what was said or decided, e.g. You agreed to meet Sam at the trailhead at 8\"}. " +
                             "Never use the user's name: in the summary they are 'you', and the title needs no subject. Name other people as the transcript does; " +

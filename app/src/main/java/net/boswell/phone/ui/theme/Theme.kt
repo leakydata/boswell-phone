@@ -38,7 +38,14 @@ object Voices {
         Color(0xFF76B7B2), Color(0xFFEDC948), Color(0xFFFF9DA7), Color(0xFF9C755F), Color(0xFF8CD17D),
     )
 
-    fun color(key: String?): Color = if (key == null) Color.Gray else palette[Math.floorMod(key.hashCode(), palette.size)]
+    /** Boswell's own voice: a neutral slate, so it never looks like one of the people. */
+    val boswell = Color(0xFF6B7785)
+
+    fun color(key: String?): Color = when (key) {
+        null -> Color.Gray
+        net.boswell.phone.process.BoswellLines.KEY -> boswell
+        else -> palette[Math.floorMod(key.hashCode(), palette.size)]
+    }
 
     fun initials(name: String): String = name.split(" ", "-").filter { it.isNotBlank() }.take(2)
         .joinToString("") { it.first().uppercase() }.ifEmpty { "?" }
