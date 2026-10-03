@@ -105,6 +105,10 @@ And it works in the background: a **morning brief**, an **evening recap**, **pro
 noticed** in what was said (yours and others') filed as to-dos, and a **brief before each
 meeting** from what was last said with those people.
 
+It runs on [OpenRouter](https://openrouter.ai) (a fraction of a cent a question), or, with
+[Boswell Server](https://github.com/leakydata/boswell-server), on **a model on your own
+computer** (Ollama): free, and nothing leaves the house. Web searches still use OpenRouter.
+
 ### 💾 Yours to keep
 **Back up** everything — recordings, transcripts, people and their voices, to-dos,
 what the assistant remembers — to one file, **automatically every week** into a folder
