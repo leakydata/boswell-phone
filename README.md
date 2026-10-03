@@ -73,7 +73,9 @@ one day merge.
   speakers, voiceprints and sounds over [Tailscale](https://tailscale.com) — recordings
   close every 10 seconds of speech for near-live transcripts, your vocabulary goes along
   as hot words, and the phone saves its battery. Your people and their voices stay on
-  the phone. When home can't be reached, the phone does the work itself or waits.
+  the phone. When home can't be reached, the phone does the work itself or waits, and says
+  why ("Is Tailscale on?"); once home is back, what the phone did is **redone at home** in the
+  background, keeping your corrections and named voices.
 
 ### 🗣️ Voices — who said what
 - Speaker diarization and **voiceprints compatible with desktop Boswell** (cosine

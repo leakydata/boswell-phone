@@ -24,8 +24,8 @@ android {
         // callbacks are both there, so there is one code path, not two.
         minSdk = 33
         targetSdk = 36
-        versionCode = 9
-        versionName = "0.5.0"
+        versionCode = 10
+        versionName = "0.6.0"
         // The only ABI anything ships for. Models run on-device and a 32-bit
         // or x86 build would be a build nobody runs.
         ndk { abiFilters += listOf("arm64-v8a") }
