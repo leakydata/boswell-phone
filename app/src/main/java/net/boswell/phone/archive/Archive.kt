@@ -50,6 +50,15 @@ data class SearchHit(val line: LineRow, val conversation: Long?, val snippet: St
  */
 class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive.db", null, 5) {
 
+    // The screen, processing and catch-up each open their own copy at once. A write ahead log lets
+    // reading go on during another's write, and a writer waits its turn instead of failing after
+    // Android's 2.5 s: catch-up rebuilding the index made naming a voice crash ("database is locked").
+    init { setWriteAheadLoggingEnabled(true) }
+
+    override fun onConfigure(db: SQLiteDatabase) {
+        db.rawQuery("PRAGMA busy_timeout = 30000", null).use { it.moveToFirst() }
+    }
+
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE clips (
             name TEXT PRIMARY KEY, started REAL, ended REAL, seconds REAL, time_known INTEGER,
@@ -93,7 +102,10 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
      * nothing changed -- one stat per file.
      */
     @Synchronized
-    fun sync(speakers: SpeakerStore, force: Boolean = false) {
+    /** One sync at a time in this process: a second would only wait on the first's write, then find it done. */
+    fun sync(speakers: SpeakerStore, force: Boolean = false) = synchronized(SYNC) { syncNow(speakers, force) }
+
+    private fun syncNow(speakers: SpeakerStore, force: Boolean) {
         val clipsDir = CaptureService.clipsDir(context)
         val tDir = ProcessingWorker.transcriptsDir(context)
         val db = writableDatabase
@@ -439,6 +451,7 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
     }
 
     companion object {
+        private val SYNC = Any()
         const val CONVERSATION_GAP = 60.0
         /** Boswell's own voice (BoswellLines.KEY): a speaker key, but not a person. */
         const val BOSWELL = net.boswell.phone.process.BoswellLines.KEY

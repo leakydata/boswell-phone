@@ -234,7 +234,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshStorage() {
         viewModelScope.launch {
             val u = withContext(Dispatchers.IO) {
-                archive.sync(speakers)
+                runCatching { archive.sync(speakers) }
                 archive.usage(net.boswell.phone.process.CleanupWorker.days(getApplication()).coerceAtLeast(0))
             }
             val pm = getApplication<Application>().getSystemService(android.os.PowerManager::class.java)

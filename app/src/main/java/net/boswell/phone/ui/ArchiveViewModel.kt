@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.withLock
 import net.boswell.phone.archive.Archive
 import net.boswell.phone.archive.ClipRow
 import net.boswell.phone.archive.Conversation
@@ -31,6 +32,9 @@ import java.io.File
 import java.time.LocalDate
 
 /** How a conversation-level voice is shown. */
+/** Labeling pauses this long before every past recording is looked at again. */
+private const val RECHECK_AFTER_MS = 4_000L
+
 data class Voice(val key: String, val name: String, val named: Boolean, val personId: Long?, val media: Boolean,
                  /** Boswell's own spoken answers, heard back by the Omi: shown, never named. */
                  val boswell: Boolean = false)
@@ -123,7 +127,8 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
 
     fun refresh(force: Boolean = false) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { archive.sync(speakers, force) }
+            // A busy archive (processing indexing at the same moment) mustn't close the app; the next refresh catches up.
+            withContext(Dispatchers.IO) { runCatching { archive.sync(speakers, force) } }
             loadDay(_day.value.day)
             loadPeople()
             _conv.value.conversation?.let { openConversation(it.id, keepPlayer = true) }
@@ -385,11 +390,38 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     fun unnameGroup(personId: Long, group: Long) = actVoices { speakers.unnameGroup(personId, group) }
 
     /** An identity action, then another look at every voice with what is now known. */
-    private fun actVoices(block: () -> Unit) = act {
-        block()
-        val r = net.boswell.phone.speakers.VoiceReview(getApplication()).recheck()
-        if (r.matched > 0 || r.merged > 0) _recheckNote.value = recheckText(r)
-        if (_review.value != null) loadReviewNow()
+    private fun actVoices(block: () -> Unit) {
+        act(block)
+        recheckSoon()
+    }
+
+    private var recheckJob: Job? = null
+    private val recheckLock = kotlinx.coroutines.sync.Mutex()
+
+    /**
+     * Every past recording looked at again with what's now known. That reads every transcript
+     * (thousands), so it used to make each name take seconds to appear while labeling: now the
+     * name shows at once and this runs once labeling pauses, in the background.
+     */
+    private fun recheckSoon() {
+        recheckJob?.cancel()
+        recheckJob = viewModelScope.launch {
+            delay(RECHECK_AFTER_MS)
+            val r = recheckLock.withLock {
+                withContext(Dispatchers.IO) {
+                    net.boswell.phone.speakers.VoiceReview(getApplication()).recheck()
+                        .also { if (it.matched > 0 || it.merged > 0) runCatching { archive.sync(speakers, force = true) } }
+                }
+            }
+            if (r.matched > 0 || r.merged > 0) {
+                _recheckNote.value = recheckText(r)
+                loadDay(_day.value.day)
+                loadPeople()
+                _conv.value.conversation?.let { openConversation(it.id, keepPlayer = true) }
+                _person.value.person?.let { openPerson(it.id) }
+            }
+            if (_review.value != null) loadReviewNow()
+        }
     }
 
     private fun recheckText(r: net.boswell.phone.speakers.VoiceReview.Recheck): String = listOfNotNull(
@@ -430,7 +462,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     private fun act(block: () -> Unit) = viewModelScope.launch {
         withContext(Dispatchers.IO) {
             block()
-            archive.sync(speakers, force = true)
+            runCatching { archive.sync(speakers, force = true) }
         }
         loadDay(_day.value.day)
         loadPeople()
