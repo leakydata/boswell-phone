@@ -190,10 +190,19 @@ class CaptureService : LifecycleService() {
         }
     }
 
+    /**
+     * The Omi by address, always as a random LE address (it advertises a static random
+     * one). getRemoteDevice lets Android guess the type from whatever it saw last, and once
+     * it has the address down as public (e.g. after the system pairing screen listed the
+     * Omi) every connection times out with status 147 while the Omi advertises right there.
+     */
+    private fun omiDevice(adapter: android.bluetooth.BluetoothAdapter, address: String) =
+        adapter.getRemoteLeDevice(address, android.bluetooth.BluetoothDevice.ADDRESS_TYPE_RANDOM)
+
     /** One connection, from connect to loss. Always ends by throwing. */
     private suspend fun session(address: String, waitForReturn: Boolean = false) {
         val adapter = getSystemService(BluetoothManager::class.java).adapter
-        val device = adapter.getRemoteDevice(address)
+        val device = omiDevice(adapter, address)
         CaptureRepository.update { it.copy(link = Link.CONNECTING, nextRetryMillis = null) }
         CaptureRepository.log("connecting to $address")
 
@@ -593,7 +602,7 @@ class CaptureService : LifecycleService() {
         try {
             // Anything a previous visit spooled but did not convert.
             withContext(audioThread) { drainSpools(deviceId) }
-            val device = getSystemService(BluetoothManager::class.java).adapter.getRemoteDevice(address)
+            val device = omiDevice(getSystemService(BluetoothManager::class.java).adapter, address)
             CaptureRepository.update { it.copy(link = Link.SYNCING, sync = SyncStatus(0, 0, 0.0, "connecting")) }
             CaptureRepository.log("sync: connecting to $address")
             val conn = OmiConnection(this@CaptureService, device, onAudio = {})
