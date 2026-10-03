@@ -175,7 +175,10 @@ class CaptureService : LifecycleService() {
                     // It was working: one quick direct try, then wait for it.
                     backoffMs = BACKOFF_MIN_MS; waitForReturn = false
                 } else {
-                    waitForReturn = true
+                    // Alternate: wait with auto-connect, then one direct try, then wait again.
+                    // Auto-connect alone once sat for over ten minutes while the Omi
+                    // advertised right beside the phone (2026-10-02); a direct try gets it.
+                    waitForReturn = !waitForReturn
                     // Spaced retries only when attempts fail at once (Bluetooth off,
                     // the stack refusing): auto-connect does the waiting otherwise.
                     backoffMs = if (lasted < 3_000) (backoffMs * 2).coerceAtMost(BACKOFF_MAX_MS) else 2_000L
@@ -203,9 +206,9 @@ class CaptureService : LifecycleService() {
             CaptureRepository.update { it.copy(link = Link.AWAY) }
             CaptureRepository.log("waiting for the Omi to come back in range")
         }
-        // Auto-connect waits (up to 20 min, then the request is renewed) and fires
-        // when the Omi is back; a direct attempt gives up after 30 s.
-        conn.connect(timeoutMs = if (waitForReturn) 20 * 60_000L else 30_000L, autoConnect = waitForReturn)
+        // Auto-connect waits (up to 3 min, then a direct try, then it's renewed) and
+        // fires when the Omi is back; a direct attempt gives up after 30 s.
+        conn.connect(timeoutMs = if (waitForReturn) 3 * 60_000L else 30_000L, autoConnect = waitForReturn)
 
         val codec = runCatching { conn.read(OmiUuids.CODEC)[0].toInt() and 0xff }.getOrNull()
         val frameSamples = OmiUuids.CODEC_FRAME_SAMPLES[codec] ?: 320
