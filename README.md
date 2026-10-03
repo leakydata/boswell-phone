@@ -86,6 +86,9 @@ one day merge.
   is checked again.
 - **Link people to your contacts**: numbers, emails and birthdays come from your phone's
   contacts, and voices get names.
+- **Boswell knows its own voice**: when it reads an answer aloud and the Omi hears it, those
+  words are labeled **Boswell**, matched by when it spoke and what it said, and kept out of
+  the listening assistant, voice triggers, voiceprints and who-talked stats.
 
 ### 🤖 An assistant with your day as context
 Every conversation gets a **title and a one-line summary**, so a day reads at a glance.
