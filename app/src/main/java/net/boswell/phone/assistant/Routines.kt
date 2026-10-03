@@ -81,11 +81,11 @@ class RoutinesWorker(context: Context, params: WorkerParameters) : CoroutineWork
         val text = try { Assistant(c).lines(archive, speakers, last, now()) } finally { archive.close(); speakers.close() }
         prefs.edit().putLong("noticed_until", now().toLong()).apply()
         if (text.lines().count { it.isNotBlank() } < 3) return
-        val key = Secrets.get(c, Secrets.OPENROUTER) ?: return
-        val model = AssistantPrefs.model(c)
+        val llm = Llm.forAssistant(c) ?: return
+        val model = llm.name
         val me = AssistantPrefs.owner(c)?.let { id -> SpeakerStore(c).use { it.nameOf(id) } } ?: "the user"
         val reply = runCatching {
-            Llm(key, model).chat(listOf(
+            llm.chat(listOf(
                 Llm.system("From this transcript (lines marked (me) are $me), extract JSON only, no prose: " +
                     "{\"promises\":[{\"by\":\"me\" or a name,\"to\":\"me\" or a name,\"what\":\"short, actionable\",\"due\":\"YYYY-MM-DDTHH:MM or null\"}]," +
                     "\"facts\":[{\"person\":\"name\",\"fact\":\"lasting fact: family, birthday, job, likes, plans\"}]}. " +

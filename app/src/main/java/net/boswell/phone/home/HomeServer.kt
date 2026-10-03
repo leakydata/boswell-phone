@@ -41,6 +41,30 @@ object HomeServer {
     enum class Fallback { PHONE, WAIT }
 
     fun url(c: Context): String? = p(c).getString("home_url", null)
+
+    /**
+     * Paired over plain HTTP (http://computer.tailnet.ts.net:8765) but the server now has
+     * HTTPS too (`tailscale serve`, a real certificate): move to https://computer.tailnet.ts.net
+     * by ourselves, no pairing again. Tried at most every half hour; the key stays the same.
+     */
+    private fun preferHttps(c: Context) {
+        val now = url(c) ?: return
+        val uri = runCatching { URI(now) }.getOrNull() ?: return
+        if (uri.scheme != "http" || uri.host?.endsWith(".ts.net") != true) return
+        val last = p(c).getLong("home_https_tried", 0L)
+        if (System.currentTimeMillis() - last < 30 * 60_000L) return
+        p(c).edit().putLong("home_https_tried", System.currentTimeMillis()).apply()
+        val https = "https://${uri.host}"
+        runCatching {
+            val conn = open("$https/v1/health", "GET", 5_000)
+            val ok = conn.responseCode == 200 &&
+                json.parseToJsonElement(conn.inputStream.readBytes().decodeToString()).jsonObject["name"]?.jsonPrimitive?.contentOrNull == "Boswell Server"
+            if (ok) {
+                p(c).edit().putString("home_url", https).commit()
+                net.boswell.phone.capture.CaptureRepository.log("home server: moved to $https")
+            }
+        }
+    }
     fun paired(c: Context) = url(c) != null && Secrets.get(c, KEY) != null
     fun enabled(c: Context) = paired(c) && p(c).getBoolean("home_enabled", false)
     fun setEnabled(c: Context, on: Boolean) = p(c).edit().putBoolean("home_enabled", on).apply()
@@ -95,6 +119,7 @@ object HomeServer {
 
     /** Is it up? Returns a one-line description, or throws [Unavailable]. */
     fun health(c: Context): String {
+        preferHttps(c)
         val base = url(c) ?: throw Unavailable("not paired")
         val t0 = System.currentTimeMillis()
         return try {
@@ -105,6 +130,23 @@ object HomeServer {
         } catch (e: Exception) {
             throw Unavailable(e.message ?: "unreachable")
         }
+    }
+
+    /**
+     * The home server's own AI (a model in Ollama, for the assistant): a one-line description
+     * like "gemma4:e4b · ready", or throws [Unavailable] saying why it can't answer.
+     */
+    fun llm(c: Context): String {
+        preferHttps(c)
+        val base = url(c) ?: throw Unavailable("not paired")
+        val o = try {
+            val conn = open("$base/v1/llm", "GET", 8_000)
+            if (conn.responseCode == 404) throw Unavailable("this server is too old for that: update Boswell Server")
+            json.parseToJsonElement(conn.inputStream.readBytes().decodeToString()).jsonObject
+        } catch (e: Unavailable) { throw e } catch (e: Exception) { throw Unavailable(e.message ?: "unreachable") }
+        val model = o["model"]?.jsonPrimitive?.contentOrNull ?: "?"
+        if (o["available"]?.jsonPrimitive?.contentOrNull != "true") throw Unavailable(o["reason"]?.jsonPrimitive?.contentOrNull ?: "$model isn't available")
+        return model + if (o["loaded"]?.jsonPrimitive?.contentOrNull == "true") " · loaded and ready" else " · ready (the first answer loads it, which takes a while)"
     }
 
     @Serializable data class HWord(val text: String, val start: Double, val end: Double)
@@ -151,6 +193,7 @@ object HomeServer {
      * [hotwords] are names and words the recognizer should listen for.
      */
     fun analyze(c: Context, audio: File, clip: String, voiceModel: String, hotwords: List<String>): Result {
+        preferHttps(c)
         val base = url(c) ?: throw Unavailable("not paired")
         val key = Secrets.get(c, KEY) ?: throw Unavailable("not paired", notPaired = true)
         val conn = try {

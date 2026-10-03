@@ -46,7 +46,7 @@ private data class UsageView(
     val today: AssistantStore.Usage, val week: AssistantStore.Usage, val month: AssistantStore.Usage,
     val byPurpose: List<Triple<String, Int, Double>>, val perDay: List<Pair<LocalDate, Double>>,
     val watcherToday: Double, val budget: Double, val key: Llm.KeyInfo?,
-    val lastMonth: AssistantStore.Usage, val monthDays: Int, val dayOfMonth: Int,
+    val lastMonth: AssistantStore.Usage, val monthDays: Int, val dayOfMonth: Int, val homeMonth: Int = 0,
 )
 
 private fun purposeName(p: String) = when (p) {
@@ -89,7 +89,7 @@ fun UsageScreen(onBack: () -> Unit) {
                     watcherToday = s.spentToday("watcher"), budget = AssistantPrefs.budget(ctx),
                     key = Secrets.get(ctx, Secrets.OPENROUTER)?.let { Llm(it, AssistantPrefs.model(ctx)).keyInfo() },
                     lastMonth = s.usage(start(today.withDayOfMonth(1).minusMonths(1)), month),
-                    monthDays = today.lengthOfMonth(), dayOfMonth = today.dayOfMonth,
+                    monthDays = today.lengthOfMonth(), dayOfMonth = today.dayOfMonth, homeMonth = s.homeCalls(month),
                 )
             } finally { s.close() }
         }
@@ -175,6 +175,8 @@ fun UsageScreen(onBack: () -> Unit) {
                             Text("$n · ${money(c)}", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         if (u.month.calls > 0) Text("About ${money(u.month.cost / u.month.calls)} per call on average · ${u.month.errors} failed",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (u.homeMonth > 0) Text("${u.homeMonth} of these answered by your home server, free",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }

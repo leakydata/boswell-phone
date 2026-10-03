@@ -19,7 +19,7 @@ class TriggerEngine(private val context: Context) {
     /** [force] skips the master switch and start time (debug builds use it to test without changing settings). */
     fun run(t: Transcript, clipStarted: Double, force: Boolean = false) {
         if (!force && (!Triggers.enabled(context) || clipStarted < Triggers.since(context))) return
-        if (Secrets.get(context, Secrets.OPENROUTER) == null) return
+        if (Llm.forAssistant(context) == null) return
         val triggers = Triggers.all(context).filter { it.enabled }
         if (triggers.isEmpty() || t.segments.isEmpty()) return
         val owner = AssistantPrefs.owner(context)

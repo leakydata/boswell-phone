@@ -57,7 +57,7 @@ class Assistant(private val context: Context) {
         for (d in MoreTools(context).defs()) add(d)
     }
 
-    fun ready(): Boolean = Secrets.get(context, Secrets.OPENROUTER) != null
+    fun ready(): Boolean = Llm.forAssistant(context) != null
 
     /**
      * Answer one question. [source] is how it was asked (typed, button, …).
@@ -68,9 +68,8 @@ class Assistant(private val context: Context) {
 
     fun ask(question: String, source: String, instruction: String? = null, saidAt: Double? = null, fileOnly: Boolean = source == CAPTURE, display: String? = null): Answer {
         currentQuestion = if (source == "typed" || source == "button") question else null
-        val key = Secrets.get(context, Secrets.OPENROUTER) ?: return Answer("Add an OpenRouter key under Device → Assistant first.", 0.0, true)
-        val model = AssistantPrefs.model(context)
-        val llm = Llm(key, model)
+        val llm = Llm.forAssistant(context) ?: return Answer("Add an OpenRouter key under Device → Assistant first.", 0.0, true)
+        val model = llm.name
         val store = AssistantStore(context)
         val archive = Archive(context)
         val speakers = SpeakerStore(context)

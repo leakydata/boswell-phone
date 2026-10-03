@@ -246,8 +246,9 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                 var dbl by remember { mutableStateOf(net.boswell.phone.assistant.AssistantPrefs.doubleTap(ctx2)) }
                 val owner = net.boswell.phone.assistant.AssistantPrefs.owner(ctx2)
                 val ownerName = ui.people.firstOrNull { it.id == owner }?.name
-                Text("Questions and hints go to a model through OpenRouter as text; audio never leaves the phone.",
+                Text("Questions and hints go to a model as text (through OpenRouter, or on your home server); audio never leaves the phone.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                AiWhereSetting()
                 if (hasKey) Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("OpenRouter key saved", Modifier.weight(1f), color = MaterialTheme.colorScheme.primary)
                     TextButton(onClick = { net.boswell.phone.assistant.Secrets.put(ctx2, net.boswell.phone.assistant.Secrets.OPENROUTER, null); hasKey = false }) { Text("Remove") }
@@ -612,6 +613,62 @@ private fun VocabularyDialog(onDismiss: () -> Unit) {
     )
 }
 
+/**
+ * Where the AI runs: OpenRouter, or the model on the paired home server (Ollama on
+ * your computer: free, private, slower) -- with a fallback like recordings have.
+ * Offered only while a home server is paired.
+ */
+@Composable
+private fun AiWhereSetting() {
+    val ctx = LocalContext.current
+    if (!net.boswell.phone.home.HomeServer.paired(ctx)) return
+    val scope = rememberCoroutineScope()
+    val P = net.boswell.phone.assistant.AssistantPrefs
+    var where by remember { mutableStateOf(P.where(ctx)) }
+    var fallback by remember { mutableStateOf(P.homeFallback(ctx)) }
+    var status by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    Text("Where the AI runs", style = MaterialTheme.typography.bodyLarge)
+    Row {
+        for ((w, label) in listOf(net.boswell.phone.assistant.AssistantPrefs.Where.OPENROUTER to "OpenRouter", net.boswell.phone.assistant.AssistantPrefs.Where.HOME to "Home server")) {
+            FilterChip(selected = where == w, onClick = { where = w; P.setWhere(ctx, w); status = null }, label = { Text(label) },
+                modifier = Modifier.padding(end = 6.dp))
+        }
+    }
+    if (where == net.boswell.phone.assistant.AssistantPrefs.Where.OPENROUTER) {
+        Text("A large model in the cloud: fast and capable, a fraction of a cent per question.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        return
+    }
+    Text("Questions, voice triggers, hints, titles, briefs and recaps go to a model on your computer instead: free, and the text stays at home. " +
+        "It's smaller than the cloud models, so answers can be plainer, and slower while your computer is busy. " +
+        "Web searches still go to OpenRouter (only it can search the web); without an OpenRouter key the assistant answers from what it knows.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Text("When your computer can't answer", style = MaterialTheme.typography.bodyMedium)
+    Row {
+        for ((f, label) in listOf(net.boswell.phone.assistant.AssistantPrefs.HomeFallback.OPENROUTER to "Use OpenRouter", net.boswell.phone.assistant.AssistantPrefs.HomeFallback.SKIP to "Skip")) {
+            FilterChip(selected = fallback == f, onClick = { fallback = f; P.setHomeFallback(ctx, f) }, label = { Text(label) },
+                modifier = Modifier.padding(end = 6.dp))
+        }
+    }
+    Text(if (fallback == net.boswell.phone.assistant.AssistantPrefs.HomeFallback.SKIP) "Nothing goes to the cloud: questions say home can't be reached, and titles and hints wait for next time."
+        else if (!net.boswell.phone.assistant.Secrets.has(ctx, net.boswell.phone.assistant.Secrets.OPENROUTER)) "OpenRouter answers instead -- once you add its key below."
+        else "OpenRouter answers instead until home is back.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        OutlinedButton(enabled = !busy, onClick = {
+            busy = true
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                status = runCatching { "Home AI: " + net.boswell.phone.home.HomeServer.llm(ctx) }
+                    .getOrElse { "Home AI can't answer: ${it.message}" }
+                busy = false
+            }
+        }) { Text("Test home AI") }
+        if (busy) LinearProgressIndicator(Modifier.weight(1f).padding(start = 8.dp))
+    }
+    status?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+}
+
 /** The assistant's own routines and reach: brief, recap, promises, meeting briefs, the web, contacts. */
 @Composable
 private fun AssistantRoutines() {
@@ -653,7 +710,8 @@ private fun AssistantRoutines() {
     Toggle("Notice promises", "Every few hours, promises in what was said (yours and others') become to-dos under Promises, and facts about people are remembered.",
         promises) { promises = it; P.setPromises(ctx, it) }
     Toggle("Brief before meetings", "Shortly before a calendar event, what was last said about its people or topic.", meetings) { meetings = it; P.setMeetingBriefs(ctx, it) }
-    Toggle("Look things up on the web", "Weather, news, facts and opening hours, when you ask. A few cents a search at most.", web) { web = it; P.setWebSearch(ctx, it) }
+    Toggle("Look things up on the web", "Weather, news, facts and opening hours, when you ask. A few cents a search at most." +
+        if (P.where(ctx) == net.boswell.phone.assistant.AssistantPrefs.Where.HOME) " Searches go through OpenRouter even when the AI runs at home." else "", web) { web = it; P.setWebSearch(ctx, it) }
 
 }
 

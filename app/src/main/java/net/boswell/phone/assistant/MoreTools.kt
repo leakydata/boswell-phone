@@ -178,11 +178,12 @@ class MoreTools(private val context: Context, private val userWords: String? = n
 
     /** One call to a web-enabled model (OpenRouter's web plugin, a few cents at most), logged like any other. */
     private fun webSearch(query: String): String {
-        val key = Secrets.get(context, Secrets.OPENROUTER) ?: return "no OpenRouter key"
+        // OpenRouter's web plugin: only OpenRouter can search, even when the assistant runs at home.
+        val llm = Llm.forAssistant(context, web = true) ?: return "web search needs an OpenRouter key (Device → Assistant); answer from what you know and say it may be out of date"
         if (!AssistantPrefs.webSearch(context)) return "web search is turned off in settings"
-        val model = AssistantPrefs.model(context)
+        val model = llm.name
         val reply = runCatching {
-            Llm(key, model).chat(listOf(
+            llm.chat(listOf(
                 Llm.system("Answer from the web, briefly (2-4 sentences), for someone on the go. It is ${LocalDateTime.now()} in ${zone.id}. End with the main source's site name."),
                 Llm.user(query)), maxTokens = 400, extra = mapOf("plugins" to kotlinx.serialization.json.buildJsonArray {
                 add(kotlinx.serialization.json.buildJsonObject { put("id", kotlinx.serialization.json.JsonPrimitive("web")); put("max_results", kotlinx.serialization.json.JsonPrimitive(3)) })

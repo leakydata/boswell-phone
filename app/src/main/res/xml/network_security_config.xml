@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Everything is HTTPS, except the home server over Tailscale: its traffic is already
-     end-to-end encrypted by WireGuard, and the computer has no public certificate. -->
+<!-- Everything is HTTPS, except a home server over Tailscale without `tailscale serve`: its
+     traffic is already end-to-end encrypted by WireGuard, but the computer has no certificate.
+     One that has HTTPS is moved to it (HomeServer.preferHttps), so this is only for those. -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
     <domain-config cleartextTrafficPermitted="true">

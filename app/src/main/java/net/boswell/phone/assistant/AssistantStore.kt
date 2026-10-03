@@ -53,9 +53,10 @@ class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db
 
     private fun now() = System.currentTimeMillis() / 1000.0
 
+    /** [model] is what was asked for; the reply's own model wins (it says "home: …" when the home server answered). */
     fun logCall(purpose: String, model: String, reply: LlmReply?, error: String? = null) {
         writableDatabase.insert("calls", null, ContentValues().apply {
-            put("at", now()); put("purpose", purpose); put("model", model)
+            put("at", now()); put("purpose", purpose); put("model", reply?.model?.takeIf { it.isNotEmpty() } ?: model)
             put("prompt_tokens", reply?.promptTokens ?: 0); put("completion_tokens", reply?.completionTokens ?: 0)
             put("cost", reply?.cost ?: 0.0); put("error", error)
         })
@@ -78,6 +79,10 @@ class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db
     fun byPurpose(from: Double): List<Triple<String, Int, Double>> = readableDatabase.rawQuery(
         "SELECT purpose, COUNT(*), COALESCE(SUM(cost),0) FROM calls WHERE at >= ? GROUP BY purpose ORDER BY SUM(cost) DESC",
         arrayOf(from.toString())).use { c -> buildList { while (c.moveToNext()) add(Triple(c.getString(0), c.getInt(1), c.getDouble(2))) } }
+
+    /** Calls answered by the home server since [from] (logged as "home: <model>", free). */
+    fun homeCalls(from: Double): Int = readableDatabase.rawQuery(
+        "SELECT COUNT(*) FROM calls WHERE at >= ? AND model LIKE 'home%'", arrayOf(from.toString())).use { c -> c.moveToFirst(); c.getInt(0) }
 
     /** Cost per local day for the last [days] days, oldest first, zeros included. */
     fun perDay(days: Int): List<Pair<LocalDate, Double>> {
@@ -121,6 +126,19 @@ object AssistantPrefs {
 
     fun model(c: Context): String = p(c).getString("llm_model", null) ?: Llm.DEFAULT_MODEL
     fun setModel(c: Context, m: String) = p(c).edit().putString("llm_model", m.trim().ifEmpty { Llm.DEFAULT_MODEL }).apply()
+
+    /** Where the AI runs: OpenRouter, or the model on the paired home server (free, and nothing leaves the house). */
+    enum class Where { OPENROUTER, HOME }
+    /** When home can't answer: ask OpenRouter instead, or skip (the question fails, background work waits for next time). */
+    enum class HomeFallback { OPENROUTER, SKIP }
+
+    /** Home only while a home server is paired; unpairing quietly means OpenRouter again. */
+    fun where(c: Context): Where =
+        if (!net.boswell.phone.home.HomeServer.paired(c)) Where.OPENROUTER
+        else runCatching { Where.valueOf(p(c).getString("ai_where", null)!!) }.getOrDefault(Where.OPENROUTER)
+    fun setWhere(c: Context, w: Where) = p(c).edit().putString("ai_where", w.name).apply()
+    fun homeFallback(c: Context): HomeFallback = runCatching { HomeFallback.valueOf(p(c).getString("ai_home_fallback", null)!!) }.getOrDefault(HomeFallback.OPENROUTER)
+    fun setHomeFallback(c: Context, f: HomeFallback) = p(c).edit().putString("ai_home_fallback", f.name).apply()
 
     /** The person who is "me": the watcher listens for them, answers address them. */
     fun owner(c: Context): Long? = p(c).getLong("owner_person", -1).takeIf { it >= 0 }

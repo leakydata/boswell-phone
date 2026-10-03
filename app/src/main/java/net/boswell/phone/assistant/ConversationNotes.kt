@@ -24,7 +24,7 @@ object ConversationNotes {
 
     fun run(c: Context): Int {
         if (!AssistantPrefs.titles(c)) return 0
-        val key = Secrets.get(c, Secrets.OPENROUTER) ?: return 0
+        val llm = Llm.forAssistant(c) ?: return 0
         val now = System.currentTimeMillis() / 1000.0
         val archive = Archive(c); val speakers = SpeakerStore(c); val store = AssistantStore(c)
         var made = 0
@@ -40,7 +40,7 @@ object ConversationNotes {
                 val text = Assistant(c).lines(archive, speakers, conv.started - 1, conv.ended + 1)
                 if (text.lines().count { it.isNotBlank() } < MIN_LINES) continue
                 val reply = runCatching {
-                    Llm(key, AssistantPrefs.model(c)).chat(listOf(
+                    llm.chat(listOf(
                         Llm.system("Title and summarize this conversation for the user's own diary. Lines marked (me) are the user. Reply with JSON only: " +
                             "{\"title\":\"at most 7 words, about the topic, e.g. Planning Saturday's climb with Sam\"," +
                             "\"summary\":\"one sentence, at most 25 words, what was said or decided, e.g. You agreed to meet Sam at the trailhead at 8\"}. " +
@@ -49,7 +49,7 @@ object ConversationNotes {
                             "If it's TV, music or chatter with nothing to it, say so plainly."),
                         Llm.user(text.take(8_000))), maxTokens = 400, temperature = 0.2)
                 }
-                store.logCall("titles", AssistantPrefs.model(c), reply.getOrNull(), reply.exceptionOrNull()?.message)
+                store.logCall("titles", llm.name, reply.getOrNull(), reply.exceptionOrNull()?.message)
                 val body = reply.getOrNull()?.text ?: continue
                 val o = runCatching { Llm.json.parseToJsonElement(body.substring(body.indexOf('{'), body.lastIndexOf('}') + 1)).jsonObject }.getOrNull() ?: continue
                 val title = o["title"]?.jsonPrimitive?.contentOrNull?.trim()?.trim('"')?.takeIf { it.isNotBlank() } ?: continue

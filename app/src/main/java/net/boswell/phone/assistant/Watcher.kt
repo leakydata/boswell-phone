@@ -23,7 +23,7 @@ class Watcher(private val context: Context) {
     fun tick() {
         if (!AssistantPrefs.watcher(context)) return
         val owner = AssistantPrefs.owner(context) ?: return
-        val key = Secrets.get(context, Secrets.OPENROUTER) ?: return
+        val llm = Llm.forAssistant(context) ?: return
         val store = AssistantStore(context)
         val archive = Archive(context)
         val speakers = SpeakerStore(context)
@@ -37,7 +37,7 @@ class Watcher(private val context: Context) {
             lastOwnerLine = newest
             val me = speakers.nameOf(owner) ?: "the user"
             val context15 = Assistant(context).lines(archive, speakers, System.currentTimeMillis() / 1000.0 - 15 * 60)
-            val model = AssistantPrefs.model(context)
+            val model = llm.name
             val prompt = """
                 You quietly follow ${me}'s conversations through their phone and may offer ONE short, genuinely useful hint as a notification: a fact they seem to be reaching for, a correction of something clearly wrong, a reminder of something they said they'd do, or a helpful next step. Lines marked (me) are ${me}.
                 Most of the time there is nothing worth interrupting for. Default to silence. Never comment on the conversation itself, never be chatty, never repeat a hint.
@@ -47,7 +47,7 @@ class Watcher(private val context: Context) {
                 $context15
             """.trimIndent()
             val reply = try {
-                Llm(key, model).chat(listOf(Llm.user(prompt)), maxTokens = 200, temperature = 0.2)
+                llm.chat(listOf(Llm.user(prompt)), maxTokens = 200, temperature = 0.2)
             } catch (e: Exception) {
                 store.logCall(PURPOSE, model, null, e.message); return
             }
