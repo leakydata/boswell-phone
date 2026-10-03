@@ -68,6 +68,12 @@ one day merge.
 - **Words Boswell should know**: names and terms it nearly gets right ("omi",
   "Bozwell") are corrected, conservatively, and can be undone.
 - **Compare with the cloud** shows, word by word, where the phone and the cloud disagree.
+- **Or on your own computer**: pair with [Boswell Server](https://github.com/leakydata/boswell-server)
+  (scan its QR code in Device → Home server) and a GPU at home does the transcription,
+  speakers, voiceprints and sounds over [Tailscale](https://tailscale.com) — recordings
+  close every 10 seconds of speech for near-live transcripts, your vocabulary goes along
+  as hot words, and the phone saves its battery. Your people and their voices stay on
+  the phone. When home can't be reached, the phone does the work itself or waits.
 
 ### 🗣️ Voices — who said what
 - Speaker diarization and **voiceprints compatible with desktop Boswell** (cosine
@@ -106,7 +112,8 @@ you choose, and **restore** it in setup on a new phone.
 
 ### 🔒 Private by default
 Everything is recorded, transcribed, identified and stored **on the phone**. Nothing
-leaves it unless you turn on the assistant (text only) or cloud transcription — each
+leaves it unless you turn on the assistant (text only), cloud transcription, or your own
+home server (over your private Tailscale network) — each
 spelled out where you switch it on, each with its cost on an AI-usage screen. No
 account, no server, no telemetry.
 
