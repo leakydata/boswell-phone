@@ -105,6 +105,10 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
             prefs.edit().putBoolean(wave, true).putBoolean("orphans_attributed_v1", true).apply()
             refresh(force = true)
         }
+        // You are never a TV: undo it if "It's a TV" on one of your lines once marked all of you.
+        viewModelScope.launch(Dispatchers.IO) {
+            owner()?.let { me -> if (speakers.person(me)?.kind == "media") { speakers.setKind(me, null); refresh(force = true) } }
+        }
         refresh()
         // New transcripts and new clips both change what the day shows.
         viewModelScope.launch { ProcessingRepository.state.distinctUntilChangedBy { it.done to it.running }.collect { refresh() } }
@@ -319,9 +323,19 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         else fileVoice(conversation, key, person.id)
     }
 
-    /** A screen talking. Kept and still collected, never given a person's name. */
+    /**
+     * A screen talking. Kept and still collected, never given a person's name.
+     * A voice already put down as someone is moved off them: it's this voice that
+     * was the TV, not the person, who'd otherwise show as TV everywhere.
+     */
     fun markMedia(conversation: Long, key: String) = act {
         val v = _conv.value.voices[key]
+        if (v?.named == true) {
+            val p = speakers.newPerson(null)
+            fileVoice(conversation, key, p)
+            speakers.setKind(p, "media")
+            return@act
+        }
         val pid = v?.personId ?: run {
             val (emb, secs, clip) = archive.voiceOf(conversation, key) ?: return@act
             speakers.newPerson(null).also { p ->
@@ -354,7 +368,8 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         }
 
     fun namePerson(id: Long, name: String) = actVoices { speakers.name(id, name) }
-    fun setKind(id: Long, kind: String?) = act { speakers.setKind(id, kind) }
+    fun setKind(id: Long, kind: String?) = act { if (kind != "media" || id != owner()) speakers.setKind(id, kind) }
+    private fun owner() = net.boswell.phone.assistant.AssistantPrefs.owner(getApplication())
     fun unnameGroup(personId: Long, group: Long) = actVoices { speakers.unnameGroup(personId, group) }
 
     /** An identity action, then another look at every voice with what is now known. */
@@ -388,7 +403,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     /** A screen talking: kept and still collected, never given a person's name, and no longer asked about. */
     fun reviewIsMedia(item: ReviewItem) {
         _review.value = _review.value?.filter { it.s.key != item.s.key }
-        act { item.s.clusterId?.let { speakers.setKind(it, "media") } }
+        act { item.s.clusterId?.takeIf { it != owner() }?.let { speakers.setKind(it, "media") } }
     }
 
     fun answerReview(item: ReviewItem, yes: Boolean) {
