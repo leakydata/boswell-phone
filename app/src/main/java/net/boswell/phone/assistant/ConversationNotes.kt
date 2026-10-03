@@ -12,7 +12,9 @@ import java.time.LocalDate
  * A short title and a one-sentence summary for each finished conversation,
  * so a day reads as "Planning Saturday's climb with Sam" instead of its first
  * few words. One small model call per conversation (about a tenth of a cent),
- * made again only if the conversation grows. Run with the assistant's routines.
+ * made again only if the conversation grows, or its recordings were
+ * transcribed again (a Redo, catching up at home) and more than
+ * CarryOver.NOTES_CHANGE of its words changed. Run with the assistant's routines.
  */
 object ConversationNotes {
     /** At most this many a run, newest first, so a big backlog spreads out. */
@@ -35,8 +37,11 @@ object ConversationNotes {
                 .filter { now - it.ended > Archive.CONVERSATION_GAP * 3 }
                 // A minute or more: shorter ones read fine from their opening words.
                 .filter { it.ended - it.started >= MIN_SECONDS }
+            val again = redone(c, archive, store)
             val notes = store.notes(convs.map { it.id })
-            for (conv in convs.filter { notes[it.id]?.let { n -> n.clips != it.clips || n.made < PROMPT_SINCE } ?: true }.take(PER_RUN)) {
+            val todo = (again.map { it.first } + convs.filter { notes[it.id]?.let { n -> n.clips != it.clips || n.made < PROMPT_SINCE } ?: true })
+                .distinctBy { it.id }.take(PER_RUN)
+            for (conv in todo) {
                 val text = Assistant(c).lines(archive, speakers, conv.started - 1, conv.ended + 1)
                 if (text.lines().count { it.isNotBlank() } < MIN_LINES) continue
                 val reply = runCatching {
@@ -55,9 +60,35 @@ object ConversationNotes {
                 val title = o["title"]?.jsonPrimitive?.contentOrNull?.trim()?.trim('"')?.takeIf { it.isNotBlank() } ?: continue
                 val summary = o["summary"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
                 store.setNote(conv.id, conv.clips, SpeechText.plain(title).take(80), SpeechText.plain(summary).take(240))
+                again.firstOrNull { it.first.id == conv.id }?.let { net.boswell.phone.process.Redone.forget(c, it.second) }
                 made++
             }
         } finally { archive.close(); speakers.close(); store.close() }
         return made
+    }
+
+    /**
+     * Conversations with notes whose recordings were transcribed again, once
+     * none of them is still waiting to be: those whose words changed by more
+     * than CarryOver.NOTES_CHANGE (word-level, the whole conversation's), with
+     * their redone clips, to make again. The rest are let go as they are.
+     */
+    private fun redone(c: Context, archive: Archive, store: AssistantStore): List<Pair<net.boswell.phone.archive.Conversation, List<String>>> {
+        val before = net.boswell.phone.process.Redone.before(c)
+        if (before.isEmpty()) return emptyList()
+        val unsettled = net.boswell.phone.process.Redone.heldClips(c) + net.boswell.phone.process.CatchUp.queue(c, archive)
+        val out = mutableListOf<Pair<net.boswell.phone.archive.Conversation, List<String>>>()
+        for ((id, clips) in before.keys.groupBy { archive.conversationOf(it) }) {
+            val conv = id?.let(archive::conversation)
+            if (conv == null) { net.boswell.phone.process.Redone.forget(c, clips); continue }
+            val all = archive.clipsOf(conv.id).map { it.name }
+            if (all.any { it in unsettled }) continue
+            val was = all.joinToString(" ") { before[it] ?: archive.clipText(it) }
+            val now = all.joinToString(" ") { archive.clipText(it) }
+            val qualifies = conv.ended - conv.started >= MIN_SECONDS && store.notes(listOf(conv.id)).isNotEmpty()
+            if (qualifies && net.boswell.phone.process.CarryOver.wordsChanged(was, now) > net.boswell.phone.process.CarryOver.NOTES_CHANGE) out += conv to clips
+            else net.boswell.phone.process.Redone.forget(c, clips)
+        }
+        return out
     }
 }

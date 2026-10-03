@@ -108,6 +108,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         net.boswell.phone.assistant.RoutinesWorker.schedule(getApplication())
         net.boswell.phone.backup.AutoBackup.schedule(getApplication())
         net.boswell.phone.speakers.VoiceMigration.schedule(getApplication())
+        net.boswell.phone.process.CatchUp.schedule(getApplication())
         refreshAll()
         viewModelScope.launch { capture.distinctUntilChangedBy { it.clipsWritten }.collect { refreshClips() } }
         viewModelScope.launch { ProcessingRepository.state.distinctUntilChangedBy { it.done to it.running }.collect { refreshClips(); refreshPeople() } }

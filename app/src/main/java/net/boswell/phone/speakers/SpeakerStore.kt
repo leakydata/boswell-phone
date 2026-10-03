@@ -327,6 +327,47 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         } finally { db.endTransaction() }
     }
 
+    /**
+     * A clip transcribed again: what was decided about its voices follows them
+     * to their new labels ([voices], CarryOver.speakers) -- voiceprints, names
+     * given, "not them" answers, Boswell's learned voice -- as CarryOver.relabel
+     * plans. Returns what couldn't follow, in words, for the log.
+     */
+    fun carryOver(clip: String, voices: Map<String, String?>): List<String> {
+        val db = writableDatabase
+        val rows = mutableListOf<net.boswell.phone.process.CarryOver.Row>()
+        val kinds = mapOf(net.boswell.phone.process.CarryOver.VOICEPRINTS to "SELECT v.rowid, v.speaker, v.origin != 'auto' OR p.name IS NOT NULL OR p.kind IS NOT NULL " +
+                "FROM voiceprints v JOIN people p ON p.id = v.person_id WHERE v.clip = ?",
+            "assigned" to "SELECT rowid, speaker, 1 FROM assigned WHERE clip = ?",
+            "rejections" to "SELECT rowid, speaker, 1 FROM rejections WHERE clip = ?",
+            "boswell_voice" to "SELECT rowid, speaker, 0 FROM boswell_voice WHERE clip = ?")
+        for ((table, sql) in kinds) db.rawQuery(sql, arrayOf(clip)).use { c ->
+            while (c.moveToNext()) rows += net.boswell.phone.process.CarryOver.Row(table, c.getLong(0), c.str(1), c.getInt(2) == 1)
+        }
+        val plan = net.boswell.phone.process.CarryOver.relabel(rows, voices)
+        val notes = mutableListOf<String>()
+        db.beginTransaction()
+        try {
+            for (r in plan.unlink) {
+                db.execSQL("UPDATE voiceprints SET speaker = NULL WHERE rowid = ?", arrayOf<Any>(r.id))
+                notes += "$clip ${r.label}: voice not heard again; its voiceprint stays with its person"
+            }
+            for (r in plan.drop) {
+                db.execSQL("DELETE FROM ${r.table} WHERE rowid = ?", arrayOf<Any>(r.id))
+                when (r.table) {
+                    "assigned" -> notes += "$clip ${r.label}: voice not heard again; the name given to it there has nothing to go to"
+                    "rejections" -> notes += "$clip ${r.label}: voice not heard again; its \"not them\" answer has nothing to go to"
+                }
+            }
+            // Last, and in two steps, so two voices that swapped labels never meet on one, nor a voice on a gone one's (assigned and rejections are keyed by it).
+            for ((r, to) in plan.move) db.execSQL("UPDATE ${r.table} SET speaker = ? WHERE rowid = ?", arrayOf<Any>("~$to", r.id))
+            for (t in kinds.keys) db.execSQL("UPDATE $t SET speaker = substr(speaker, 2) WHERE clip = ? AND speaker LIKE '~%'", arrayOf(clip))
+            db.execSQL("DELETE FROM people WHERE name IS NULL AND kind IS NULL AND id NOT IN (SELECT DISTINCT person_id FROM voiceprints)")
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        return notes
+    }
+
     // ------------------------------------------------------------- Boswell
 
     /**

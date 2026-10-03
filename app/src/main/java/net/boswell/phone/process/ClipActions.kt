@@ -25,6 +25,7 @@ object ClipActions {
             File(cdir, "$base.json").delete()
             File(tdir, "$base.json").delete()
         }
+        Redone.delete(context, clips)
         val speakers = SpeakerStore(context)
         val archive = Archive(context)
         try {
@@ -97,10 +98,20 @@ object ClipActions {
         } finally { speakers.close(); archive.close() }
     }
 
-    /** Throw the transcripts away so the background pass transcribes these clips again. Hand corrections go with them. */
+    /**
+     * Transcribe these clips again: each transcript is held aside (Redone.held)
+     * and the background pass does the clip over, carrying over what was done
+     * by hand -- corrected lines, voices named, "not them" answers -- to the
+     * new one (CarryOver). A transcript that recorded an error is just dropped.
+     */
     fun retranscribe(context: Context, clips: Collection<String>) {
         val tdir = ProcessingWorker.transcriptsDir(context)
-        for (name in clips) File(tdir, name.removeSuffix(".wav") + ".json").delete()
+        for (name in clips) {
+            val f = File(tdir, name.removeSuffix(".wav") + ".json")
+            if (!f.exists()) continue
+            val ok = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.isSuccess
+            if (ok) f.renameTo(Redone.held(context, name)) else f.delete()
+        }
         ProcessingWorker.enqueue(context)
     }
 

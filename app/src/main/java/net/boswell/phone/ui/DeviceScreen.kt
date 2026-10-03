@@ -836,6 +836,68 @@ private fun EmailSettings() {
 }
 
 /**
+ * Recordings the phone transcribed itself (home away, or before it was paired),
+ * done again at home: by themselves for the last week (CatchUp), or all of
+ * them with one button, confirmed first, with progress while it runs.
+ */
+@Composable
+private fun CatchUpSection() {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val C = net.boswell.phone.process.CatchUp
+    val run by C.state.collectAsStateWithLifecycle()
+    var auto by remember { mutableStateOf(C.auto(ctx)) }
+    var names by remember { mutableStateOf<List<String>>(emptyList()) }
+    var confirm by remember { mutableStateOf(false) }
+    var asked by remember { mutableStateOf(false) }
+    LaunchedEffect(run.running, run.done) {
+        names = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val speakers = net.boswell.phone.speakers.SpeakerStore(ctx)
+                val archive = net.boswell.phone.archive.Archive(ctx)
+                try { archive.sync(speakers); C.phoneMade(archive) } finally { archive.close(); speakers.close() }
+            }.getOrDefault(emptyList())
+        }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Catch up automatically", style = MaterialTheme.typography.bodyLarge)
+            Text("Recordings from the last ${C.AUTO_DAYS} days that the phone transcribed while your computer couldn't be reached go home again, " +
+                "one at a time, whenever nothing new is waiting. Lines you corrected and voices you named are kept.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = auto, onCheckedChange = { auto = it; C.setAuto(ctx, it) })
+    }
+    val n = names.size
+    // Asked for and not finished: between turns it's waiting, not done -- no second offer.
+    var pending by remember { mutableStateOf(C.asked(ctx)) }
+    LaunchedEffect(run.running, run.done) { pending = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { C.asked(ctx) } }
+    if (n > 0 && !run.running && pending == 0 && !asked) Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("$n recording${if (n == 1) "" else "s"} transcribed on the phone ·", style = MaterialTheme.typography.bodyMedium)
+        TextButton(enabled = !asked, onClick = { confirm = true }) { Text("Redo them at home") }
+    }
+    if (run.running) {
+        val total = run.done + run.left
+        Text("Redoing at home: ${run.done} of $total", style = MaterialTheme.typography.bodyMedium)
+        LinearProgressIndicator(progress = { if (total == 0) 0f else run.done.toFloat() / total }, modifier = Modifier.fillMaxWidth())
+    } else if (asked || pending > 0) Text(
+        (if (pending > 0) "$pending left to redo at home. " else "") + "Continues in a few minutes, while your computer can be reached.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    if (confirm) AlertDialog(onDismissRequest = { confirm = false },
+        title = { Text("Redo $n recording${if (n == 1) "" else "s"} at home?") },
+        text = { Text("Each goes to your computer and is transcribed again there, one at a time, after any new recordings. " +
+            "Lines you corrected, voices you named and your other answers about voices are kept. " +
+            "Titles and summaries are made again where the words changed noticeably.") },
+        confirmButton = { TextButton(onClick = {
+            confirm = false; asked = true
+            val all = names
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) { C.requestAll(ctx, all) }
+        }) { Text("Redo") } },
+        dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } })
+    LaunchedEffect(run.running) { if (run.running) asked = false }
+}
+
+/**
  * Boswell Server on the person's own computer: pair (scan its QR code, or type the
  * address and code), use it for every recording, and choose what happens when
  * home can't be reached.
@@ -891,6 +953,23 @@ private fun HomeServerSection() {
         }
     } else {
         Text("Paired with ${H.url(ctx)}", style = MaterialTheme.typography.bodyMedium)
+        // Recordings went to the phone because home couldn't be reached: say so, and since when.
+        var trouble by remember { mutableStateOf(H.trouble(ctx)) }
+        LaunchedEffect(Unit) { while (true) { trouble = H.trouble(ctx); kotlinx.coroutines.delay(5_000) } }
+        trouble?.let { (since, why) ->
+            val at = java.time.Instant.ofEpochMilli(since).atZone(java.time.ZoneId.systemDefault())
+            val day = if (at.toLocalDate() == java.time.LocalDate.now()) "" else at.format(java.time.format.DateTimeFormatter.ofPattern("MMM d, "))
+            androidx.compose.material3.Surface(shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.errorContainer) {
+                Column(Modifier.padding(12.dp).fillMaxWidth()) {
+                    Text("Can't reach your computer since $day${at.format(java.time.format.DateTimeFormatter.ofPattern("h:mm a"))}",
+                        style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onErrorContainer)
+                    Text(why + if (fallback == net.boswell.phone.home.HomeServer.Fallback.PHONE)
+                            " Meanwhile the phone transcribes recordings itself; they're redone at home once it's back."
+                        else " Recordings wait for it.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
+                }
+            }
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Process recordings at home", style = MaterialTheme.typography.bodyLarge)
@@ -912,6 +991,7 @@ private fun HomeServerSection() {
         Text(if (fallback == net.boswell.phone.home.HomeServer.Fallback.WAIT) "Recordings wait on the phone and go home when it's reachable again: no battery spent on them meanwhile."
             else "The phone transcribes them itself until home is back.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        CatchUpSection()
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(enabled = !busy, onClick = {
                 busy = true

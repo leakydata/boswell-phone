@@ -16,6 +16,7 @@ object Accuracy {
     data class Key(val clip: String, val reference: String, val known: Map<String, String>)
 
     const val PHONE = "Phone"
+    const val HOME = "Home"
 
     fun keys(c: Context): List<Key> = ProcessingWorker.transcriptsDir(c).listFiles { f -> f.extension == "json" }.orEmpty()
         .filter { f -> f.length() < 2_000_000 && f.readText().contains("\"edited\":true") }
@@ -27,7 +28,7 @@ object Accuracy {
             val reference = said.joinToString(" ") { it.text }
             // What the engine that transcribed it wrote: the heard text of corrected lines, the rest as they stand.
             val heard = said.joinToString(" ") { if (it.edited) it.original ?: it.text else it.text }
-            val by = if (t.engine.contains("(cloud)")) CloudAsr.Engine.PARAKEET.label else PHONE
+            val by = if (t.engine.contains("(cloud)")) CloudAsr.Engine.PARAKEET.label else if (t.engine.contains("(home")) HOME else PHONE
             Key(t.clip, reference, mapOf(by to heard))
         }
         .sortedByDescending { it.clip }

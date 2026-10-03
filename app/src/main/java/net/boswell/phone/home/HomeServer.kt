@@ -67,7 +67,10 @@ object HomeServer {
     }
     fun paired(c: Context) = url(c) != null && Secrets.get(c, KEY) != null
     fun enabled(c: Context) = paired(c) && p(c).getBoolean("home_enabled", false)
-    fun setEnabled(c: Context, on: Boolean) = p(c).edit().putBoolean("home_enabled", on).apply()
+    fun setEnabled(c: Context, on: Boolean) {
+        p(c).edit().putBoolean("home_enabled", on).apply()
+        if (on) net.boswell.phone.process.CatchUp.markSince(c)
+    }
     fun fallback(c: Context): Fallback = runCatching { Fallback.valueOf(p(c).getString("home_fallback", null)!!) }.getOrDefault(Fallback.PHONE)
     fun setFallback(c: Context, f: Fallback) = p(c).edit().putString("home_fallback", f.name).apply()
 
@@ -75,6 +78,57 @@ object HomeServer {
         p(c).edit().remove("home_url").remove("home_enabled").apply()
         Secrets.put(c, KEY, null)
     }
+
+    /**
+     * Home couldn't be reached while recordings were waiting: since when (ms) and why, until
+     * the next recording gets through. Otherwise the phone quietly does the work itself and
+     * nobody notices that, say, Tailscale was off all day. After [TROUBLE_NOTICE_MS] it's
+     * also a (silent) notification.
+     */
+    fun trouble(c: Context): Pair<Long, String>? =
+        p(c).getLong("home_trouble_since", 0L).takeIf { it > 0 }?.let { it to (p(c).getString("home_trouble_why", null) ?: "") }
+
+    fun noteTrouble(c: Context, message: String?) {
+        val since = p(c).getLong("home_trouble_since", 0L).takeIf { it > 0 } ?: System.currentTimeMillis()
+        p(c).edit().putLong("home_trouble_since", since).putString("home_trouble_why", explain(message)).apply()
+        if (System.currentTimeMillis() - since >= TROUBLE_NOTICE_MS && !p(c).getBoolean("home_trouble_told", false)) {
+            p(c).edit().putBoolean("home_trouble_told", true).apply()
+            val at = java.time.Instant.ofEpochMilli(since).atZone(java.time.ZoneId.systemDefault())
+                .format(java.time.format.DateTimeFormatter.ofPattern("h:mm a"))
+            val open = android.app.PendingIntent.getActivity(c, TROUBLE_ID,
+                android.content.Intent(c, net.boswell.phone.ui.MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                android.app.PendingIntent.FLAG_IMMUTABLE)
+            val n = androidx.core.app.NotificationCompat.Builder(c, net.boswell.phone.process.Notifications.WORK)
+                .setSmallIcon(net.boswell.phone.R.drawable.ic_stat_mic).setSilent(true).setAutoCancel(true).setContentIntent(open)
+                .setContentTitle("Can't reach your computer since $at")
+                .setContentText(explain(message) + if (fallback(c) == Fallback.PHONE) " The phone is transcribing meanwhile." else " Recordings wait for it.")
+                .setStyle(androidx.core.app.NotificationCompat.BigTextStyle())
+                .build()
+            runCatching { c.getSystemService(android.app.NotificationManager::class.java).notify(TROUBLE_ID, n) }
+        }
+    }
+
+    fun clearTrouble(c: Context) {
+        if (p(c).getLong("home_trouble_since", 0L) == 0L) return
+        p(c).edit().remove("home_trouble_since").remove("home_trouble_why").remove("home_trouble_told").apply()
+        runCatching { c.getSystemService(android.app.NotificationManager::class.java).cancel(TROUBLE_ID) }
+    }
+
+    /** What went wrong, in words someone can act on. */
+    internal fun explain(message: String?): String {
+        val m = message.orEmpty()
+        return when {
+            "resolve host" in m || "No address associated" in m -> "It can't be found on the network. Is Tailscale on, on this phone?"
+            "pair again" in m || "not paired" in m -> "It doesn't know this phone any more: pair again."
+            "timed out" in m || "timeout" in m.lowercase() || "ECONNREFUSED" in m || "Failed to connect" in m || "refused" in m ->
+                "It didn't answer. Is the computer on, and Boswell Server running?"
+            m.isBlank() -> "It didn't answer."
+            else -> "It didn't answer ($m)."
+        }
+    }
+
+    private const val TROUBLE_ID = 6
+    private const val TROUBLE_NOTICE_MS = 10 * 60_000L
 
     /** Couldn't reach the server, or it refused; [notPaired] when the key no longer works. */
     class Unavailable(message: String, val notPaired: Boolean = false) : IOException(message)
@@ -107,6 +161,8 @@ object HomeServer {
                 val token = json.parseToJsonElement(conn.inputStream.readBytes().decodeToString()).jsonObject["token"]!!.jsonPrimitive.content
                 Secrets.put(c, KEY, token)
                 p(c).edit().putString("home_url", base).putBoolean("home_enabled", true).commit()
+                // Recordings from here on that the phone does itself, home away, are caught up later (CatchUp).
+                net.boswell.phone.process.CatchUp.markSince(c)
                 null
             }
             403 -> "The code was wrong or has expired. Show a new one on the server (press p) and try again."

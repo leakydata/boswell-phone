@@ -76,7 +76,8 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
                 !hasKey -> "Cloud transcription needs your OpenRouter key (Device → Assistant)."
                 clips.isEmpty() -> "None of this conversation's recordings still have their sound, so they can't be transcribed again."
                 else -> "Transcribe ${clips.size} recording${if (clips.size == 1) "" else "s"} again with Parakeet in the cloud. Only the speech is sent. " +
-                    "About ${if (cost < 0.01) "less than a cent" else "$%.2f".format(cost)}. Who said what is worked out on the phone again too."
+                    "About ${if (cost < 0.01) "less than a cent" else "$%.2f".format(cost)}. Who said what is worked out on the phone again too; " +
+                    "lines you corrected and voices you named are kept."
             }) },
             confirmButton = { if (hasKey && clips.isNotEmpty()) TextButton(onClick = { vm.retranscribeCloud(clips); redo = false }) { Text("Redo") } },
             dismissButton = { TextButton(onClick = { redo = false }) { Text(if (hasKey && clips.isNotEmpty()) "Cancel" else "OK") } })
@@ -273,7 +274,7 @@ private fun LineSheet(vm: ArchiveViewModel, lines: List<LineRow>, onDismiss: () 
             action("Copy text") { clipboard.setText(androidx.compose.ui.text.AnnotatedString(all)); toast("Copied") }
             action("Make it a to-do") { vm.lineToTodo(lines.first().copy(text = all)); toast("Added to your to-do list") }
             action("Ask the assistant about it") { vm.askAbout(lines.first().copy(text = all)); toast("The answer will appear in Ask") }
-            action("Transcribe again (drops your fixes)") { vm.retranscribe(lines.map { it.clip }.distinct()); toast("Re-transcribing") }
+            action("Transcribe again (keeps your fixes)") { vm.retranscribe(lines.map { it.clip }.distinct()); toast("Re-transcribing") }
             action("Delete this clip", danger = true) { onDelete() }
         }
     }

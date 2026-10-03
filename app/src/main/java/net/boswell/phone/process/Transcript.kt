@@ -138,14 +138,19 @@ object Lines {
      * Join consecutive words of one speaker ([speakers]) into lines, breaking
      * on a change of speaker or a pause. Words marked in [boswell] are
      * Boswell's own voice: their lines are [BoswellLines.LABEL]'s, and
-     * remember the diarized speaker they came from.
+     * remember the diarized speaker they came from. A line also breaks where
+     * one of [keep] (lines corrected by hand, in a transcript made again)
+     * begins or ends, so a correction lands on lines of its own (CarryOver).
      */
-    fun build(words: List<Word>, turns: List<Turn>, pause: Double = 1.0, maxLine: Double = 20.0, boswell: BooleanArray? = null): List<Segment> {
+    fun build(words: List<Word>, turns: List<Turn>, pause: Double = 1.0, maxLine: Double = 20.0, boswell: BooleanArray? = null,
+              keep: List<Pair<Double, Double>> = emptyList()): List<Segment> {
         val diar = speakers(words, turns)
         val out = mutableListOf<Segment>()
         var cur: MutableList<Word>? = null
         var curSpk: Int? = null
         var curDiar: Int? = null
+        var curKeep = -1
+        fun keepOf(w: Word): Int { val m = (w.start + w.end) / 2; return keep.indexOfFirst { m >= it.first - CarryOver.EDGE && m <= it.second + CarryOver.EDGE } }
         fun flush() {
             val c = cur ?: return
             out += if (curSpk == BOSWELL) Segment(c.first().start, c.last().end, BoswellLines.LABEL, c.joinToString(" ") { it.text }, diarized = curDiar?.let(::label))
@@ -155,11 +160,13 @@ object Lines {
         for ((wi, w) in words.withIndex()) {
             val s = if (boswell?.getOrNull(wi) == true) BOSWELL else diar[wi]
             val c = cur
-            if (c == null || s != curSpk || (s == BOSWELL && diar[wi] != curDiar) || w.start - c.last().end > pause || w.end - c.first().start > maxLine) {
+            val k = if (keep.isEmpty()) -1 else keepOf(w)
+            if (c == null || s != curSpk || (s == BOSWELL && diar[wi] != curDiar) || k != curKeep || w.start - c.last().end > pause || w.end - c.first().start > maxLine) {
                 flush()
                 cur = mutableListOf(w)
                 curSpk = s
                 curDiar = diar[wi]
+                curKeep = k
             } else c += w
         }
         flush()

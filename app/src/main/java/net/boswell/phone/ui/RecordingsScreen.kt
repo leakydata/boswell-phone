@@ -77,7 +77,7 @@ fun RecordingsScreen(vm: ArchiveViewModel, day: LocalDate, onBack: () -> Unit, o
                     var more by remember { mutableStateOf(false) }
                     TextButton(onClick = { more = true }) { Text("More") }
                     androidx.compose.material3.DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
-                        androidx.compose.material3.DropdownMenuItem(text = { Text("Redo on the phone") },
+                        androidx.compose.material3.DropdownMenuItem(text = { Text(if (net.boswell.phone.home.HomeServer.enabled(ctx)) "Redo at home" else "Redo on the phone") },
                             onClick = { more = false; vm.retranscribe(selected.toList()); selected = emptySet() })
                         androidx.compose.material3.DropdownMenuItem(text = { Text("Redo in the cloud") },
                             onClick = { more = false; vm.retranscribeCloud(selected.toList()); selected = emptySet() })

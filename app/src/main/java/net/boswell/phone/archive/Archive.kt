@@ -297,6 +297,16 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
         buildList { while (c.moveToNext()) add(c.getString(0)) }
     }
 
+    /** The conversation a clip is part of, if any. */
+    fun conversationOf(clip: String): Long? = readableDatabase.rawQuery("SELECT conversation FROM clips WHERE name = ?", arrayOf(clip)).use { c ->
+        if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null
+    }
+
+    /** A clip's words as they read now (hand corrections included), in order. */
+    fun clipText(clip: String): String = readableDatabase.rawQuery("SELECT text FROM lines WHERE clip = ? ORDER BY t0", arrayOf(clip)).use { c ->
+        buildList { while (c.moveToNext()) add(c.getString(0)) }.joinToString(" ")
+    }
+
     fun clipStarted(clip: String): Double? = readableDatabase.rawQuery("SELECT started FROM clips WHERE name = ?", arrayOf(clip)).use { c ->
         if (c.moveToFirst()) c.getDouble(0) else null
     }
