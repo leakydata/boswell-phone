@@ -202,6 +202,26 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                             }, modifier = Modifier.weight(1f))
                         Text(if (led == 0) "Off" else "$led%", Modifier.padding(start = 12.dp).width(44.dp), style = MaterialTheme.typography.labelLarge)
                     }
+                    // Microphone gain, levels 1-8 (0 would mute it): 6 is the Omi's default; each level up is about 5 dB louder.
+                    var gain by remember { mutableStateOf(lprefs.getInt("mic_gain", -1).takeIf { it in 1..8 } ?: cap.micGain?.takeIf { it in 1..8 } ?: 6) }
+                    LaunchedEffect(cap.micGain) {
+                        if (lprefs.getInt("mic_gain", -1) < 0) cap.micGain?.takeIf { it in 1..8 }?.let { gain = it }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Mic", Modifier.padding(end = 12.dp))
+                        androidx.compose.material3.Slider(value = gain.toFloat(), onValueChange = { gain = Math.round(it) },
+                            valueRange = 1f..8f, steps = 6,
+                            onValueChangeFinished = {
+                                lprefs.edit().putInt("mic_gain", gain).apply()
+                                net.boswell.phone.capture.CaptureService.applyLedNow(lctx)
+                            }, modifier = Modifier.weight(1f))
+                        Text("$gain", Modifier.padding(start = 12.dp).width(44.dp), style = MaterialTheme.typography.labelLarge)
+                    }
+                    Text(when {
+                        gain == 6 -> "Microphone gain 6 of 8: the Omi's default."
+                        gain > 6 -> "Microphone gain $gain of 8: about ${(gain - 6) * 5} dB louder than the default. Very loud voices up close may distort."
+                        else -> "Microphone gain $gain of 8: quieter than the default."
+                    }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     val connected = cap.link == net.boswell.phone.capture.Link.STREAMING || cap.link == net.boswell.phone.capture.Link.SYNCING
                     if (!connected) Text("Sent to the Omi the next time it connects.", style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -393,6 +413,23 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                     Switch(checked = watcher, onCheckedChange = { watcher = it; net.boswell.phone.assistant.AssistantPrefs.setWatcher(ctx2, it) })
                 }
                 if (watcher) {
+                    val P = net.boswell.phone.assistant.AssistantPrefs
+                    var pace by remember { mutableStateOf(P.pace(ctx2)) }
+                    Text("How often it speaks up", style = MaterialTheme.typography.bodyMedium)
+                    Row {
+                        for (v in net.boswell.phone.assistant.AssistantPrefs.Pace.entries) FilterChip(selected = pace == v, onClick = { pace = v; P.setPace(ctx2, v) },
+                            label = { Text(v.label) }, modifier = Modifier.padding(end = 6.dp))
+                    }
+                    Text("At most one hint every ${pace.gapSeconds / 60} minutes. It remembers what it told you, so it won't say it again.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    // What it's been doing today, so "it went quiet" has an answer.
+                    var status by remember { mutableStateOf(net.boswell.phone.assistant.WatchStatus.today(ctx2)) }
+                    LaunchedEffect(Unit) { while (true) { status = net.boswell.phone.assistant.WatchStatus.today(ctx2); kotlinx.coroutines.delay(10_000) } }
+                    val ago = status.lastLook?.let { val m = (System.currentTimeMillis() - it) / 60_000; if (m < 1) "just now" else if (m < 120) "$m min ago" else "${m / 60} h ago" }
+                    Text("Today: ${status.looks} look${if (status.looks == 1) "" else "s"}, ${status.hints} hint${if (status.hints == 1) "" else "s"}" +
+                        (if (status.errors > 0) ", ${status.errors} failed" else "") + (ago?.let { " · last looked $it" } ?: " · hasn't looked yet (it needs live mode and you talking)") +
+                        (status.note?.let { "\nLately: $it" } ?: ""),
+                        style = MaterialTheme.typography.bodySmall, color = if (status.errors > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
                     Text("Daily budget for hints: $%.2f".format(budget), style = MaterialTheme.typography.bodyMedium)
                     androidx.compose.material3.Slider(value = budget, onValueChange = { budget = (it * 20).toInt() / 20f },
                         onValueChangeFinished = { net.boswell.phone.assistant.AssistantPrefs.setBudget(ctx2, budget.toDouble()) },

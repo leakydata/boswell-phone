@@ -425,6 +425,26 @@ class CaptureService : LifecycleService() {
         val after = runCatching { conn.read(OmiUuids.LED_BRIGHTNESS)[0].toInt() and 0xff }.getOrNull() ?: now
         CaptureRepository.update { it.copy(ledBrightness = after) }
         after?.let { CaptureRepository.log("Omi light: ${if (it == 0) "off" else "$it%"}") }
+        applyMicGain(conn)
+    }
+
+    /**
+     * The microphone gain chosen in the app, the same way: the Omi's firmware takes a level
+     * 0-8 (0 mutes; 6, its default, is +10 dB; each level above adds 5 dB, up to +20 dB at 8)
+     * and keeps it in its own flash.
+     */
+    private suspend fun applyMicGain(conn: OmiConnection) {
+        if (!conn.has(OmiUuids.MIC_GAIN)) return
+        val now = runCatching { conn.read(OmiUuids.MIC_GAIN)[0].toInt() and 0xff }.getOrNull()
+        val want = getSharedPreferences("boswell", MODE_PRIVATE).getInt("mic_gain", -1)
+        if (want in 1..8 && want != now) {
+            runCatching { conn.write(OmiUuids.MIC_GAIN, byteArrayOf(want.toByte())) }
+                .onSuccess { CaptureRepository.log("set the Omi's microphone gain to $want") }
+                .onFailure { CaptureRepository.log("couldn't set the Omi's microphone gain: ${it.message}") }
+        }
+        val after = runCatching { conn.read(OmiUuids.MIC_GAIN)[0].toInt() and 0xff }.getOrNull() ?: now
+        CaptureRepository.update { it.copy(micGain = after) }
+        after?.let { CaptureRepository.log("Omi microphone gain: $it of 8") }
     }
 
     /** A short buzz on the Omi, if it has a motor. Best effort: feedback, never a failure. */
@@ -750,7 +770,7 @@ class CaptureService : LifecycleService() {
         const val ACTION_BUZZ = "net.boswell.phone.BUZZ"
         const val ACTION_LED = "net.boswell.phone.LED"
 
-        /** Apply the chosen LED brightness now if connected; otherwise it's applied at the next connection. */
+        /** Apply the chosen LED brightness and microphone gain now if connected; otherwise at the next connection. */
         fun applyLedNow(context: Context) {
             val l = CaptureRepository.state.value.link
             if (l != Link.STREAMING && l != Link.SYNCING) return

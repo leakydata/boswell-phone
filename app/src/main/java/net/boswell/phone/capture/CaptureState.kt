@@ -48,6 +48,8 @@ data class CaptureState(
     val charging: Reading<Boolean>? = null,
     /** The Omi's LED brightness, 0-100, as it last reported. */
     val ledBrightness: Int? = null,
+    /** The Omi's microphone gain level, 0-8, as it reports it. */
+    val micGain: Int? = null,
     val rssi: Reading<Int>? = null,
     val deviceClockSkewSeconds: Reading<Long>? = null,
     val ring: Reading<RingInfo>? = null,

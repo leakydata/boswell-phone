@@ -233,6 +233,18 @@ object AssistantPrefs {
     fun watcher(c: Context) = p(c).getBoolean("watcher", false)
     fun setWatcher(c: Context, on: Boolean) = p(c).edit().putBoolean("watcher", on).apply()
 
+    /**
+     * How readily the watcher speaks up: the least time between two hints, and how its
+     * instructions put the bar. Normal was the old behavior's bar, eased a little.
+     */
+    enum class Pace(val label: String, val gapSeconds: Int, val prompt: String) {
+        QUIET("Quiet", 20 * 60, "Only interrupt for something clearly useful; most of the time there is nothing worth a hint, and silence is the default."),
+        NORMAL("Normal", 6 * 60, "Speak up when a hint would genuinely help or interest them; when nothing would, stay silent."),
+        CHATTY("Chatty", 2 * 60, "Be generous: whenever there's something you could usefully add, a word they want, a related idea, a fact, offer it; stay silent only when you'd add nothing."),
+    }
+    fun pace(c: Context): Pace = runCatching { Pace.valueOf(p(c).getString("watcher_pace", null)!!) }.getOrDefault(Pace.NORMAL)
+    fun setPace(c: Context, v: Pace) = p(c).edit().putString("watcher_pace", v.name).apply()
+
     /** Dollars per day the watcher may spend. Questions you ask are never cut off by it. */
     fun budget(c: Context): Double = p(c).getFloat("watcher_budget", 0.50f).toDouble()
     fun setBudget(c: Context, d: Double) = p(c).edit().putFloat("watcher_budget", d.toFloat()).apply()
