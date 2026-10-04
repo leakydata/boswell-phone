@@ -106,6 +106,10 @@ Answers cite the moment, and **▶ plays it**. It can:
 | 🌐 Look things up on the web | 📒 Quick logs — medication, expenses, parking |
 | ☎️ Pull out numbers, emails, addresses that were said | 📝 Meeting notes: summary, decisions, action items |
 
+**Listen along** in live mode: it quietly follows the conversation and sends a short hint when it
+can help, such as the word or name you're reaching for, a little more on an idea, a correction or a reminder,
+at the pace you choose (Quiet, Normal, Chatty), remembering what it already told you so it doesn't repeat itself.
+
 And it works in the background: a **morning brief**, an **evening recap**, **promises
 noticed** in what was said (yours and others') filed as to-dos, and a **brief before each
 meeting** from what was last said with those people.
