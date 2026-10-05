@@ -86,7 +86,8 @@ class VoiceReview(private val context: Context) {
             val now = store.currentPerson(t.clip, label, sp.personId)
             if (now != null && store.nameOf(now) != null) return@mapValues sp
             val no = store.rejected(t.clip, label)
-            val r = Matching.match(emb, if (no.isEmpty()) refs else refs.filter { it.personId !in no }, field.filter { !(it.voiceprintId in ownRows(store, t.clip, label)) })
+            val r = Matching.match(emb, if (no.isEmpty()) refs else refs.filter { it.personId !in no }, field.filter { !(it.voiceprintId in ownRows(store, t.clip, label)) },
+                sp.seconds.takeIf { it > 0 })
             val candidates = r.candidates.map { Candidate(it.personId, store.nameOf(it.personId), it.score, it.voiceprintId) }
             if (r.decision == Matching.Decision.MATCHED) {
                 val pid = r.personId!!
@@ -178,7 +179,7 @@ class VoiceReview(private val context: Context) {
                     val now = store.currentPerson(t.clip, label, sp.personId)
                     if (now != null) continue          // named, or filed in an unnamed voice (covered above)
                     val no = store.rejected(t.clip, label)
-                    val r = Matching.match(emb, if (no.isEmpty()) refs else refs.filter { it.personId !in no })
+                    val r = Matching.match(emb, if (no.isEmpty()) refs else refs.filter { it.personId !in no }, seconds = sp.seconds.takeIf { it > 0 })
                     if (r.decision != Matching.Decision.UNCERTAIN) continue
                     val pid = r.candidates.first().personId
                     out += Suggestion(pid, store.nameOf(pid) ?: continue, r.score, null, 1, sp.seconds, t.clip, label)

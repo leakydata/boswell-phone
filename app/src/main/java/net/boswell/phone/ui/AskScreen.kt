@@ -195,26 +195,46 @@ private fun ExchangeCard(e: Exchange, onMoment: (Long, Long) -> Unit = { _, _ ->
         }.distinctBy { it.first }.take(4)
     }
     val watcher = e.source == "watcher"
+    // A fact check: the claim stands in for a question, and its verdict is a small label.
+    val verdict = if (e.source == net.boswell.phone.assistant.FactCheck.PURPOSE) net.boswell.phone.assistant.Verdict.ofAnswer(e.answer) else null
+    val checked = e.source == net.boswell.phone.assistant.FactCheck.PURPOSE
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        if (!watcher && e.question != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        if (!watcher && !checked && e.question != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             Surface(shape = RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp), color = MaterialTheme.colorScheme.primaryContainer,
                 modifier = Modifier.padding(start = 48.dp)) {
                 Text(e.question, Modifier.padding(horizontal = 14.dp, vertical = 9.dp))
             }
         }
         Card(colors = CardDefaults.cardColors(containerColor = if (watcher) MaterialTheme.colorScheme.tertiaryContainer
+            else if (checked) MaterialTheme.colorScheme.secondaryContainer
             else if (e.error) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainer),
             modifier = Modifier.padding(end = 32.dp)) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (watcher) Text("Hint · ${e.question ?: ""}", style = MaterialTheme.typography.labelLarge)
-                Text(styled, style = MaterialTheme.typography.bodyLarge)
+                if (checked) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        val bad = verdict == net.boswell.phone.assistant.Verdict.FALSE || verdict == net.boswell.phone.assistant.Verdict.MISLEADING
+                        Surface(shape = RoundedCornerShape(6.dp), color = when {
+                            bad -> MaterialTheme.colorScheme.error
+                            verdict == net.boswell.phone.assistant.Verdict.TRUE -> MaterialTheme.colorScheme.primary
+                            else -> MaterialTheme.colorScheme.outline
+                        }) {
+                            Text((verdict?.label ?: "Checked").uppercase(), Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.surface)
+                        }
+                        Text("  Fact check", style = MaterialTheme.typography.labelLarge)
+                    }
+                    e.question?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }
+                Text(if (verdict != null) androidx.compose.ui.text.AnnotatedString(styled.text.removePrefix(verdict.label + ":").trim()) else styled,
+                    style = MaterialTheme.typography.bodyLarge)
                 if (moments.isNotEmpty() || details.isNotEmpty()) androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     for (m in moments) androidx.compose.material3.AssistChip(onClick = { onMoment(m.conversation, m.line) },
                         label = { Text("▶ ${Fmt.time(m.at)}") })
                     for ((label, intent) in details) androidx.compose.material3.AssistChip(onClick = { runCatching { ctx.startActivity(intent) } },
                         label = { Text(label) })
                 }
-                Text("${Fmt.time(e.at)} · ${when (e.source) { "button" -> "asked on the Omi"; "watcher" -> "while listening"; "trigger" -> "from a voice trigger"; "capture" -> "double tap"; else -> "typed" }}" +
+                Text("${Fmt.time(e.at)} · ${when (e.source) { "button" -> "asked on the Omi"; "watcher" -> "while listening"; "trigger" -> "from a voice trigger"; "capture" -> "double tap"; "factcheck" -> "fact checked while listening"; else -> "typed" }}" +
                     (if (e.cost > 0) " · $%.4f".format(e.cost) else ""), style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }

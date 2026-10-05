@@ -45,6 +45,8 @@ class Watcher(private val context: Context) {
             if (said.all { DirectAsks.within(it, spans) }) return
             val pace = AssistantPrefs.pace(context)
             val mine = store.exchangesSince(now - Hints.MEMORY_S).filter { it.source == PURPOSE && !it.error }
+            // Fact checks (a separate setting) already told them: not to be repeated as hints.
+            val checks = store.exchangesSince(now - Hints.MEMORY_S).filter { it.source == FactCheck.PURPOSE && !it.error }
             // Not again so soon: the owner's chosen pace, between one hint and the next.
             mine.lastOrNull()?.let { if (now - it.at < pace.gapSeconds) return WatchStatus.skip(context, "waiting: a hint ${((now - it.at) / 60).toInt()} min ago") }
             val me = speakers.nameOf(owner) ?: "the user"
@@ -58,7 +60,7 @@ class Watcher(private val context: Context) {
 
                 The last 15 minutes:
                 $context15
-            """.trimIndent() + Hints.prompt(mine) + DirectAsks.prompt(asked, me)
+            """.trimIndent() + Hints.prompt(mine) + Hints.factChecks(checks) + DirectAsks.prompt(asked, me)
             val reply = try {
                 llm.chat(listOf(Llm.user(prompt)), maxTokens = 200, temperature = 0.2)
             } catch (e: Exception) {
@@ -74,7 +76,7 @@ class Watcher(private val context: Context) {
             val title = j["title"]?.jsonPrimitive?.contentOrNull ?: "Boswell"
             val text = j["text"]?.jsonPrimitive?.contentOrNull ?: return WatchStatus.looked(context, hinted = false)
             // Told already, whatever the model thinks: dropped.
-            if (Hints.repeats("$title $text", mine.map { "${it.question.orEmpty()} ${it.answer}" }))
+            if (Hints.repeats("$title $text", (mine + checks).map { "${it.question.orEmpty()} ${it.answer}" }))
                 return WatchStatus.skip(context, "dropped a repeat: $title")
             store.addExchange(PURPOSE, title, text, reply.cost)
             AssistantNotify.post(context, AssistantNotify.SUGGESTIONS, title, text)
@@ -116,6 +118,13 @@ object Hints {
         val w = words(hint)
         if (w.isEmpty()) return false
         return earlier.any { e -> val o = words(e); o.isNotEmpty() && w.count { it in o }.toDouble() / w.size >= SAME }
+    }
+
+    /** For the watcher's prompt: claims fact checking already checked and told them about. Empty when none. */
+    fun factChecks(checks: List<Exchange>): String {
+        if (checks.isEmpty()) return ""
+        return "\n\nFact checking already told them about these claims. Don't correct, confirm or repeat them in a hint:\n" +
+            checks.takeLast(12).joinToString("\n") { "- ${it.question.orEmpty().take(160)}: ${Moments.strip(it.answer).take(240)}" }
     }
 
     /** For the watcher's prompt: what it already told the owner lately. Empty when nothing. */

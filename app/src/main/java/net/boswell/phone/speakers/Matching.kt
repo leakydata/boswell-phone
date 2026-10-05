@@ -62,7 +62,7 @@ object Matching {
      * well-covered person owns the top several rows, and a row margin would
      * collapse to zero exactly where coverage is best.
      */
-    fun match(vec: FloatArray, refs: List<Reference>, field: List<Reference> = emptyList()): Result {
+    fun match(vec: FloatArray, refs: List<Reference>, field: List<Reference> = emptyList(), seconds: Double? = null): Result {
         @Suppress("NAME_SHADOWING") val refs = refs.filter { it.vec.size == vec.size }
         @Suppress("NAME_SHADOWING") val field = field.filter { it.vec.size == vec.size }
         if (!usable(vec) || refs.isEmpty()) return Result(Decision.NONE, emptyList(), 0.0, 0.0)
@@ -87,12 +87,51 @@ object Matching {
         // owner's own "Hey Boswell" (0.86 like them) under an unnamed voice.
         val namedMargin = ranked.getOrNull(1)?.let { top.score - it.score }
         val alone = decide(top.score, namedMargin)
-        if (alone == Decision.MATCHED || field.isEmpty()) return Result(alone, ranked.take(3), top.score, namedMargin)
-        val fieldBest = field.maxOf { dot(v, it.vec) }
-        val margin = top.score - maxOf(ranked.getOrNull(1)?.score ?: -1.0, fieldBest)
-        val withField = decide(top.score, margin)
-        return if (withField == Decision.MATCHED) Result(withField, ranked.take(3), top.score, margin)
-            else Result(alone, ranked.take(3), top.score, namedMargin)
+        if (alone == Decision.MATCHED) return Result(alone, ranked.take(3), top.score, namedMargin)
+        val margin = if (field.isEmpty()) namedMargin
+            else top.score - maxOf(ranked.getOrNull(1)?.score ?: -1.0, field.maxOf { dot(v, it.vec) })
+        if (field.isNotEmpty() && decide(top.score, margin) == Decision.MATCHED) return Result(Decision.MATCHED, ranked.take(3), top.score, margin)
+        // Without the field (suggestions) the owner's rule can't be checked: left uncertain, and asked.
+        if (field.isNotEmpty() && isOwner(top, namedMargin, margin, seconds)) return Result(Decision.MATCHED, ranked.take(3), top.score, margin)
+        return Result(alone, ranked.take(3), top.score, namedMargin)
+    }
+
+    /** The owner's person id (AssistantPrefs.owner), for [isOwner]. Set when a SpeakerStore opens. */
+    @Volatile var owner: Long? = null
+    /** How far the owner must be clear of the unnamed voices too, under [isOwner]. */
+    const val OWNER_FIELD_MARGIN = 0.05
+    /** Under [isOwner], speech shorter than this ([OWNER_SHORT_SECONDS]) passes at [OWNER_SHORT_SCORE] with an [OWNER_SHORT_MARGIN] lead. */
+    const val OWNER_SHORT_SECONDS = 3.0
+    const val OWNER_SHORT_SCORE = 0.66
+    const val OWNER_SHORT_MARGIN = 0.12
+
+    /**
+     * The owner speaks in nearly every recording, mostly in short bits, and
+     * short bits score low: replaying these rules over the owner's 136
+     * hand-labeled and named voices, 0.73 with a clear lead over everyone
+     * else was common and still "uncertain", so the owner kept labeling
+     * themselves. Owner on top, at least "likely", MARGIN_MIN ahead of the
+     * next named person and OWNER_FIELD_MARGIN ahead of every unnamed voice
+     * is the owner: 75 of the 136 matched instead of 69 (and 190 of 366
+     * 1-3 s excerpts of them instead of 179), while of 1,626 voices and
+     * excerpts of other people -- also scored as strangers nobody had named
+     * -- not one more was taken for the owner (measured 2026-10-04, with
+     * voiceprints from the same ten minutes left out). Looser lines (0.70,
+     * or no field margin) took TV voices for the owner, so not those.
+     *
+     * Under 3 s the owner also passes at 0.66 with 0.12 over the next named
+     * person (no field margin): of the 74 short voices of the owner, 39
+     * matched instead of 26 (27 with the line above alone), and of 317 short
+     * excerpts 200 instead of 147 -- at the price of one more voice taken
+     * for the owner, a 1.5 s excerpt of a TV voice at 0.728 (also when
+     * scored as a stranger). Together: 87 of the 136 instead of 69. The
+     * length must be known; a voice of unknown length gets the line above.
+     * Measured with ReDimNet2 only, so only with it.
+     */
+    private fun isOwner(top: Candidate, namedMargin: Double?, margin: Double?, seconds: Double?): Boolean {
+        if (model != net.boswell.phone.diarize.VoiceModel.SPEAKER_ID || top.personId != owner || namedMargin == null) return false
+        if (top.score >= model.likely && namedMargin >= MARGIN_MIN && margin != null && margin >= OWNER_FIELD_MARGIN) return true
+        return seconds != null && seconds < OWNER_SHORT_SECONDS && top.score >= OWNER_SHORT_SCORE && namedMargin >= OWNER_SHORT_MARGIN
     }
 
     /** The unnamed cluster this voice most resembles, if it clears CLUSTER_MIN. */

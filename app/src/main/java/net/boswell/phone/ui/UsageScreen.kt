@@ -55,6 +55,8 @@ private fun purposeName(p: String) = when (p) {
     "capture" -> "Double-tap captures"
     "trigger" -> "Voice triggers"
     "watcher" -> "Listen-along hints"
+    "factcheck" -> "Fact checks (web)"
+    "factcheck-spot" -> "Fact checks: spotting claims"
     "question" -> "Hearing Omi questions (cloud)"
     "transcribe" -> "Cloud transcription"
     "compare" -> "Compare with the cloud"
@@ -112,7 +114,7 @@ fun UsageScreen(onBack: () -> Unit) {
                         Text("${money(perDay)} a day over the last week" +
                             (if (u.lastMonth.calls > 0) " · last month ${money(u.lastMonth.cost)}" else ""),
                             style = MaterialTheme.typography.bodySmall)
-                        Text("Settings that cost: cloud transcription, cloud questions, listen-along hints, briefs and recaps, promise noticing, web searches (Device → Assistant and Transcription).",
+                        Text("Settings that cost: cloud transcription, cloud questions, listen-along hints, fact checks, briefs and recaps, promise noticing, web searches (Device → Assistant and Transcription).",
                             style = MaterialTheme.typography.bodySmall)
                     }
                 }

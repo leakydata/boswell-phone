@@ -24,6 +24,8 @@ object AssistantNotify {
     const val ANSWERS = "answers_v2"
     const val SUGGESTIONS = "suggestions"
     const val LISTENING = "listening"
+    /** Its own channel, so fact checks can be silenced without silencing answers. */
+    const val FACT_CHECKS = "fact_checks"
 
     private var tts: TextToSpeech? = null
     private var ttsReady = false
@@ -39,10 +41,15 @@ object AssistantNotify {
         nm.createNotificationChannel(NotificationChannel(SUGGESTIONS, "Suggestions", NotificationManager.IMPORTANCE_DEFAULT).apply {
             description = "Hints from the assistant listening in live mode"
         })
+        nm.createNotificationChannel(NotificationChannel(FACT_CHECKS, "Fact checks", NotificationManager.IMPORTANCE_HIGH).apply {
+            description = "Claims heard in live mode that turned out false or misleading"
+        })
         nm.createNotificationChannel(NotificationChannel(LISTENING, "Listening for a question", NotificationManager.IMPORTANCE_LOW))
     }
 
-    fun post(c: Context, channel: String, title: String, rawText: String, id: Int = (System.currentTimeMillis() % 100_000).toInt() + 1000) {
+    /** [speak]: read aloud too; by default when spoken answers are on (fact checks have their own setting). */
+    fun post(c: Context, channel: String, title: String, rawText: String, id: Int = (System.currentTimeMillis() % 100_000).toInt() + 1000,
+             speak: Boolean = channel != LISTENING && AssistantPrefs.voice(c)) {
         ensureChannels(c)
         val text = SpeechText.plain(Moments.strip(rawText))
         val open = PendingIntent.getActivity(c, 0, Intent(c, MainActivity::class.java).putExtra("open", "ask"), PendingIntent.FLAG_IMMUTABLE)
@@ -66,7 +73,7 @@ object AssistantNotify {
         }
         val n = b.build()
         runCatching { c.getSystemService(NotificationManager::class.java).notify(id, n) }
-        if (channel != LISTENING && AssistantPrefs.voice(c)) speak(c, text)
+        if (speak) this.speak(c, text)
     }
 
     fun cancel(c: Context, id: Int) = c.getSystemService(NotificationManager::class.java).cancel(id)

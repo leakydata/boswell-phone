@@ -87,6 +87,7 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
     var orphan by remember { mutableStateOf<LineRow?>(null) }
     var lineMenu by remember { mutableStateOf<List<LineRow>?>(null) }
     var confirmDelete by remember { mutableStateOf<List<String>?>(null) }
+    var factCheck by remember { mutableStateOf<net.boswell.phone.assistant.FactCheckRow?>(null) }
     val ctx = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(id) { vm.openConversation(id) }
     DisposableEffect(Unit) { onDispose { vm.closeConversation() } }
@@ -169,8 +170,11 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
                 val prev = turns.getOrNull(i - 1)?.last()
                 val newSpeaker = prev?.speaker != line.speaker || line.t0 - (prev?.t1 ?: 0.0) > 30
                 val merged = if (turn.size == 1) line else line.copy(text = turn.joinToString(" ") { it.text }, t1 = turn.last().t1)
+                // Checked: a ✓ or ✗ (unclear and misheard are only in Ask).
+                val check = s.checks.lastOrNull { f -> f.v in BADGED && turn.any { f.on(it.clip, it.t0, it.t1) } }
                 Bubble(merged, s.voices[line.speaker], newSpeaker, turn.any { it.id == s.playingLine },
-                    onTap = { vm.playLine(line) }, onWho = { if (line.speaker != null) who = line.speaker else orphan = line }, onLong = { lineMenu = turn.toList() }, edited = turn.any { it.original != null })
+                    onTap = { vm.playLine(line) }, onWho = { if (line.speaker != null) who = line.speaker else orphan = line }, onLong = { lineMenu = turn.toList() }, edited = turn.any { it.original != null },
+                    check = check, onCheck = { factCheck = check })
             }
             if (s.lines.isEmpty() && c != null) item { Text("No words were transcribed in this conversation.", Modifier.padding(16.dp)) }
         }
@@ -196,11 +200,30 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
         WhoSheet(vm, s, key, onDismiss = { who = null }, onPerson = { pid -> who = null; onPerson(pid) })
     }
     orphan?.let { line -> OrphanSheet(vm, s, line, onDismiss = { orphan = null }) }
+    factCheck?.let { f ->
+        androidx.compose.material3.AlertDialog(onDismissRequest = { factCheck = null },
+            title = { Text("Fact check: ${f.v?.label?.lowercase() ?: f.verdict.lowercase()}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(f.claim, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(f.explanation)
+                }
+            },
+            confirmButton = { TextButton(onClick = { factCheck = null }) { Text("OK") } },
+            dismissButton = { f.source?.let { url ->
+                TextButton(onClick = { runCatching { ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))) } }) {
+                    Text("Open ${net.boswell.phone.assistant.Claims.site(url)}")
+                }
+            } })
+    }
 }
+
+private val BADGED = setOf(net.boswell.phone.assistant.Verdict.TRUE, net.boswell.phone.assistant.Verdict.FALSE, net.boswell.phone.assistant.Verdict.MISLEADING)
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun Bubble(line: LineRow, v: Voice?, header: Boolean, playing: Boolean, onTap: () -> Unit, onWho: () -> Unit, onLong: () -> Unit = {}, edited: Boolean = false) {
+private fun Bubble(line: LineRow, v: Voice?, header: Boolean, playing: Boolean, onTap: () -> Unit, onWho: () -> Unit, onLong: () -> Unit = {}, edited: Boolean = false,
+                   check: net.boswell.phone.assistant.FactCheckRow? = null, onCheck: () -> Unit = {}) {
     val color = Voices.color(line.speaker)
     Column(Modifier.fillMaxWidth().padding(top = if (header) 10.dp else 0.dp)) {
         if (header) Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable(onClick = onWho).padding(bottom = 4.dp)) {
@@ -220,6 +243,12 @@ private fun Bubble(line: LineRow, v: Voice?, header: Boolean, playing: Boolean, 
             Column(Modifier.padding(horizontal = 14.dp, vertical = 9.dp)) {
                 Text(line.text, style = MaterialTheme.typography.bodyLarge)
                 if (edited) Text("corrected", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (check != null) {
+                    val ok = check.v == net.boswell.phone.assistant.Verdict.TRUE
+                    Text(if (ok) "✓ checks out" else "✗ ${check.v?.label?.lowercase() ?: "false"}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold,
+                        color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                        modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onCheck).padding(vertical = 2.dp))
+                }
             }
         }
     }

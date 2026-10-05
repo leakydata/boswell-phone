@@ -17,7 +17,7 @@ data class Bookmark(val id: Long, val at: Double, val note: String?)
  * here -- when, why, which model, tokens, cost -- so what left the phone is
  * always visible, and the daily budget has something to count.
  */
-class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db", null, 5) {
+class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db", null, 6) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE calls (id INTEGER PRIMARY KEY, at REAL, purpose TEXT, model TEXT, prompt_tokens INTEGER, completion_tokens INTEGER, cost REAL, error TEXT)")
         db.execSQL("CREATE TABLE exchanges (id INTEGER PRIMARY KEY, at REAL, source TEXT, question TEXT, answer TEXT, cost REAL, error INTEGER, asked_from REAL, asked_to REAL)")
@@ -25,6 +25,7 @@ class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db
         db.execSQL(TRIGGER_HITS)
         db.execSQL(NOTES)
         db.execSQL(SPOKEN)
+        db.execSQL(FACT_CHECKS)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -35,6 +36,7 @@ class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db
             db.execSQL("ALTER TABLE exchanges ADD COLUMN asked_from REAL")
             db.execSQL("ALTER TABLE exchanges ADD COLUMN asked_to REAL")
         }
+        if (oldVersion < 6) db.execSQL(FACT_CHECKS)
     }
 
     /**
@@ -98,6 +100,12 @@ class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db
         })
     }
 
+    /** When calls for [purpose] were made since [from] (failed ones too): what an hourly limit counts. */
+    fun callTimes(purpose: String, from: Double): List<Double> = readableDatabase.rawQuery(
+        "SELECT at FROM calls WHERE purpose = ? AND at >= ? ORDER BY at", arrayOf(purpose, from.toString())).use { c ->
+        buildList { while (c.moveToNext()) add(c.getDouble(0)) }
+    }
+
     fun spentToday(purpose: String? = null): Double {
         val start = LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toEpochSecond().toDouble()
         val sql = "SELECT COALESCE(SUM(cost), 0) FROM calls WHERE at >= ?" + if (purpose != null) " AND purpose = ?" else ""
@@ -154,6 +162,30 @@ class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db
     /** Every past question and answer, gone (what they cost stays in the usage log). */
     fun clearExchanges() = writableDatabase.execSQL("DELETE FROM exchanges")
 
+    fun addFactCheck(f: FactCheckRow): Long = writableDatabase.insert("fact_checks", null, ContentValues().apply {
+        put("created", f.created); put("claim", f.claim); put("words", f.words); put("speaker", f.speaker); put("clip", f.clip)
+        put("line_offset", f.offset); put("line_t0", f.lineT0); put("line_t1", f.lineT1); put("conversation", f.conversation)
+        put("verdict", f.verdict); put("explanation", f.explanation); put("source", f.source); put("cost", f.cost); put("exchange", f.exchange)
+    })
+
+    /** Fact checks made since [from], oldest first. */
+    fun factChecksSince(from: Double): List<FactCheckRow> = factChecks("created >= ?", arrayOf(from.toString()))
+
+    /** Fact checks of lines in these recordings: a conversation's badges. */
+    fun factChecksIn(clips: Collection<String>): List<FactCheckRow> =
+        if (clips.isEmpty()) emptyList() else factChecks("clip IN (${clips.joinToString(",") { "?" }})", clips.toTypedArray())
+
+    private fun factChecks(where: String, args: Array<String>): List<FactCheckRow> = readableDatabase.rawQuery(
+        "SELECT id, created, claim, words, speaker, clip, line_offset, line_t0, line_t1, conversation, verdict, explanation, source, cost, exchange " +
+            "FROM fact_checks WHERE $where ORDER BY created", args).use { c ->
+        fun s(i: Int) = if (c.isNull(i)) null else c.getString(i)
+        buildList {
+            while (c.moveToNext()) add(FactCheckRow(c.getLong(0), c.getDouble(1), c.getString(2), s(3) ?: "", s(4) ?: "", c.getString(5),
+                c.getDouble(6), c.getDouble(7), c.getDouble(8), if (c.isNull(9)) null else c.getLong(9), c.getString(10), s(11) ?: "",
+                s(12), c.getDouble(13), if (c.isNull(14)) null else c.getLong(14)))
+        }
+    }
+
     fun addBookmark(at: Double, note: String? = null): Long =
         writableDatabase.insert("bookmarks", null, ContentValues().apply { put("at", at); put("note", note) })
 
@@ -166,6 +198,9 @@ class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db
 private const val TRIGGER_HITS = "CREATE TABLE IF NOT EXISTS trigger_hits (clip TEXT, start REAL, trigger INTEGER, at REAL, PRIMARY KEY (clip, start, trigger))"
 private const val NOTES = "CREATE TABLE IF NOT EXISTS conv_notes (id INTEGER PRIMARY KEY, clips INTEGER, title TEXT, summary TEXT, made REAL)"
 private const val SPOKEN = "CREATE TABLE IF NOT EXISTS spoken (id INTEGER PRIMARY KEY, started REAL, ended REAL, text TEXT, voice TEXT)"
+/** Claims checked on the web while listening (FactCheck): what was said, where (clip and time, not line id: lines are remade), and the verdict. */
+private const val FACT_CHECKS = "CREATE TABLE IF NOT EXISTS fact_checks (id INTEGER PRIMARY KEY, created REAL, claim TEXT, words TEXT, speaker TEXT, " +
+    "clip TEXT, line_offset REAL, line_t0 REAL, line_t1 REAL, conversation INTEGER, verdict TEXT, explanation TEXT, source TEXT, cost REAL, exchange INTEGER)"
 private const val SPOKEN_DAYS = 30
 private const val EXCHANGE = "id, at, source, question, answer, cost, error, asked_from, asked_to"
 
@@ -248,6 +283,21 @@ object AssistantPrefs {
     /** Dollars per day the watcher may spend. Questions you ask are never cut off by it. */
     fun budget(c: Context): Double = p(c).getFloat("watcher_budget", 0.50f).toDouble()
     fun setBudget(c: Context, d: Double) = p(c).edit().putFloat("watcher_budget", d.toFloat()).apply()
+
+    /** Fact check claims heard in live mode (FactCheck). Off unless turned on. */
+    fun factCheck(c: Context) = p(c).getBoolean("factcheck", false)
+    fun setFactCheck(c: Context, on: Boolean) = p(c).edit().putBoolean("factcheck", on).apply()
+    /** Also notify when a claim checks out (false and misleading always are). */
+    fun factTrue(c: Context) = p(c).getBoolean("factcheck_true", false)
+    fun setFactTrue(c: Context, on: Boolean) = p(c).edit().putBoolean("factcheck_true", on).apply()
+    /** Read notified fact checks aloud: separate from spoken answers ([voice]). */
+    fun factAloud(c: Context) = p(c).getBoolean("factcheck_aloud", false)
+    fun setFactAloud(c: Context, on: Boolean) = p(c).edit().putBoolean("factcheck_aloud", on).apply()
+    /** Dollars per day fact checking may spend, spotting and checking together. */
+    fun factBudget(c: Context): Double = p(c).getFloat("factcheck_budget", 1.0f).toDouble()
+    fun setFactBudget(c: Context, d: Double) = p(c).edit().putFloat("factcheck_budget", d.toFloat()).apply()
+    /** Web-searched checks an hour at most; claims over it are skipped (and counted), not queued. */
+    fun factPerHour(c: Context) = p(c).getInt("factcheck_per_hour", 6)
 
     enum class DoubleTap { TODO, BOOKMARK, SUMMARIZE }
     fun doubleTap(c: Context): DoubleTap = runCatching { DoubleTap.valueOf(p(c).getString("double_tap", "TODO")!!) }.getOrDefault(DoubleTap.TODO)

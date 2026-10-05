@@ -61,6 +61,8 @@ data class ConversationState(
     val length: Double = 0.0,
     /** Jump over stretches without speech longer than PAUSE_SKIP_S while playing. */
     val skipPauses: Boolean = true,
+    /** Fact checks of lines here (found by clip and time), for their badges. */
+    val checks: List<net.boswell.phone.assistant.FactCheckRow> = emptyList(),
 )
 
 data class PeopleState(val queue: List<Person> = emptyList(), val named: List<Person> = emptyList(), val media: List<Person> = emptyList())
@@ -104,7 +106,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         // Once: lines older transcripts left without a speaker get the nearest one's.
         val prefs = app.getSharedPreferences("boswell", android.content.Context.MODE_PRIVATE)
         // Once per change to how voices are matched: look at past recordings again.
-        val wave = "voices_rechecked_v3"     // v3: the field only adds matches
+        val wave = "voices_rechecked_v4"     // v4: the owner's own rule (Matching.isOwner)
         if (!prefs.getBoolean(wave, false)) viewModelScope.launch(Dispatchers.IO) {
             runCatching { net.boswell.phone.speakers.VoiceReview(app).recheck() }
                 .onSuccess { if (it.matched > 0) net.boswell.phone.capture.CaptureRepository.log("re-check: ${it.matched} more voices recognized") }
@@ -215,8 +217,11 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }.toMap()
         }
+        val checks = withContext(Dispatchers.IO) {
+            runCatching { net.boswell.phone.assistant.AssistantStore(getApplication()).use { it.factChecksIn(lines.map { l -> l.clip }.distinct()) } }.getOrDefault(emptyList())
+        }
         val sameConversation = _conv.value.conversation?.id == id
-        _conv.update { it.copy(conversation = c, lines = lines, voices = vs, guesses = guesses) }
+        _conv.update { it.copy(conversation = c, lines = lines, voices = vs, guesses = guesses, checks = checks) }
         if (!(keepPlayer && sameConversation)) preparePlayer(id)
     }
 

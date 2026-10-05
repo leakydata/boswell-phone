@@ -362,7 +362,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
             if (vp == null || s.seconds < 1.0) continue
             val score = store.boswellScore(vp, voiceName) ?: continue
             // The closest named person is the rival; unnamed voices aren't, since one of them may be Boswell, filed before it knew itself.
-            if (BoswellLines.soundsLikeBoswell(score, store.match(vp).score, Matching.MATCH_HIGH, Matching.MARGIN_STRONG)) voices[s.index] = score
+            if (BoswellLines.soundsLikeBoswell(score, store.match(vp, s.seconds).score, Matching.MATCH_HIGH, Matching.MARGIN_STRONG)) voices[s.index] = score
         }
         for (i in words.indices) if (diar[i] in voices) mine[i] = true
         return Own(mine, voices)
@@ -384,7 +384,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
         return d.speakers.any { s ->
             if (s.seconds < 1.0) return@any false
             val vp = s.voiceprint?.takeIf { Matching.usable(it) } ?: return@any true
-            val r = store.match(vp)
+            val r = store.match(vp, s.seconds)
             // Boswell's own voice answering isn't someone else.
             if (store.boswellScore(vp, voice)?.let { BoswellLines.soundsLikeBoswell(it, r.score, Matching.MATCH_HIGH, Matching.MARGIN_STRONG) } == true) return@any false
             val pid = r.personId.takeIf { r.decision == Matching.Decision.MATCHED }
@@ -545,8 +545,8 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
             // Done again: who this voice was filed or named as came with it (SpeakerStore.carryOver), and a "not them" holds.
             val filed = if (again) store.currentPerson(clip, label, null) else null
             val no = if (again) store.rejected(clip, label) else emptySet()
-            val r = if (no.isEmpty() && filed == null) store.match(vp)
-                else Matching.match(vp, store.namedRefs().filter { it.personId !in no }, store.unnamedField(clip to label))
+            val r = if (no.isEmpty() && filed == null) store.match(vp, seconds)
+                else Matching.match(vp, store.namedRefs().filter { it.personId !in no }, store.unnamedField(clip to label), seconds)
             store.logMatch(clip, label, r)
             val matched = r.decision == Matching.Decision.MATCHED
             // Decided by hand (named, confirmed, a TV), or nobody better: it stays. An unnamed voice now recognized leaves its cluster.

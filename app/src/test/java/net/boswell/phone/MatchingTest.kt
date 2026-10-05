@@ -74,4 +74,59 @@ class MatchingTest {
         val r = net.boswell.phone.speakers.Matching.match(old, listOf(net.boswell.phone.speakers.Matching.Reference(1, 7, new)))
         org.junit.Assert.assertEquals(net.boswell.phone.speakers.Matching.Decision.NONE, r.decision)
     }
+
+    @Test fun `the owner is matched at likely when clear of everyone, nobody else is`() {
+        // Each row scores its first coordinate against the voice.
+        fun like(s: Double, axis: Int) = FloatArray(5).also { it[0] = s.toFloat(); it[axis] = kotlin.math.sqrt(1 - s * s).toFloat() }
+        val voice = floatArrayOf(1f, 0f, 0f, 0f, 0f)
+        val refs = listOf(Reference(1, 1, like(0.74, 1)), Reference(2, 2, like(0.60, 2)))   // 0.74, 0.14 ahead: uncertain today
+        val field = listOf(Reference(3, 9, like(0.66, 3)))                                  // 0.08 behind
+        val saved = Matching.model to Matching.owner
+        try {
+            Matching.model = net.boswell.phone.diarize.VoiceModel.SPEAKER_ID
+            Matching.owner = null
+            assertEquals(Decision.UNCERTAIN, Matching.match(voice, refs, field).decision)
+            Matching.owner = 1
+            val r = Matching.match(voice, refs, field)
+            assertEquals(Decision.MATCHED, r.decision)
+            assertEquals(1L, r.personId)
+            // An unnamed voice nearly as close (0.03 behind): not sure enough.
+            assertEquals(Decision.UNCERTAIN, Matching.match(voice, refs, listOf(Reference(4, 9, like(0.71, 3)))).decision)
+            // Below "likely", or too little ahead of the next person: no.
+            assertEquals(Decision.UNCERTAIN, Matching.match(voice, listOf(Reference(1, 1, like(0.72, 1)), refs[1]), field).decision)
+            assertEquals(Decision.UNCERTAIN, Matching.match(voice, listOf(refs[0], Reference(2, 2, like(0.65, 2))), field).decision)
+            // Only for the owner, and only with the field to be clear of.
+            Matching.owner = 2
+            assertEquals(Decision.UNCERTAIN, Matching.match(voice, refs, field).decision)
+            Matching.owner = 1
+            assertEquals(Decision.UNCERTAIN, Matching.match(voice, refs).decision)
+        } finally { Matching.model = saved.first; Matching.owner = saved.second }
+    }
+
+    @Test fun `a short bit of the owner passes at 0_66 with a 0_12 lead, only when its length is known`() {
+        fun like(s: Double, axis: Int) = FloatArray(5).also { it[0] = s.toFloat(); it[axis] = kotlin.math.sqrt(1 - s * s).toFloat() }
+        val voice = floatArrayOf(1f, 0f, 0f, 0f, 0f)
+        val refs = listOf(Reference(1, 1, like(0.68, 1)), Reference(2, 2, like(0.55, 2)))   // 0.68, 0.13 ahead
+        val field = listOf(Reference(3, 9, like(0.66, 3)))                                  // no field margin to speak of
+        val saved = Matching.model to Matching.owner
+        try {
+            Matching.model = net.boswell.phone.diarize.VoiceModel.SPEAKER_ID
+            Matching.owner = 1
+            val r = Matching.match(voice, refs, field, seconds = 2.0)
+            assertEquals(Decision.MATCHED, r.decision)
+            assertEquals(1L, r.personId)
+            assertEquals(Decision.UNCERTAIN, Matching.match(voice, refs, field, seconds = 3.0).decision)   // not short
+            assertEquals(Decision.UNCERTAIN, Matching.match(voice, refs, field).decision)                  // length unknown
+            assertEquals(Decision.UNCERTAIN, Matching.match(voice, refs, seconds = 2.0).decision)          // no field: asked instead
+            assertEquals(Decision.UNCERTAIN,                                                              // 0.10 ahead: not enough
+                Matching.match(voice, listOf(refs[0], Reference(2, 2, like(0.58, 2))), field, seconds = 2.0).decision)
+            assertEquals(Decision.NONE,                                                                   // 0.63: below 0.66 (and matchLow)
+                Matching.match(voice, listOf(Reference(1, 1, like(0.63, 1)), Reference(2, 2, like(0.45, 2))), field, seconds = 2.0).decision)
+            Matching.owner = 2
+            assertEquals(Decision.UNCERTAIN, Matching.match(voice, refs, field, seconds = 2.0).decision)   // only the owner
+            Matching.model = net.boswell.phone.diarize.VoiceModel.WESPEAKER
+            Matching.owner = 1
+            assertEquals(Decision.UNCERTAIN, Matching.match(voice, refs, field, seconds = 2.0).decision)   // measured with ReDimNet2 only
+        } finally { Matching.model = saved.first; Matching.owner = saved.second }
+    }
 }

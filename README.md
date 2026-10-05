@@ -108,7 +108,8 @@ Answers cite the moment, and **▶ plays it**. It can:
 
 **Listen along** in live mode: it quietly follows the conversation and sends a short hint when it
 can help, such as the word or name you're reaching for, a little more on an idea, a correction or a reminder,
-at the pace you choose (Quiet, Normal, Chatty), remembering what it already told you so it doesn't repeat itself.
+at the pace you choose (Quiet, Normal, Chatty), remembering what it already told you so it doesn't repeat itself. **Fact check** does the same for
+claims: when something said is checkably wrong, it looks it up on the web and tells you, with a source.
 
 And it works in the background: a **morning brief**, an **evening recap**, **promises
 noticed** in what was said (yours and others') filed as to-dos, and a **brief before each
@@ -154,7 +155,8 @@ flowchart LR
   tenth of a WAV's size); a speech-free clip keeps only its place on the timeline.
 - **Identity** follows the desktop's rules exactly: one row per voiceprint, the best row
   per person, a margin over the runner-up, and unnamed voices clustered until you name
-  them.
+  them. Your own voice, which is in nearly every recording and mostly in short bits, gets one
+  looser rule measured on real recordings, so you rarely have to label yourself.
 - **The assistant** is any model on [OpenRouter](https://openrouter.ai) (your key),
   with tools over the archive and the phone. Moments are labelled `[L123]` in what it
   reads, and it cites them back so the app can play them.

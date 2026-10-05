@@ -352,6 +352,10 @@ class CaptureService : LifecycleService() {
                 if (tick % net.boswell.phone.assistant.Watcher.EVERY_SECONDS == 0 && watching?.isActive != true) {
                     watching = lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { watcher.tick() } }
                 }
+                // Its own job: a slow web check never holds up the watcher, or the next look.
+                if (tick % net.boswell.phone.assistant.FactCheck.EVERY_SECONDS == 0 && checking?.isActive != true) {
+                    checking = lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { factCheck.tick() } }
+                }
                 if (tick % 10 == 0) {
                     val n = conn.notifications; val f = CaptureRepository.state.value.frames
                     android.util.Log.i("Boswell", "rate: ${(n - lastNotes) / 10.0}/s arriving, ${(f - lastFrames) / 10.0}/s decoded")
@@ -376,6 +380,8 @@ class CaptureService : LifecycleService() {
     @Volatile private var question: net.boswell.phone.assistant.QuestionCapture? = null
     private var watching: Job? = null
     private val watcher by lazy { net.boswell.phone.assistant.Watcher(this) }
+    private var checking: Job? = null
+    private val factCheck by lazy { net.boswell.phone.assistant.FactCheck(this) }
 
     /**
      * A button question's words from Parakeet in the cloud, or null to use the

@@ -435,6 +435,7 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                         onValueChangeFinished = { net.boswell.phone.assistant.AssistantPrefs.setBudget(ctx2, budget.toDouble()) },
                         valueRange = 0.05f..3f)
                 }
+                FactCheckSettings(hasKey)
             }
         }
 
@@ -648,6 +649,56 @@ private fun VocabularyDialog(onDismiss: () -> Unit) {
             }
         },
     )
+}
+
+/**
+ * Fact check (live mode): the switch, what it tells you and how, its budget,
+ * and what it did today. Independent of Listen along.
+ */
+@Composable
+private fun FactCheckSettings(hasKey: Boolean) {
+    val ctx = LocalContext.current
+    val P = net.boswell.phone.assistant.AssistantPrefs
+    var on by remember { mutableStateOf(P.factCheck(ctx)) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Fact check (live mode)", style = MaterialTheme.typography.bodyLarge)
+            Text("About once a minute it picks out facts anyone states (numbers, dates, history, science, quotes) and checks them on the web. " +
+                "Spotting costs fractions of a cent; each check is about a cent. At most ${P.factPerHour(ctx)} checks an hour. Needs an OpenRouter key.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = on, onCheckedChange = { on = it; P.setFactCheck(ctx, it) })
+    }
+    if (!on) return
+    var alsoTrue by remember { mutableStateOf(P.factTrue(ctx)) }
+    var aloud by remember { mutableStateOf(P.factAloud(ctx)) }
+    var budget by remember { mutableStateOf(P.factBudget(ctx).toFloat()) }
+    Text("False or misleading claims are a notification; every check is kept in Ask and marked on its line.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Also tell me when it checks out", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Switch(checked = alsoTrue, onCheckedChange = { alsoTrue = it; P.setFactTrue(ctx, it) })
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Read fact checks aloud", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Switch(checked = aloud, onCheckedChange = { aloud = it; P.setFactAloud(ctx, it) })
+    }
+    // What it's been doing today, like Listen along's.
+    var status by remember { mutableStateOf(net.boswell.phone.assistant.FactStatus.today(ctx)) }
+    LaunchedEffect(Unit) { while (true) { status = net.boswell.phone.assistant.FactStatus.today(ctx); delay(10_000) } }
+    val ago = status.lastLook?.let { val m = (System.currentTimeMillis() - it) / 60_000; if (m < 1) "just now" else if (m < 120) "$m min ago" else "${m / 60} h ago" }
+    fun n(k: Int, one: String, many: String = one + "s") = "$k ${if (k == 1) one else many}"
+    Text(if (!hasKey) "Needs an OpenRouter key to search the web: add one above. Until then it does nothing."
+        else "Today: ${n(status.spotted, "claim")} spotted, ${status.checked} checked, ${status.flagged} false or misleading" +
+            (if (status.overLimit > 0) ", ${status.overLimit} skipped over the limit" else "") +
+            (if (status.errors > 0) ", ${status.errors} failed" else "") +
+            (ago?.let { " · last looked $it" } ?: " · hasn't looked yet (it needs live mode and someone talking)") +
+            (status.note?.let { "\nLately: $it" } ?: ""),
+        style = MaterialTheme.typography.bodySmall,
+        color = if (!hasKey || status.errors > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+    Text("Daily budget for fact checks: $%.2f".format(budget), style = MaterialTheme.typography.bodyMedium)
+    androidx.compose.material3.Slider(value = budget, onValueChange = { budget = (it * 20).toInt() / 20f },
+        onValueChangeFinished = { P.setFactBudget(ctx, budget.toDouble()) }, valueRange = 0.1f..3f)
 }
 
 /**

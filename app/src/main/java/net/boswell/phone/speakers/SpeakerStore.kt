@@ -33,7 +33,10 @@ data class VoiceGroup(val key: Long, val voiceprints: Int, val seconds: Double, 
  * Starts empty. Nothing is imported from the desktop.
  */
 class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", null, 8) {
-    init { Matching.model = net.boswell.phone.diarize.VoiceModels.active(context) }
+    init {
+        Matching.model = net.boswell.phone.diarize.VoiceModels.active(context)
+        Matching.owner = net.boswell.phone.assistant.AssistantPrefs.owner(context)
+    }
 
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -124,9 +127,10 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
      * Match against named people: unnamed clusters are the question, not the
      * answer -- but they are part of the field a match must be clear of.
      * [exclude] keeps a voice from competing with its own filed voiceprint.
+     * [seconds] is how much speech the voice has, null if unknown (Matching.isOwner).
      */
-    fun match(vec: FloatArray, exclude: Pair<String, String>? = null): Matching.Result =
-        Matching.match(vec, refs(named = true), unnamedField(exclude))
+    fun match(vec: FloatArray, seconds: Double?, exclude: Pair<String, String>? = null): Matching.Result =
+        Matching.match(vec, refs(named = true), unnamedField(exclude), seconds)
 
     /** Unnamed voices' voiceprints, without the ones of one clip's voice. */
     fun unnamedField(exclude: Pair<String, String>? = null): List<Matching.Reference> {
