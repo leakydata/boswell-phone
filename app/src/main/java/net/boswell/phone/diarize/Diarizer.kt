@@ -8,8 +8,8 @@ import kotlin.math.sqrt
 /** A stretch of one speaker's speech, in seconds. */
 data class Turn(val speaker: Int, val start: Double, val end: Double)
 
-/** One speaker in one piece of audio: their turns and a voiceprint pooled over all of them. */
-data class DiarizedSpeaker(val index: Int, val turns: List<Turn>, val seconds: Double, val voiceprint: FloatArray?)
+/** One speaker in one piece of audio: their turns, a voiceprint pooled over all of them, and how far above the room they are (Snr). */
+data class DiarizedSpeaker(val index: Int, val turns: List<Turn>, val seconds: Double, val voiceprint: FloatArray?, val snr: Double? = null)
 
 data class Diarization(val speakers: List<DiarizedSpeaker>) {
     val turns: List<Turn> get() = speakers.flatMap { it.turns }.sortedBy { it.start }

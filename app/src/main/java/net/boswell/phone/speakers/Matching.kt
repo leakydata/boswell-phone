@@ -50,7 +50,8 @@ object Matching {
         }
     }
 
-    data class Reference(val voiceprintId: Long, val personId: Long, val vec: FloatArray)
+    /** A voiceprint to match against; [clip] is the recording it came from, if known (AsNorm leaves a print's own recording out). */
+    data class Reference(val voiceprintId: Long, val personId: Long, val vec: FloatArray, val clip: String? = null)
     data class Candidate(val personId: Long, val score: Double, val voiceprintId: Long)
     data class Result(val decision: Decision, val candidates: List<Candidate>, val score: Double, val margin: Double?) {
         val personId: Long? get() = if (decision == Decision.NONE) null else candidates.firstOrNull()?.personId
@@ -61,20 +62,35 @@ object Matching {
      * the top two people. The margin must be between people, not rows: a
      * well-covered person owns the top several rows, and a row margin would
      * collapse to zero exactly where coverage is best.
+     *
+     * [norm] scores on the normalized scale (AsNorm) instead of raw cosines;
+     * [snr] is how far the voice stands above its room (Snr), null if unknown.
      */
-    fun match(vec: FloatArray, refs: List<Reference>, field: List<Reference> = emptyList(), seconds: Double? = null): Result {
+    fun match(vec: FloatArray, refs: List<Reference>, field: List<Reference> = emptyList(), seconds: Double? = null,
+              snr: Double? = null, norm: AsNorm.Scorer? = null): Result {
         @Suppress("NAME_SHADOWING") val refs = refs.filter { it.vec.size == vec.size }
         @Suppress("NAME_SHADOWING") val field = field.filter { it.vec.size == vec.size }
         if (!usable(vec) || refs.isEmpty()) return Result(Decision.NONE, emptyList(), 0.0, 0.0)
         val v = unit(vec)
+        fun score(r: Reference): Double { val s = dot(v, r.vec); return norm?.score(s, r) ?: s }
         val best = HashMap<Long, Candidate>()
         for (r in refs) {
-            val s = dot(v, r.vec)
+            val s = score(r)
             val cur = best[r.personId]
             if (cur == null || s > cur.score) best[r.personId] = Candidate(r.personId, s, r.voiceprintId)
         }
         val ranked = best.values.sortedByDescending { it.score }
         val top = ranked.first()
+        val namedMargin = ranked.getOrNull(1)?.let { top.score - it.score }
+        val fieldBest = field.maxOfOrNull(::score)
+        // The owner is decided by the owner's rule alone.
+        if (model == net.boswell.phone.diarize.VoiceModel.SPEAKER_ID && owner != null && top.personId == owner) {
+            val runnerUp = ranked.getOrNull(1)?.score ?: -1.0
+            val fieldMargin = top.score - maxOf(runnerUp, fieldBest ?: -9.0)
+            val margin = if (field.isEmpty()) namedMargin else fieldMargin
+            return if (isOwner(top.score, top.score - runnerUp, fieldMargin, seconds, snr)) Result(Decision.MATCHED, ranked.take(3), top.score, margin)
+                else Result(if (top.score >= MATCH_LOW) Decision.UNCERTAIN else Decision.NONE, ranked.take(3), top.score, namedMargin)
+        }
         // The runner-up is the next named person -- or, as part of the field to
         // be clear of, the closest unnamed voice. With one named person (often
         // just the owner) there was no runner-up at all, so only the strict
@@ -85,53 +101,58 @@ object Matching {
         // named people stays matched even if some unnamed voice (often another
         // fragment of the same person) is closer -- that once filed the
         // owner's own "Hey Boswell" (0.86 like them) under an unnamed voice.
-        val namedMargin = ranked.getOrNull(1)?.let { top.score - it.score }
         val alone = decide(top.score, namedMargin)
         if (alone == Decision.MATCHED) return Result(alone, ranked.take(3), top.score, namedMargin)
-        val margin = if (field.isEmpty()) namedMargin
-            else top.score - maxOf(ranked.getOrNull(1)?.score ?: -1.0, field.maxOf { dot(v, it.vec) })
-        if (field.isNotEmpty() && decide(top.score, margin) == Decision.MATCHED) return Result(Decision.MATCHED, ranked.take(3), top.score, margin)
-        // Without the field (suggestions) the owner's rule can't be checked: left uncertain, and asked.
-        if (field.isNotEmpty() && isOwner(top, namedMargin, margin, seconds)) return Result(Decision.MATCHED, ranked.take(3), top.score, margin)
+        val margin = if (fieldBest == null) namedMargin else top.score - maxOf(ranked.getOrNull(1)?.score ?: -1.0, fieldBest)
+        if (fieldBest != null && decide(top.score, margin) == Decision.MATCHED) return Result(Decision.MATCHED, ranked.take(3), top.score, margin)
         return Result(alone, ranked.take(3), top.score, namedMargin)
     }
 
     /** The owner's person id (AssistantPrefs.owner), for [isOwner]. Set when a SpeakerStore opens. */
     @Volatile var owner: Long? = null
-    /** How far the owner must be clear of the unnamed voices too, under [isOwner]. */
-    const val OWNER_FIELD_MARGIN = 0.05
-    /** Under [isOwner], speech shorter than this ([OWNER_SHORT_SECONDS]) passes at [OWNER_SHORT_SCORE] with an [OWNER_SHORT_MARGIN] lead. */
+    /** Under [isOwner]: this score, this far ahead of the next named person and of every unnamed voice. */
+    const val OWNER_SCORE = 0.71
+    const val OWNER_MARGIN = 0.08
+    const val OWNER_FIELD_MARGIN = 0.08
+    /** Under [isOwner], speech shorter than [OWNER_SHORT_SECONDS] passes at [OWNER_SHORT_SCORE] with an [OWNER_SHORT_MARGIN] lead. */
     const val OWNER_SHORT_SECONDS = 3.0
-    const val OWNER_SHORT_SCORE = 0.66
-    const val OWNER_SHORT_MARGIN = 0.12
+    const val OWNER_SHORT_SCORE = 0.56
+    const val OWNER_SHORT_MARGIN = 0.14
+    /** Under [isOwner], a voice [OWNER_NEAR_SNR] dB above its room passes at [OWNER_NEAR_SCORE] with an [OWNER_NEAR_MARGIN] lead. */
+    const val OWNER_NEAR_SNR = 23.0
+    const val OWNER_NEAR_SCORE = 0.40
+    const val OWNER_NEAR_MARGIN = 0.04
+    /** A voice less than this many dB above its room is never the owner, who wears the microphone. */
+    const val OWNER_FAR_SNR = 8.0
 
     /**
      * The owner speaks in nearly every recording, mostly in short bits, and
-     * short bits score low: replaying these rules over the owner's 136
-     * hand-labeled and named voices, 0.73 with a clear lead over everyone
-     * else was common and still "uncertain", so the owner kept labeling
-     * themselves. Owner on top, at least "likely", MARGIN_MIN ahead of the
-     * next named person and OWNER_FIELD_MARGIN ahead of every unnamed voice
-     * is the owner: 75 of the 136 matched instead of 69 (and 190 of 366
-     * 1-3 s excerpts of them instead of 179), while of 1,626 voices and
-     * excerpts of other people -- also scored as strangers nobody had named
-     * -- not one more was taken for the owner (measured 2026-10-04, with
-     * voiceprints from the same ten minutes left out). Looser lines (0.70,
-     * or no field margin) took TV voices for the owner, so not those.
-     *
-     * Under 3 s the owner also passes at 0.66 with 0.12 over the next named
-     * person (no field margin): of the 74 short voices of the owner, 39
-     * matched instead of 26 (27 with the line above alone), and of 317 short
-     * excerpts 200 instead of 147 -- at the price of one more voice taken
-     * for the owner, a 1.5 s excerpt of a TV voice at 0.728 (also when
-     * scored as a stranger). Together: 87 of the 136 instead of 69. The
-     * length must be known; a voice of unknown length gets the line above.
-     * Measured with ReDimNet2 only, so only with it.
+     * short bits score low. Owner on top, on normalized scores (AsNorm) with
+     * a clean voice pooled with the ones just before it (Pooling), is the
+     * owner when any of:
+     *  - OWNER_SCORE, OWNER_MARGIN ahead of the next named person and
+     *    OWNER_FIELD_MARGIN ahead of every unnamed voice;
+     *  - under 3 s of speech, OWNER_SHORT_SCORE with OWNER_SHORT_MARGIN over
+     *    the next named person (the length must be known);
+     *  - OWNER_NEAR_SNR dB or more above the room (the near voice),
+     *    OWNER_NEAR_SCORE with OWNER_NEAR_MARGIN over the next named person;
+     * and never under OWNER_FAR_SNR dB. The general rule ([decide]) no longer
+     * decides the owner. Replayed over the owner's 136 hand-labeled and named
+     * voices, with voiceprints from the same ten minutes left out: 120
+     * matched instead of 87 (and 339 of 366 1-3 s excerpts instead of 235),
+     * with as many voices and excerpts of other people taken for the owner
+     * as before (13 of 1,626; 19 scored as strangers nobody had named), and
+     * other people put to the wrong person 119 times instead of 154. Tuned
+     * on one half of the timeline and tested on the other: 121, with 17 and
+     * 22 (measured 2026-10-05). Without the loudness (transcripts made
+     * before it was kept) the loudness lines simply don't apply. Measured
+     * with ReDimNet2 only, so only with it.
      */
-    private fun isOwner(top: Candidate, namedMargin: Double?, margin: Double?, seconds: Double?): Boolean {
-        if (model != net.boswell.phone.diarize.VoiceModel.SPEAKER_ID || top.personId != owner || namedMargin == null) return false
-        if (top.score >= model.likely && namedMargin >= MARGIN_MIN && margin != null && margin >= OWNER_FIELD_MARGIN) return true
-        return seconds != null && seconds < OWNER_SHORT_SECONDS && top.score >= OWNER_SHORT_SCORE && namedMargin >= OWNER_SHORT_MARGIN
+    private fun isOwner(score: Double, namedMargin: Double, fieldMargin: Double, seconds: Double?, snr: Double?): Boolean {
+        if (snr != null && snr < OWNER_FAR_SNR) return false
+        if (score >= OWNER_SCORE && namedMargin >= OWNER_MARGIN && fieldMargin >= OWNER_FIELD_MARGIN) return true
+        if (seconds != null && seconds > 0 && seconds < OWNER_SHORT_SECONDS && score >= OWNER_SHORT_SCORE && namedMargin >= OWNER_SHORT_MARGIN) return true
+        return snr != null && snr >= OWNER_NEAR_SNR && score >= OWNER_NEAR_SCORE && namedMargin >= OWNER_NEAR_MARGIN
     }
 
     /** The unnamed cluster this voice most resembles, if it clears CLUSTER_MIN. */

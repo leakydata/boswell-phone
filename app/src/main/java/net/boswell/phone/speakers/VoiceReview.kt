@@ -54,8 +54,11 @@ class VoiceReview(private val context: Context) {
             var matched = 0
             val refs = store.namedRefs()
             field = store.unnamedField()
+            norm = store.norm(refs, field)
             if (refs.isNotEmpty()) {
-                for (f in ProcessingWorker.transcriptsDir(context).listFiles { x -> x.extension == "json" }.orEmpty()) {
+                val dir = ProcessingWorker.transcriptsDir(context)
+                earlier = Pooling.Index(dir)
+                for (f in dir.listFiles { x -> x.extension == "json" }.orEmpty()) {
                     matched += recheckFile(f, store, refs)
                 }
             }
@@ -70,6 +73,21 @@ class VoiceReview(private val context: Context) {
         }
 
     private var field: List<Matching.Reference> = emptyList()
+    private var norm: AsNorm.Norm? = null
+    private var earlier: Pooling.Index? = null
+
+    /**
+     * A transcript's voice matched as a new one would be: pooled with the
+     * clean voices just before it and normalized (Pooling, AsNorm). A voice
+     * of a transcript made before the loudness was kept is neither pooled
+     * nor judged by it; normalized all the same.
+     */
+    private fun matchVoice(emb: FloatArray, clip: String, sp: net.boswell.phone.process.SpeakerId, refs: List<Matching.Reference>,
+                           field: List<Matching.Reference>): Matching.Result {
+        val near = sp.snrDb?.takeIf { it >= Pooling.MIN_SNR }?.let { earlier?.before(clip) }.orEmpty()
+        val vec = Pooling.pooled(emb, sp.seconds, sp.snrDb, clip, near)
+        return Matching.match(vec, refs, field, sp.seconds.takeIf { it > 0 }, sp.snrDb, norm?.forVoice(vec, clip, Pooling.clipTime(clip)))
+    }
 
     private fun recheckFile(f: File, store: SpeakerStore, refs: List<Matching.Reference>): Int {
         val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.getOrNull() ?: return 0
@@ -86,8 +104,8 @@ class VoiceReview(private val context: Context) {
             val now = store.currentPerson(t.clip, label, sp.personId)
             if (now != null && store.nameOf(now) != null) return@mapValues sp
             val no = store.rejected(t.clip, label)
-            val r = Matching.match(emb, if (no.isEmpty()) refs else refs.filter { it.personId !in no }, field.filter { !(it.voiceprintId in ownRows(store, t.clip, label)) },
-                sp.seconds.takeIf { it > 0 })
+            val own = ownRows(store, t.clip, label)
+            val r = matchVoice(emb, t.clip, sp, if (no.isEmpty()) refs else refs.filter { it.personId !in no }, field.filter { it.voiceprintId !in own })
             val candidates = r.candidates.map { Candidate(it.personId, store.nameOf(it.personId), it.score, it.voiceprintId) }
             if (r.decision == Matching.Decision.MATCHED) {
                 val pid = r.personId!!
@@ -146,6 +164,8 @@ class VoiceReview(private val context: Context) {
         try {
             val refs = store.namedRefs()
             if (refs.isEmpty()) return emptyList()
+            norm = store.norm(refs)
+            earlier = Pooling.Index(ProcessingWorker.transcriptsDir(context))
             val out = mutableListOf<Suggestion>()
             val filed = HashSet<String>()
 
@@ -179,7 +199,7 @@ class VoiceReview(private val context: Context) {
                     val now = store.currentPerson(t.clip, label, sp.personId)
                     if (now != null) continue          // named, or filed in an unnamed voice (covered above)
                     val no = store.rejected(t.clip, label)
-                    val r = Matching.match(emb, if (no.isEmpty()) refs else refs.filter { it.personId !in no }, seconds = sp.seconds.takeIf { it > 0 })
+                    val r = matchVoice(emb, t.clip, sp, if (no.isEmpty()) refs else refs.filter { it.personId !in no }, emptyList())
                     if (r.decision != Matching.Decision.UNCERTAIN) continue
                     val pid = r.candidates.first().personId
                     out += Suggestion(pid, store.nameOf(pid) ?: continue, r.score, null, 1, sp.seconds, t.clip, label)

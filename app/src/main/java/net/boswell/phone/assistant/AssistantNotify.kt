@@ -13,7 +13,8 @@ import java.util.Locale
 
 /**
  * How the assistant reaches you: a notification, and -- only if switched on --
- * the answer read aloud through whatever the phone is playing to.
+ * the answer read aloud through whatever the phone is playing to, turning
+ * other audio down meanwhile, and never during a call.
  */
 object AssistantNotify {
     /**
@@ -87,6 +88,8 @@ object AssistantNotify {
      */
     fun speak(c: Context, text: String, voiceName: String? = AssistantPrefs.ttsVoice(c)) {
         val app = c.applicationContext
+        // Never into a call (phone or video): the notification is enough then.
+        if (inCall(app)) return
         engine(app) { t ->
             if (t == null) return@engine
             val v = voiceName?.let { n -> t.voices?.firstOrNull { it.name == n } }
@@ -94,8 +97,31 @@ object AssistantNotify {
             val said = SpeechText.clean(text)
             val id = "boswell-${utterances.incrementAndGet()}"
             pending[id] = said to (t.voice?.name ?: voiceName)
-            t.speak(said, TextToSpeech.QUEUE_FLUSH, null, id)
+            duck(app)
+            if (t.speak(said, TextToSpeech.QUEUE_FLUSH, null, id) != TextToSpeech.SUCCESS) { pending.remove(id); unduck(app) }
         }
+    }
+
+    private val SPEECH by lazy { android.media.AudioAttributes.Builder()
+        .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build() }
+
+    /**
+     * What else is playing (a video, music) is turned down while Boswell
+     * speaks, the way directions are spoken over music, and comes back when
+     * it's done: what it says is short, and was easy to miss under a video.
+     */
+    private val focus by lazy { android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+        .setAudioAttributes(SPEECH).build() }
+
+    private fun duck(app: Context) = runCatching { app.getSystemService(android.media.AudioManager::class.java).requestAudioFocus(focus) }
+
+    private fun unduck(app: Context) = runCatching { app.getSystemService(android.media.AudioManager::class.java).abandonAudioFocusRequest(focus) }
+
+    /** On a phone or video call, or the phone ringing. */
+    private fun inCall(app: Context): Boolean = app.getSystemService(android.media.AudioManager::class.java).mode.let {
+        it == android.media.AudioManager.MODE_IN_CALL || it == android.media.AudioManager.MODE_IN_COMMUNICATION ||
+            it == android.media.AudioManager.MODE_RINGTONE || it == android.media.AudioManager.MODE_CALL_SCREENING
     }
 
     /** Spoken (or just finished, within BoswellLines.AFTER) right now: the Omi may be hearing Boswell. */
@@ -130,7 +156,10 @@ object AssistantNotify {
         private fun ended(id: String) {
             pending.remove(id)
             speakingUntil = System.currentTimeMillis()
-            val row = rows.remove(id) ?: return
+            val row = rows.remove(id)
+            // Unless a newer utterance cut this one off: that one keeps the other audio down.
+            if (pending.isEmpty() && rows.isEmpty()) unduck(app)
+            row ?: return
             runCatching { AssistantStore(app).use { it.endSpoken(row, now()) } }
         }
     }
@@ -141,7 +170,7 @@ object AssistantNotify {
         if (t != null && ttsReady) { use(t); return }
         tts = TextToSpeech(app) { status ->
             ttsReady = status == TextToSpeech.SUCCESS
-            tts?.takeIf { ttsReady }?.setOnUtteranceProgressListener(listener(app))
+            tts?.takeIf { ttsReady }?.let { it.setOnUtteranceProgressListener(listener(app)); it.setAudioAttributes(SPEECH) }
             use(tts?.takeIf { ttsReady })
         }
     }

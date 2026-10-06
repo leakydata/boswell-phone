@@ -99,6 +99,13 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     private val _recheckNote = MutableStateFlow<String?>(null)
     val recheckNote: StateFlow<String?> = _recheckNote.asStateFlow()
 
+    /** A label worth a second look (LabelCheck), with what its voice said. */
+    data class LabelItem(val item: net.boswell.phone.speakers.LabelCheck.Item, val said: String)
+    private val _labels = MutableStateFlow<List<LabelItem>?>(null)
+    val labels: StateFlow<List<LabelItem>?> = _labels.asStateFlow()
+    /** Label questions skipped for now: asked again next time the app starts. */
+    private val labelsSkipped = mutableSetOf<String>()
+
     private val skipped = mutableSetOf<Long>()
     private var searchJob: Job? = null
 
@@ -106,7 +113,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         // Once: lines older transcripts left without a speaker get the nearest one's.
         val prefs = app.getSharedPreferences("boswell", android.content.Context.MODE_PRIVATE)
         // Once per change to how voices are matched: look at past recordings again.
-        val wave = "voices_rechecked_v4"     // v4: the owner's own rule (Matching.isOwner)
+        val wave = "voices_rechecked_v5"     // v5: normalized scores and the owner rule on them (AsNorm, Matching.isOwner)
         if (!prefs.getBoolean(wave, false)) viewModelScope.launch(Dispatchers.IO) {
             runCatching { net.boswell.phone.speakers.VoiceReview(app).recheck() }
                 .onSuccess { if (it.matched > 0) net.boswell.phone.capture.CaptureRepository.log("re-check: ${it.matched} more voices recognized") }
@@ -426,6 +433,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
                 _person.value.person?.let { openPerson(it.id) }
             }
             if (_review.value != null) loadReviewNow()
+            if (_labels.value != null) withContext(Dispatchers.IO) { loadLabelsNow() }
         }
     }
 
@@ -463,6 +471,61 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
     fun skip(id: Long) { skipped += id; viewModelScope.launch { loadPeople() } }
+
+    // ---------------------------------------------------------- label checks
+
+    fun loadLabels() = viewModelScope.launch(Dispatchers.IO) { loadLabelsNow() }
+
+    private fun loadLabelsNow() {
+        _labels.value = net.boswell.phone.speakers.LabelChecks(getApplication()).find().filter { it.key !in labelsSkipped }.map { i ->
+            val s = i.sample
+            LabelItem(i, if (s.clip != null && s.speaker != null) archive.linesOf(s.clip, s.speaker).joinToString(" ") else "")
+        }
+    }
+
+    private fun dropLabel(item: LabelItem) { _labels.value = _labels.value?.filter { it.item.key != item.item.key } }
+
+    /** "Skip": off the list for now. */
+    fun skipLabel(item: LabelItem) { labelsSkipped += item.item.key; dropLabel(item) }
+
+    /** "Right" or "Different": nothing changes, and it isn't asked again. */
+    fun labelIsRight(item: LabelItem) {
+        dropLabel(item)
+        viewModelScope.launch(Dispatchers.IO) { net.boswell.phone.speakers.LabelChecks(getApplication()).keep(item.item) }
+    }
+
+    /** A recording's voice under two people is [personId]'s. */
+    fun labelOnly(item: LabelItem, personId: Long) {
+        val t = item.item as? net.boswell.phone.speakers.LabelCheck.Twice ?: return
+        dropLabel(item)
+        actVoices { net.boswell.phone.speakers.LabelChecks(getApplication()).only(t, personId) }
+    }
+
+    /** Not this person ("Not them"): to the person named [to], or to a new unnamed voice. */
+    fun labelTakeOff(item: LabelItem, to: String?) {
+        val o = item.item as? net.boswell.phone.speakers.LabelCheck.Outlier ?: return
+        dropLabel(item)
+        actVoices { net.boswell.phone.speakers.LabelChecks(getApplication()).takeOff(o, to) }
+    }
+
+    /** Two people are one: [from] joins [into]. You are never merged into someone else. */
+    fun labelMerge(item: LabelItem, from: Long, into: Long) {
+        if (from == owner()) return
+        dropLabel(item)
+        actVoices { net.boswell.phone.speakers.LabelChecks(getApplication()).merge(from, into) }
+    }
+
+    /** An unnamed voice is the person it sounds like (review's Yes), or someone else (review's No). */
+    fun labelUnnamed(item: LabelItem, yes: Boolean) {
+        val u = item.item as? net.boswell.phone.speakers.LabelCheck.Unnamed ?: return
+        dropLabel(item)
+        actVoices {
+            val checks = net.boswell.phone.speakers.LabelChecks(getApplication())
+            val s = checks.suggestion(u) ?: return@actVoices
+            val vr = net.boswell.phone.speakers.VoiceReview(getApplication())
+            if (yes) vr.confirm(s) else vr.reject(s)
+        }
+    }
 
     private fun act(block: () -> Unit) = viewModelScope.launch {
         withContext(Dispatchers.IO) {

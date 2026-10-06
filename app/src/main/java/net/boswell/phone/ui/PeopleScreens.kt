@@ -45,11 +45,12 @@ private fun Person.asVoice() = Voice("p$id", name ?: if (kind == "media") "TV / 
 
 @Composable
 fun PeopleScreen(vm: ArchiveViewModel, pad: PaddingValues, onPerson: (Long) -> Unit, onOpenConversation: (Long) -> Unit, onLearnVoice: () -> Unit = {},
-                 onReview: () -> Unit = {}, onMemory: () -> Unit = {}, onTexting: () -> Unit = {}) {
+                 onReview: () -> Unit = {}, onMemory: () -> Unit = {}, onTexting: () -> Unit = {}, onLabels: () -> Unit = {}) {
     val s by vm.people.collectAsStateWithLifecycle()
     val review by vm.review.collectAsStateWithLifecycle()
     val note by vm.recheckNote.collectAsStateWithLifecycle()
-    androidx.compose.runtime.LaunchedEffect(s.named.size) { vm.loadReview() }
+    val labels by vm.labels.collectAsStateWithLifecycle()
+    androidx.compose.runtime.LaunchedEffect(s.named.size) { vm.loadReview(); vm.loadLabels() }
     var naming by remember { mutableStateOf<Person?>(null) }
     LazyColumn(
         contentPadding = PaddingValues(top = pad.calculateTopPadding() + 8.dp, bottom = pad.calculateBottomPadding() + 24.dp),
@@ -94,6 +95,21 @@ fun PeopleScreen(vm: ArchiveViewModel, pad: PaddingValues, onPerson: (Long) -> U
                         OutlinedButton(onClick = { vm.recheckVoices() },
                             colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = onCard)) { Text("Re-check voices") }
                     }
+                }
+            }
+        }
+
+        // Labels that look wrong: only shown when there's something to check.
+        val toCheck = labels?.size ?: 0
+        if (toCheck > 0) item {
+            Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Check the labels", style = MaterialTheme.typography.titleMedium)
+                        Text("$toCheck voice${if (toCheck == 1) "" else "s"} may be under the wrong name, or missing one. A wrong label throws off recognizing people.",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                    TextButton(onClick = onLabels) { Text("Check") }
                 }
             }
         }

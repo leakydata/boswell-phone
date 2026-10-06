@@ -207,7 +207,9 @@ object HomeServer {
 
     @Serializable data class HWord(val text: String, val start: Double, val end: Double)
     @Serializable data class HTurn(val start: Double, val end: Double)
-    @Serializable data class HSpeaker(val index: Int, val turns: List<HTurn>, val seconds: Double, val voiceprint: List<Float>? = null)
+    @Serializable data class HSpeaker(val index: Int, val turns: List<HTurn>, val seconds: Double, val voiceprint: List<Float>? = null,
+                                      /** Snr.db, worked out at home (absent from an older server). */
+                                      @kotlinx.serialization.SerialName("snr_db") val snrDb: Double? = null)
     @Serializable data class Result(
         val speech: Double,
         val words: List<HWord> = emptyList(),
@@ -218,7 +220,7 @@ object HomeServer {
     ) {
         val heard: List<Word> get() = words.map { Word(it.text, it.start, it.end) }
         val diarization: Diarization get() = Diarization(speakers.map { s ->
-            DiarizedSpeaker(s.index, s.turns.map { Turn(s.index, it.start, it.end) }, s.seconds, s.voiceprint?.toFloatArray())
+            DiarizedSpeaker(s.index, s.turns.map { Turn(s.index, it.start, it.end) }, s.seconds, s.voiceprint?.toFloatArray(), s.snrDb)
         })
     }
 

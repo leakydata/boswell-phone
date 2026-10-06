@@ -61,6 +61,8 @@ data class SpeakerId(
     /** Phone addition: the person (named or an unnamed cluster) this voice was filed under. */
     @SerialName("person_id") val personId: Long? = null,
     val seconds: Double,
+    /** Phone addition: how far the voice stands above its recording's noise floor, in dB (Snr); null in transcripts made before it was kept. */
+    @SerialName("snr_db") val snrDb: Double? = null,
 )
 
 object TranscriptJson {

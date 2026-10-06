@@ -32,7 +32,7 @@ data class VoiceGroup(val key: Long, val voiceprints: Int, val seconds: Double, 
  *
  * Starts empty. Nothing is imported from the desktop.
  */
-class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", null, 8) {
+class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", null, 9) {
     init {
         Matching.model = net.boswell.phone.diarize.VoiceModels.active(context)
         Matching.owner = net.boswell.phone.assistant.AssistantPrefs.owner(context)
@@ -72,6 +72,7 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         db.execSQL(ASSIGNED)
         db.execSQL(BOSWELL_VOICE)
         db.execSQL(NOT_BOSWELL)
+        db.execSQL(LABEL_CHECKS)
         db.execSQL("""
             CREATE TABLE matches (
                 id            INTEGER PRIMARY KEY,
@@ -109,6 +110,7 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
                   AND (SELECT COUNT(*) FROM voiceprints w WHERE w.person_id = voiceprints.person_id AND (w.seconds IS NULL OR w.seconds >= ${Matching.MIN_PRINT_SECONDS} OR w.origin = 'manual')) > 0""")
         }
         if (oldVersion < 8) { db.execSQL(BOSWELL_VOICE); db.execSQL(NOT_BOSWELL) }
+        if (oldVersion < 9) db.execSQL(LABEL_CHECKS)
     }
 
     override fun onConfigure(db: SQLiteDatabase) = db.setForeignKeyConstraintsEnabled(true)
@@ -116,34 +118,61 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
     private fun now() = System.currentTimeMillis() / 1000.0
 
     private fun refs(named: Boolean): List<Matching.Reference> {
-        val sql = """SELECT v.id, v.person_id, v.vec FROM voiceprints v JOIN people p ON p.id = v.person_id
+        val sql = """SELECT v.id, v.person_id, v.vec, v.clip FROM voiceprints v JOIN people p ON p.id = v.person_id
                      WHERE p.name IS ${if (named) "NOT NULL" else "NULL"} AND v.impure = 0 AND v.dim = ${Matching.model.dim} ORDER BY v.id"""
         return readableDatabase.rawQuery(sql, null).use { c ->
-            buildList { while (c.moveToNext()) add(Matching.Reference(c.getLong(0), c.getLong(1), unpack(c.getBlob(2)))) }
+            buildList { while (c.moveToNext()) add(Matching.Reference(c.getLong(0), c.getLong(1), unpack(c.getBlob(2)), c.str(3))) }
         }
     }
 
     /**
      * Match against named people: unnamed clusters are the question, not the
      * answer -- but they are part of the field a match must be clear of.
-     * [exclude] keeps a voice from competing with its own filed voiceprint.
-     * [seconds] is how much speech the voice has, null if unknown (Matching.isOwner).
+     * [exclude] keeps a voice from competing with its own filed voiceprint,
+     * and [notPeople] are people it was said not to be. [seconds] is how much
+     * speech the voice has and [snr] how far above its room it is, null if
+     * unknown (Matching.isOwner). Scores are normalized (AsNorm) against the
+     * unnamed voices, as heard in recording [clip], unless [normalized] is false.
      */
-    fun match(vec: FloatArray, seconds: Double?, exclude: Pair<String, String>? = null): Matching.Result =
-        Matching.match(vec, refs(named = true), unnamedField(exclude), seconds)
+    fun match(vec: FloatArray, seconds: Double?, clip: String? = null, snr: Double? = null, exclude: Pair<String, String>? = null,
+              notPeople: Set<Long> = emptySet(), normalized: Boolean = true): Matching.Result {
+        val named = refs(named = true)
+        val all = fieldRows()
+        val field = all.filter { (r, speaker) -> exclude == null || r.clip != exclude.first || speaker != exclude.second }.map { it.first }
+        val scorer = if (normalized) norm(named, all.map { it.first })?.forVoice(vec, clip, clip?.let(Pooling::clipTime)) else null
+        return Matching.match(vec, if (notPeople.isEmpty()) named else named.filter { it.personId !in notPeople }, field, seconds, snr, scorer)
+    }
 
     /** Unnamed voices' voiceprints, without the ones of one clip's voice. */
-    fun unnamedField(exclude: Pair<String, String>? = null): List<Matching.Reference> {
+    fun unnamedField(exclude: Pair<String, String>? = null): List<Matching.Reference> =
+        fieldRows().filter { (r, speaker) -> exclude == null || r.clip != exclude.first || speaker != exclude.second }.map { it.first }
+
+    private fun fieldRows(): List<Pair<Matching.Reference, String?>> {
         val sql = """SELECT v.id, v.person_id, v.vec, v.clip, v.speaker FROM voiceprints v JOIN people p ON p.id = v.person_id
                      WHERE p.name IS NULL AND v.impure = 0 AND v.dim = ${Matching.model.dim}"""
         return readableDatabase.rawQuery(sql, null).use { c ->
-            buildList {
-                while (c.moveToNext()) {
-                    if (exclude != null && c.getString(3) == exclude.first && c.getString(4) == exclude.second) continue
-                    add(Matching.Reference(c.getLong(0), c.getLong(1), unpack(c.getBlob(2))))
-                }
-            }
+            buildList { while (c.moveToNext()) add(Matching.Reference(c.getLong(0), c.getLong(1), unpack(c.getBlob(2)), c.str(3)) to c.str(4)) }
         }
+    }
+
+    /**
+     * Normalization (AsNorm) for matching against [named] with [field] as the
+     * unnamed voices, or null with another model. The cohort is made again
+     * when the named voiceprints, the owner or the model change, or when the
+     * unnamed voices have changed by more than [COHORT_DRIFT] of it since;
+     * in between, a voiceprint is scored against the cohort the first time
+     * it's met, and kept. One cohort serves every SpeakerStore of the app.
+     */
+    fun norm(named: List<Matching.Reference> = refs(named = true), field: List<Matching.Reference> = unnamedField()): AsNorm.Norm? {
+        if (Matching.model != net.boswell.phone.diarize.VoiceModel.SPEAKER_ID) return null
+        val key = Triple(Matching.model.id, Matching.owner, named.map { it.voiceprintId to it.personId }.hashCode())
+        val ids = field.mapTo(HashSet()) { it.voiceprintId }
+        val c = cached
+        if (c != null && c.key == key) {
+            val changed = c.field.count { it !in ids } + ids.count { it !in c.field }
+            if (changed <= COHORT_DRIFT * c.field.size) return c.norm
+        }
+        return AsNorm.Norm(AsNorm.cohort(named, field, Matching.owner)).also { cached = Cached(key, ids, it) }
     }
 
     fun logMatch(clip: String, speaker: String, r: Matching.Result) {
@@ -261,6 +290,44 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         }
     }
 
+    /**
+     * "Not them" for single voiceprints rather than a group (LabelCheck): these
+     * of [personId]'s voiceprints go to one new unnamed voice, and their voices
+     * are never matched to [personId] again. Nothing is deleted.
+     */
+    fun unnamePrints(personId: Long, ids: Collection<Long>): Long {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val fresh = newPerson(null)
+            for (id in ids) {
+                db.execSQL("INSERT OR IGNORE INTO rejections(clip, speaker, person_id) SELECT clip, speaker, person_id FROM voiceprints " +
+                    "WHERE id = ? AND person_id = ? AND clip IS NOT NULL AND speaker IS NOT NULL", arrayOf<Any>(id, personId))
+                db.execSQL("UPDATE voiceprints SET person_id = ?, source_cluster = NULL WHERE id = ? AND person_id = ?", arrayOf<Any>(fresh, id, personId))
+            }
+            db.setTransactionSuccessful()
+            return fresh
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /**
+     * One recording's voice filed under two people, and it's the other one:
+     * [personId]'s copies of it go (the other person keeps theirs, so the
+     * recording stays labeled) and it is never matched to [personId] again.
+     */
+    fun dropVoice(personId: Long, clip: String, speaker: String) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.execSQL("DELETE FROM voiceprints WHERE person_id = ? AND clip = ? AND speaker = ?", arrayOf<Any>(personId, clip, speaker))
+            db.execSQL("DELETE FROM assigned WHERE person_id = ? AND clip = ? AND speaker = ?", arrayOf<Any>(personId, clip, speaker))
+            reject(clip, speaker, personId)
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
     private fun android.database.Cursor.str(i: Int): String? = if (isNull(i)) null else getString(i)
 
     /**
@@ -286,6 +353,22 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
     fun namedRefs(): List<Matching.Reference> = refs(named = true)
 
     data class Member(val id: Long, val clip: String?, val speaker: String?, val vec: FloatArray, val seconds: Double)
+
+    /** Named people's voiceprints with where each came from, for LabelCheck. */
+    fun namedPrints(): List<LabelCheck.Print> = readableDatabase.rawQuery("""
+        SELECT v.id, v.person_id, v.clip, v.speaker, v.vec, COALESCE(v.seconds, 0) FROM voiceprints v JOIN people p ON p.id = v.person_id
+        WHERE p.name IS NOT NULL AND v.impure = 0 AND v.dim = ${Matching.model.dim} ORDER BY v.id""", null).use { c ->
+        buildList { while (c.moveToNext()) add(LabelCheck.Print(c.getLong(0), c.getLong(1), c.str(2), c.str(3), unpack(c.getBlob(4)), c.getDouble(5))) }
+    }
+
+    /** LabelCheck questions answered "that's right" or "they're different": not asked again. */
+    fun labelChecked(): Set<String> = readableDatabase.rawQuery("SELECT key FROM label_checks", null).use { c ->
+        buildSet { while (c.moveToNext()) add(c.getString(0)) }
+    }
+
+    fun markLabelChecked(key: String) {
+        writableDatabase.execSQL("INSERT OR REPLACE INTO label_checks(key, created) VALUES (?, ?)", arrayOf<Any>(key, now()))
+    }
 
     /** Unnamed voices that are still open questions (not marked TV or ignored), with their voiceprints. */
     fun unnamedClusters(): Map<Long, List<Member>> = readableDatabase.rawQuery("""
@@ -547,6 +630,12 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         private const val BOSWELL_VOICE = """CREATE TABLE IF NOT EXISTS boswell_voice (id INTEGER PRIMARY KEY, voice TEXT NOT NULL, vec BLOB NOT NULL,
             dim INTEGER NOT NULL, seconds REAL, clip TEXT, speaker TEXT, created REAL)"""
         private const val NOT_BOSWELL = "CREATE TABLE IF NOT EXISTS not_boswell (clip TEXT PRIMARY KEY)"
+        /** LabelCheck questions already answered, by LabelCheck.Item.key. */
+        private const val LABEL_CHECKS = "CREATE TABLE IF NOT EXISTS label_checks (key TEXT PRIMARY KEY, created REAL)"
+        /** Unnamed voices changed (added or gone) since the cohort was made, as a share of it, before it's made again. */
+        const val COHORT_DRIFT = 0.05
+        private class Cached(val key: Triple<String, Long?, Int>, val field: Set<Long>, val norm: AsNorm.Norm)
+        @Volatile private var cached: Cached? = null
         /** The TTS voice of Boswell prints learned before any answer was spoken (BoswellPerson): whichever speaks first. */
         const val UNKNOWN_VOICE = "?"
         /** Boswell voiceprints kept per TTS voice and model. */
