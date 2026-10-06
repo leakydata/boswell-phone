@@ -12,7 +12,8 @@ import net.boswell.phone.ui.MainActivity
 import java.util.Locale
 
 /**
- * How the assistant reaches you: a notification, and -- only if switched on --
+ * How the assistant reaches you: a notification (on a locked phone, only that
+ * something is waiting, unless answers are allowed there), and -- only if switched on --
  * the answer read aloud through whatever the phone is playing to, turning
  * other audio down meanwhile, and never during a call.
  */
@@ -36,8 +37,6 @@ object AssistantNotify {
         nm.deleteNotificationChannel("answers")
         nm.createNotificationChannel(NotificationChannel(ANSWERS, "Answers", NotificationManager.IMPORTANCE_HIGH).apply {
             description = "Answers to questions you ask, and reminders"
-            // Readable on the lock screen: you asked, so you want to see it there.
-            lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
         })
         nm.createNotificationChannel(NotificationChannel(SUGGESTIONS, "Suggestions", NotificationManager.IMPORTANCE_DEFAULT).apply {
             description = "Hints from the assistant listening in live mode"
@@ -62,8 +61,18 @@ object AssistantNotify {
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setContentIntent(open)
-            .setVisibility(if (channel == ANSWERS) NotificationCompat.VISIBILITY_PUBLIC else NotificationCompat.VISIBILITY_PRIVATE)
             .setAutoCancel(true)
+        val showLocked = AssistantPrefs.answersOnLockScreen(c)
+        // Hidden on the lock screen, the phone shows only that something is waiting, whatever its own setting.
+        val stub = NotificationCompat.Builder(c, channel)
+            .setSmallIcon(R.drawable.ic_stat_mic)
+            .setContentTitle("Boswell")
+            .setContentText(when (channel) { FACT_CHECKS -> "A fact check"; SUGGESTIONS -> "A suggestion"; else -> "An answer" } + " is waiting. Unlock to read it.")
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+        b.setVisibility(if (showLocked) NotificationCompat.VISIBILITY_PUBLIC else NotificationCompat.VISIBILITY_PRIVATE)
+        if (!showLocked) b.setPublicVersion(stub.build())
         moment?.let { w ->
             b.addAction(0, "Hear it", PendingIntent.getActivity(c, id, Intent(c, MainActivity::class.java)
                 .putExtra("open", Moments.openExtra(w)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
@@ -72,9 +81,39 @@ object AssistantNotify {
         Drafts.takeRecent()?.let { draft ->
             b.addAction(0, "Open draft", PendingIntent.getActivity(c, id + 7, draft, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
         }
-        val n = b.build()
-        runCatching { c.getSystemService(NotificationManager::class.java).notify(id, n) }
+        val nm = c.getSystemService(NotificationManager::class.java)
+        if (!showLocked && channel != LISTENING && locked(c)) {
+            // The answer itself replaces the stub once the phone is unlocked, without a second alert.
+            hidden[id] = b.setOnlyAlertOnce(true).setSilent(true).build()
+            whenUnlocked(c)
+            runCatching { nm.notify(id, stub.build()) }
+        } else runCatching { nm.notify(id, b.build()) }
         if (speak) this.speak(c, text)
+    }
+
+    private val hidden = java.util.concurrent.ConcurrentHashMap<Int, android.app.Notification>()
+    @Volatile private var unlockWatch: android.content.BroadcastReceiver? = null
+
+    private fun locked(c: Context) = c.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true
+
+    /** Show what was held back as soon as the person unlocks the phone (if this process is still alive; else tapping opens it). */
+    private fun whenUnlocked(c: Context) {
+        if (unlockWatch != null) return
+        val app = c.applicationContext
+        synchronized(this) {
+            if (unlockWatch != null) return
+            val r = object : android.content.BroadcastReceiver() {
+                override fun onReceive(ctx: Context, i: Intent) {
+                    val nm = app.getSystemService(NotificationManager::class.java)
+                    // Only those still showing: one swiped away stays gone.
+                    val showing = nm.activeNotifications.map { it.id }.toSet()
+                    for (id in hidden.keys.toList()) hidden.remove(id)?.let { if (id in showing) runCatching { nm.notify(id, it) } }
+                }
+            }
+            androidx.core.content.ContextCompat.registerReceiver(app, r, android.content.IntentFilter(Intent.ACTION_USER_PRESENT),
+                androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+            unlockWatch = r
+        }
     }
 
     fun cancel(c: Context, id: Int) = c.getSystemService(NotificationManager::class.java).cancel(id)

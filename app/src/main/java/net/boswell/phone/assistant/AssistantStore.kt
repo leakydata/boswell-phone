@@ -231,6 +231,10 @@ object AssistantPrefs {
     fun voice(c: Context) = p(c).getBoolean("voice_answers", false)
     fun setVoice(c: Context, on: Boolean) = p(c).edit().putBoolean("voice_answers", on).apply()
 
+    /** Answers readable on the lock screen; off unless turned on, so a locked phone shows only that one is waiting. */
+    fun answersOnLockScreen(c: Context) = p(c).getBoolean("answers_lock_screen", false)
+    fun setAnswersOnLockScreen(c: Context, on: Boolean) = p(c).edit().putBoolean("answers_lock_screen", on).apply()
+
     /** The text-to-speech voice for spoken answers (a TextToSpeech voice name), or null for the system default. */
     fun ttsVoice(c: Context): String? = p(c).getString("tts_voice", null)
     fun setTtsVoice(c: Context, name: String?) = p(c).edit().putString("tts_voice", name).apply()

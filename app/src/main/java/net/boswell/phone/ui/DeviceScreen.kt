@@ -261,6 +261,7 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                 var hasKey by remember { mutableStateOf(net.boswell.phone.assistant.Secrets.has(ctx2, net.boswell.phone.assistant.Secrets.OPENROUTER)) }
                 var model by remember { mutableStateOf(net.boswell.phone.assistant.AssistantPrefs.model(ctx2)) }
                 var voice by remember { mutableStateOf(net.boswell.phone.assistant.AssistantPrefs.voice(ctx2)) }
+                var onLock by remember { mutableStateOf(net.boswell.phone.assistant.AssistantPrefs.answersOnLockScreen(ctx2)) }
                 var watcher by remember { mutableStateOf(net.boswell.phone.assistant.AssistantPrefs.watcher(ctx2)) }
                 var budget by remember { mutableStateOf(net.boswell.phone.assistant.AssistantPrefs.budget(ctx2).toFloat()) }
                 var dbl by remember { mutableStateOf(net.boswell.phone.assistant.AssistantPrefs.doubleTap(ctx2)) }
@@ -367,6 +368,13 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                         Text("Read answers aloud as well as showing them.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Switch(checked = voice, onCheckedChange = { voice = it; net.boswell.phone.assistant.AssistantPrefs.setVoice(ctx2, it) })
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Show answers on the lock screen", style = MaterialTheme.typography.bodyLarge)
+                        Text("Off: a locked phone shows only that an answer is waiting.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(checked = onLock, onCheckedChange = { onLock = it; net.boswell.phone.assistant.AssistantPrefs.setAnswersOnLockScreen(ctx2, it) })
                 }
                 if (voice) {
                     var voices by remember { mutableStateOf<List<net.boswell.phone.assistant.AssistantNotify.VoiceOption>>(emptyList()) }
@@ -986,6 +994,97 @@ private fun CatchUpSection() {
 }
 
 /**
+ * A backup a day to the home server (HomeBackup), one now, and a restore from one
+ * of the server's: downloaded to the cache, then the same confirm-and-restore as
+ * from a file in setup. The download is deleted afterward, whatever happens.
+ */
+@Composable
+private fun HomeBackupRows() {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val B = net.boswell.phone.backup.HomeBackup
+    var on by remember { mutableStateOf(B.on(ctx)) }
+    val sending by B.progress.collectAsStateWithLifecycle()
+    val asked by remember { B.asked(ctx) }.collectAsStateWithLifecycle(false)
+    fun summary() = listOfNotNull(B.lastResult(ctx),
+        B.last(ctx).takeIf { it > 0 }?.let { "last one ${Fmt.ago(it / 1000.0)}, ${Fmt.bytes(B.lastBytes(ctx))}" }).joinToString(" · ").ifBlank { null }
+    var last by remember { mutableStateOf(summary()) }
+    LaunchedEffect(sending, asked) { last = summary() }
+    var remote by remember { mutableStateOf<List<net.boswell.phone.backup.HomeBackup.Remote>?>(null) }
+    var fetching by remember { mutableStateOf<Float?>(null) }
+    var fetched by remember { mutableStateOf<java.io.File?>(null) }
+    var info by remember { mutableStateOf<net.boswell.phone.backup.Backup.Summary?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    fun discard() { fetched?.delete(); fetched = null; info = null }
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { fetched?.delete() } }
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Back up to the home server every day", style = MaterialTheme.typography.bodyLarge)
+            Text("Everything in Boswell, as in Storage → Back up, goes to your computer about once a day over Wi-Fi, whenever it's on; " +
+                "it keeps the newest 7. API keys are never included.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = on, onCheckedChange = { on = it; B.setOn(ctx, it) })
+    }
+    val s = sending
+    if (s != null) {
+        Text("Backing up to your computer…", style = MaterialTheme.typography.bodyMedium)
+        LinearProgressIndicator(progress = { s }, modifier = Modifier.fillMaxWidth())
+    } else last?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+    val f = fetching
+    val i = info
+    when {
+        f != null -> {
+            Text("Downloading the backup…", style = MaterialTheme.typography.bodyMedium)
+            LinearProgressIndicator(progress = { f }, modifier = Modifier.fillMaxWidth())
+        }
+        i != null && fetched != null -> {
+            net.boswell.phone.setup.RestoreConfirm(android.net.Uri.fromFile(fetched), i, onRestored = { fetched?.delete() },
+                onError = { error = it; discard() })
+            TextButton(onClick = { discard() }) { Text("Cancel") }
+        }
+        else -> Row {
+            TextButton(enabled = s == null && !asked, onClick = { B.now(ctx) }) { Text(if (asked && s == null) "Waiting for a connection…" else "Back up now") }
+            TextButton(onClick = {
+                error = null
+                scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching { B.list(ctx) }.onSuccess { remote = it }
+                        .onFailure { error = "Couldn't get the list: " + net.boswell.phone.home.HomeServer.explain(it.message) }
+                }
+            }) { Text("Restore from the home server…") }
+        }
+    }
+    error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+    remote?.let { list ->
+        AlertDialog(onDismissRequest = { remote = null },
+            title = { Text("Restore from the home server") },
+            text = {
+                if (list.isEmpty()) Text("Your computer has no backups from this phone yet.")
+                else Column {
+                    for (b in list) TextButton(onClick = {
+                        remote = null; error = null; fetching = 0f
+                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                            runCatching { B.download(ctx, b.name) { fetching = it } }
+                                .onSuccess { file ->
+                                    fetched = file
+                                    info = net.boswell.phone.backup.Backup.peek(ctx, android.net.Uri.fromFile(file))
+                                    if (info == null) { error = "That download isn't a Boswell backup."; discard() }
+                                }
+                                .onFailure { error = "The download didn't finish: " + net.boswell.phone.home.HomeServer.explain(it.message) }
+                            fetching = null
+                        }
+                    }) {
+                        Text("${Fmt.shortDay(java.time.Instant.ofEpochMilli((b.created * 1000).toLong()).atZone(java.time.ZoneId.systemDefault()).toLocalDate())}, " +
+                            "${Fmt.time(b.created)} · ${Fmt.bytes(b.bytes)}", modifier = Modifier.fillMaxWidth())
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { remote = null }) { Text("Cancel") } })
+    }
+}
+
+/**
  * Boswell Server on the person's own computer: pair (scan its QR code, or type the
  * address and code), use it for every recording, and choose what happens when
  * home can't be reached.
@@ -1010,7 +1109,7 @@ private fun HomeServerSection() {
             val problem = H.pair(ctx, url, c)
             status = problem ?: runCatching { H.health(ctx) }.getOrElse { "Paired, but the server didn't answer: ${it.message}" }
             paired = H.paired(ctx); enabled = H.enabled(ctx); busy = false
-            if (problem == null) net.boswell.phone.process.ProcessingWorker.enqueue(ctx)
+            if (problem == null) { net.boswell.phone.process.ProcessingWorker.enqueue(ctx); net.boswell.phone.backup.HomeBackup.schedule(ctx) }
         }
     }
 
@@ -1080,6 +1179,7 @@ private fun HomeServerSection() {
             else "The phone transcribes them itself until home is back.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         CatchUpSection()
+        HomeBackupRows()
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(enabled = !busy, onClick = {
                 busy = true
@@ -1088,7 +1188,7 @@ private fun HomeServerSection() {
                     busy = false
                 }
             }) { Text("Test") }
-            TextButton(onClick = { H.forget(ctx); paired = false; enabled = false; status = null }) { Text("Unpair") }
+            TextButton(onClick = { H.forget(ctx); net.boswell.phone.backup.HomeBackup.schedule(ctx); paired = false; enabled = false; status = null }) { Text("Unpair") }
         }
     }
     if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())

@@ -430,15 +430,44 @@ private fun Assistant() {
     Spacer(Modifier.height(4.dp))
 }
 
+/**
+ * What a backup holds, and a button that restores it over everything here and restarts.
+ * [onRestored] runs just before the restart; [onError] says why it didn't finish.
+ * Shared by setup (a picked file) and Device → Home server (a downloaded one).
+ */
+@Composable
+internal fun RestoreConfirm(uri: android.net.Uri, info: net.boswell.phone.backup.Backup.Summary,
+                            onRestored: () -> Unit = {}, onError: (String) -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var progress by remember { mutableStateOf<Float?>(null) }
+    val p = progress
+    if (p != null) {
+        Text("Restoring… Boswell will restart when it's done.")
+        LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth())
+        return
+    }
+    Text("Backup from ${Fmt.day(java.time.Instant.ofEpochSecond(info.created).atZone(java.time.ZoneId.systemDefault()).toLocalDate())}: ${info.recordings} recordings" +
+        if (info.keys) ", with your API key." else ".", style = MaterialTheme.typography.bodyMedium)
+    Text("This replaces anything already in Boswell on this phone.", style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Button(onClick = {
+        progress = 0f
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { net.boswell.phone.backup.Backup.restore(ctx, uri) { progress = it } }
+                .onSuccess { onRestored(); net.boswell.phone.backup.Backup.restart(ctx) }
+                .onFailure { onError(it.message ?: "The restore didn't finish."); progress = null }
+        }
+    }) { Text("Restore") }
+}
+
 /** "Moving from another phone?": pick a backup, see what's in it, restore, restart. */
 @Composable
 private fun RestoreCard() {
     val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
     var picked by remember { mutableStateOf<android.net.Uri?>(null) }
     var info by remember { mutableStateOf<net.boswell.phone.backup.Backup.Summary?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    var progress by remember { mutableStateOf<Float?>(null) }
     val open = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         picked = uri; error = null
@@ -450,24 +479,7 @@ private fun RestoreCard() {
             Text("Moving from another phone?", fontWeight = FontWeight.SemiBold)
             val i = info
             when {
-                progress != null -> {
-                    Text("Restoring… Boswell will restart when it's done.")
-                    LinearProgressIndicator(progress = { progress ?: 0f }, modifier = Modifier.fillMaxWidth())
-                }
-                i != null -> {
-                    Text("Backup from ${Fmt.day(java.time.Instant.ofEpochSecond(i.created).atZone(java.time.ZoneId.systemDefault()).toLocalDate())}: ${i.recordings} recordings" +
-                        if (i.keys) ", with your API key." else ".", style = MaterialTheme.typography.bodyMedium)
-                    Text("This replaces anything already in Boswell on this phone.", style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Button(onClick = {
-                        progress = 0f
-                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                            runCatching { net.boswell.phone.backup.Backup.restore(ctx, picked!!) { progress = it } }
-                                .onSuccess { net.boswell.phone.backup.Backup.restart(ctx) }
-                                .onFailure { error = it.message ?: "The restore didn't finish."; progress = null }
-                        }
-                    }) { Text("Restore") }
-                }
+                i != null -> RestoreConfirm(picked!!, i, onError = { error = it })
                 else -> {
                     Text("Restore a Boswell backup (Device → Storage → Back up) to bring your recordings, people and voices with you.",
                         style = MaterialTheme.typography.bodyMedium)

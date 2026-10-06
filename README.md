@@ -122,7 +122,10 @@ computer** (Ollama): free, and nothing leaves the house. Web searches still use 
 ### 💾 Yours to keep
 **Back up** everything — recordings, transcripts, people and their voices, to-dos,
 what the assistant remembers — to one file, **automatically every week** into a folder
-you choose, and **restore** it in setup on a new phone.
+you choose, and **restore** it in setup on a new phone. Paired with
+[Boswell Server](https://github.com/leakydata/boswell-server), it also backs up **every day
+to your own computer** (the newest 7 kept there, API keys never included), and restores from
+there in Device → Home server.
 
 ### 🔒 Private by default
 Everything is recorded, transcribed, identified and stored **on the phone**. Nothing

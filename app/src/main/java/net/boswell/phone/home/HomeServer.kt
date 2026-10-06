@@ -133,7 +133,7 @@ object HomeServer {
     /** Couldn't reach the server, or it refused; [notPaired] when the key no longer works. */
     class Unavailable(message: String, val notPaired: Boolean = false) : IOException(message)
 
-    private fun open(url: String, method: String, timeoutMs: Int): HttpURLConnection =
+    internal fun open(url: String, method: String, timeoutMs: Int): HttpURLConnection =
         (URI(url).toURL().openConnection() as HttpURLConnection).apply {
             requestMethod = method; connectTimeout = 5_000; readTimeout = timeoutMs
         }

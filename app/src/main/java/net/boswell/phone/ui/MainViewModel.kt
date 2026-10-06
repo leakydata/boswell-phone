@@ -107,7 +107,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         net.boswell.phone.process.CleanupWorker.schedule(getApplication(), true)
         net.boswell.phone.assistant.RoutinesWorker.schedule(getApplication())
         net.boswell.phone.backup.AutoBackup.schedule(getApplication())
+        net.boswell.phone.backup.HomeBackup.schedule(getApplication())
         net.boswell.phone.speakers.VoiceMigration.schedule(getApplication())
+        net.boswell.phone.speakers.SnrBackfill.schedule(getApplication())
         net.boswell.phone.process.CatchUp.schedule(getApplication())
         refreshAll()
         viewModelScope.launch { capture.distinctUntilChangedBy { it.clipsWritten }.collect { refreshClips() } }

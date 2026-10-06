@@ -40,7 +40,8 @@ object Backup {
     private val DATABASES = listOf("speakers.db", "todo.db", "life.db", "assistant.db")
     private val FOLDERS = listOf("clips", "transcripts")
     private val SKIP_PREFS = setOf("setup_done", "calendar_id", "last_sync", "last_sync_result", "omi_battery_band", "restored",
-        "backup_folder", "backup_last", "backup_last_result")   // a folder permission belongs to this install
+        "backup_folder", "backup_last", "backup_last_result",   // a folder permission belongs to this install
+        "home_backup_last", "home_backup_last_result", "home_backup_bytes")
     private val json = Json { prettyPrint = false }
 
     data class Summary(val recordings: Int, val bytes: Long, val keys: Boolean, val created: Long)
@@ -48,7 +49,11 @@ object Backup {
     fun suggestedName() = "boswell-backup-${java.time.LocalDate.now()}.zip"
 
     /** Write a backup to [uri]. [progress] gets 0..1. */
-    fun export(c: Context, uri: Uri, includeKeys: Boolean, progress: (Float) -> Unit = {}): Summary {
+    fun export(c: Context, uri: Uri, includeKeys: Boolean, progress: (Float) -> Unit = {}): Summary =
+        export(c, c.contentResolver.openOutputStream(uri)!!, includeKeys, progress)
+
+    /** Write a backup to [out] as it's made (nothing is gathered first), and close it. [progress] gets 0..1. */
+    fun export(c: Context, out: java.io.OutputStream, includeKeys: Boolean, progress: (Float) -> Unit = {}): Summary {
         val files = FOLDERS.flatMap { d -> File(c.filesDir, d).listFiles().orEmpty().filter { it.isFile }.map { "files/$d/${it.name}" to it } }
         val total = files.sumOf { it.second.length() }.coerceAtLeast(1)
         val tmp = File(c.cacheDir, "backup-db").apply { deleteRecursively(); mkdirs() }
@@ -57,7 +62,7 @@ object Backup {
         var recordings = 0
         var bytes = 0L
         try {
-            c.contentResolver.openOutputStream(uri)!!.use { raw ->
+            out.use { raw ->
                 ZipOutputStream(raw.buffered()).use { zip ->
                     fun put(name: String, bytes: ByteArray) { zip.putNextEntry(ZipEntry(name)); zip.write(bytes); zip.closeEntry() }
                     // The manifest goes first, so a restore can refuse a wrong file before reading the rest.
@@ -73,9 +78,9 @@ object Backup {
                     // A consistent copy of each database, even while the app is using it.
                     for (name in DATABASES) {
                         val src = c.getDatabasePath(name).takeIf { it.exists() } ?: continue
-                        val out = File(tmp, name)
-                        SQLiteDatabase.openDatabase(src.path, null, SQLiteDatabase.OPEN_READONLY).use { it.execSQL("VACUUM INTO ?", arrayOf(out.path)) }
-                        zip.putNextEntry(ZipEntry("databases/$name")); out.inputStream().use { it.copyTo(zip) }; zip.closeEntry()
+                        val copy = File(tmp, name)
+                        SQLiteDatabase.openDatabase(src.path, null, SQLiteDatabase.OPEN_READONLY).use { it.execSQL("VACUUM INTO ?", arrayOf(copy.path)) }
+                        zip.putNextEntry(ZipEntry("databases/$name")); copy.inputStream().use { it.copyTo(zip) }; zip.closeEntry()
                     }
                     for ((name, f) in files) {
                         val listed = f.length()
