@@ -451,7 +451,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
                 _conv.value.conversation?.let { openConversation(it.id, keepPlayer = true) }
                 _person.value.person?.let { openPerson(it.id) }
             }
-            if (_review.value != null) loadReviewNow()
+            if (_review.value != null) withContext(Dispatchers.IO) { loadReviewNow() }
             if (_labels.value != null) withContext(Dispatchers.IO) { loadLabelsNow() }
         }
     }
@@ -470,7 +470,8 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
 
     fun loadReview() = viewModelScope.launch(Dispatchers.IO) { loadReviewNow() }
 
-    private fun loadReviewNow() {
+    // A list that couldn't be made this time keeps the last one: never worth closing the app over.
+    private fun loadReviewNow() = runCatching {
         _review.value = net.boswell.phone.speakers.VoiceReview(getApplication()).suggestions().map {
             ReviewItem(it, archive.linesOf(it.clip, it.label).joinToString(" "))
         }
@@ -495,7 +496,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
 
     fun loadLabels() = viewModelScope.launch(Dispatchers.IO) { loadLabelsNow() }
 
-    private fun loadLabelsNow() {
+    private fun loadLabelsNow() = runCatching {
         _labels.value = net.boswell.phone.speakers.LabelChecks(getApplication()).find().filter { it.key !in labelsSkipped }.map { i ->
             val s = i.sample
             LabelItem(i, if (s.clip != null && s.speaker != null) archive.linesOf(s.clip, s.speaker).joinToString(" ") else "")

@@ -117,12 +117,23 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
 
     private fun now() = System.currentTimeMillis() / 1000.0
 
+    /**
+     * A read too big for one cursor window (voiceprints: thousands of rows) is fetched a window
+     * at a time, and another connection changing the rows between windows makes it fail
+     * ("Couldn't read row"). Inside a transaction, nobody else writes until it's read.
+     */
+    private fun <T> whole(read: (SQLiteDatabase) -> T): T {
+        val db = writableDatabase
+        db.beginTransactionNonExclusive()
+        try { return read(db).also { db.setTransactionSuccessful() } } finally { db.endTransaction() }
+    }
+
     private fun refs(named: Boolean): List<Matching.Reference> {
         val sql = """SELECT v.id, v.person_id, v.vec, v.clip FROM voiceprints v JOIN people p ON p.id = v.person_id
                      WHERE p.name IS ${if (named) "NOT NULL" else "NULL"} AND v.impure = 0 AND v.dim = ${Matching.model.dim} ORDER BY v.id"""
-        return readableDatabase.rawQuery(sql, null).use { c ->
+        return whole { db -> db.rawQuery(sql, null).use { c ->
             buildList { while (c.moveToNext()) add(Matching.Reference(c.getLong(0), c.getLong(1), unpack(c.getBlob(2)), c.str(3))) }
-        }
+        } }
     }
 
     /**
@@ -150,9 +161,9 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
     private fun fieldRows(): List<Pair<Matching.Reference, String?>> {
         val sql = """SELECT v.id, v.person_id, v.vec, v.clip, v.speaker FROM voiceprints v JOIN people p ON p.id = v.person_id
                      WHERE p.name IS NULL AND v.impure = 0 AND v.dim = ${Matching.model.dim}"""
-        return readableDatabase.rawQuery(sql, null).use { c ->
+        return whole { db -> db.rawQuery(sql, null).use { c ->
             buildList { while (c.moveToNext()) add(Matching.Reference(c.getLong(0), c.getLong(1), unpack(c.getBlob(2)), c.str(3)) to c.str(4)) }
-        }
+        } }
     }
 
     /**
@@ -355,11 +366,11 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
     data class Member(val id: Long, val clip: String?, val speaker: String?, val vec: FloatArray, val seconds: Double)
 
     /** Named people's voiceprints with where each came from, for LabelCheck. */
-    fun namedPrints(): List<LabelCheck.Print> = readableDatabase.rawQuery("""
+    fun namedPrints(): List<LabelCheck.Print> = whole { db -> db.rawQuery("""
         SELECT v.id, v.person_id, v.clip, v.speaker, v.vec, COALESCE(v.seconds, 0) FROM voiceprints v JOIN people p ON p.id = v.person_id
         WHERE p.name IS NOT NULL AND v.impure = 0 AND v.dim = ${Matching.model.dim} ORDER BY v.id""", null).use { c ->
         buildList { while (c.moveToNext()) add(LabelCheck.Print(c.getLong(0), c.getLong(1), c.str(2), c.str(3), unpack(c.getBlob(4)), c.getDouble(5))) }
-    }
+    } }
 
     /** LabelCheck questions answered "that's right" or "they're different": not asked again. */
     fun labelChecked(): Set<String> = readableDatabase.rawQuery("SELECT key FROM label_checks", null).use { c ->
@@ -371,14 +382,14 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
     }
 
     /** Unnamed voices that are still open questions (not marked TV or ignored), with their voiceprints. */
-    fun unnamedClusters(): Map<Long, List<Member>> = readableDatabase.rawQuery("""
+    fun unnamedClusters(): Map<Long, List<Member>> = whole { db -> db.rawQuery("""
         SELECT v.person_id, v.id, v.clip, v.speaker, v.vec, COALESCE(v.seconds, 0) FROM voiceprints v JOIN people p ON p.id = v.person_id
         WHERE p.name IS NULL AND p.kind IS NULL AND v.impure = 0 AND v.dim = ${Matching.model.dim} ORDER BY v.person_id, v.id""", null).use { c ->
         val out = LinkedHashMap<Long, MutableList<Member>>()
         while (c.moveToNext()) out.getOrPut(c.getLong(0)) { mutableListOf() }
             .add(Member(c.getLong(1), c.str(2), c.str(3), unpack(c.getBlob(4)), c.getDouble(5)))
         out
-    }
+    } }
 
     fun reject(clip: String, speaker: String, personId: Long) {
         writableDatabase.execSQL("INSERT OR IGNORE INTO rejections(clip, speaker, person_id) VALUES (?, ?, ?)", arrayOf<Any>(clip, speaker, personId))
@@ -594,6 +605,26 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
     }
 
     /** Follow merges from an id a transcript recorded to the person it is now. */
+    /**
+     * [currentPerson] for many voices at once (a conversation rebuild asks it of every voice
+     * there is): the same answers from three reads, instead of two or three queries a voice.
+     */
+    fun currentPeople(): (clip: String, label: String, recorded: Long?) -> Long? = whole { db ->
+        val merges = HashMap<Long, Long>()
+        db.rawQuery("SELECT from_id, into_id FROM merges", null).use { c -> while (c.moveToNext()) merges[c.getLong(0)] = c.getLong(1) }
+        fun follow(id: Long): Long { var x = id; repeat(32) { x = merges[x] ?: return x }; return x }
+        val filed = HashMap<Pair<String, String>, Long>()
+        db.rawQuery("SELECT clip, speaker, person_id FROM voiceprints WHERE clip IS NOT NULL AND speaker IS NOT NULL ORDER BY id", null).use { c ->
+            while (c.moveToNext()) filed.putIfAbsent(c.getString(0) to c.getString(1), c.getLong(2))
+        }
+        val assigned = HashMap<Pair<String, String>, Long>()
+        db.rawQuery("SELECT clip, speaker, person_id FROM assigned", null).use { c ->
+            while (c.moveToNext()) assigned[c.getString(0) to c.getString(1)] = c.getLong(2)
+        }
+        val answer: (String, String, Long?) -> Long? = { clip, label, recorded -> filed[clip to label] ?: assigned[clip to label]?.let(::follow) ?: recorded?.let(::follow) }
+        answer
+    }
+
     fun resolve(personId: Long): Long {
         var id = personId
         repeat(32) {

@@ -240,6 +240,7 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
                 buildList { while (c.moveToNext()) add(C(c.getString(0), c.getDouble(1), c.getDouble(2), c.getDouble(3))) }
             }
         }
+        val who = speakers.currentPeople()
         var i = 0
         while (i < speech.size) {
             var j = i
@@ -247,7 +248,7 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
             val group = speech.subList(i, j + 1)
             val id = (group.first().started * 1000).toLong()
             for (c in group) db.execSQL("UPDATE clips SET conversation = ? WHERE name = ?", arrayOf<Any>(id, c.name))
-            linkSpeakers(db, group.map { it.name }, speakers)
+            linkSpeakers(db, group.map { it.name }, who)
 
             val talk = HashMap<String, Double>()
             // Only voices that said something transcribed: a cough or a second of TV
@@ -272,7 +273,7 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
         }
     }
 
-    private fun linkSpeakers(db: SQLiteDatabase, clips: List<String>, speakers: SpeakerStore) {
+    private fun linkSpeakers(db: SQLiteDatabase, clips: List<String>, who: (String, String, Long?) -> Long?) {
         data class Voice(val key: String, val emb: FloatArray)
         val voices = mutableListOf<Voice>()
         var anon = 0
@@ -287,7 +288,7 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
                     db.execSQL("UPDATE clip_speakers SET conv_key = ? WHERE clip = ? AND label = ?", arrayOf(BOSWELL, clip, label))
                     continue
                 }
-                val pid = speakers.currentPerson(clip, label, recorded)
+                val pid = who(clip, label, recorded)
                 val key = when {
                     pid != null -> "p$pid"
                     emb != null -> voices.map { it to Matching.dot(Matching.unit(emb), it.emb) }.maxByOrNull { it.second }
