@@ -152,7 +152,7 @@ class RecheckFromIndexTest {
         look("first look")
         look("again, nothing new")
 
-        // Transcripts that say a little less than a recheck finds: a score off by rounding (not a change),
+        // Transcripts that say a little less than a recheck finds: a score off by less than VoiceReview.SCORE_MOVED (not a change),
         // a score off by more, and another top candidate. Only the last two are written again.
         val open = voices.filter { v ->
             val sp = fx.read(v.clip).speakers[v.label]
@@ -163,8 +163,8 @@ class RecheckFromIndexTest {
             val t = fx.read(v.clip)
             val sp = t.speakers.getValue(v.label)
             val nudged = when (i) {
-                0 -> sp.copy(score = sp.score + 5e-5)
-                1 -> sp.copy(score = sp.score + 5e-3)
+                0 -> sp.copy(score = sp.score + 5e-3)
+                1 -> sp.copy(score = sp.score + 0.05)
                 else -> sp.copy(candidates = sp.candidates.reversed())
             }
             fx.transcript(t.copy(speakers = t.speakers + (v.label to nudged)))

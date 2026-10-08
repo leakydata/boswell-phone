@@ -107,7 +107,7 @@ class VoiceReview(private val context: Context) {
             val own = known.own(v.clip, v.label)
             val r = matchVoice(v.emb!!, v.clip, v.seconds, v.snrDb, if (no.isEmpty()) refs else refs.filter { it.personId !in no },
                 if (own.isEmpty()) field else field.filter { it.voiceprintId !in own })
-            if (r.decision == Matching.Decision.MATCHED || differs(r, v.top, v.score)) due += v.clip
+            if (r.decision == Matching.Decision.MATCHED || differs(r, v.top, v.score, v.decision)) due += v.clip
         }
         due
     }
@@ -181,9 +181,15 @@ class VoiceReview(private val context: Context) {
         return Matching.match(vec, refs, field, seconds.takeIf { it > 0 }, snrDb, norm?.forVoice(vec, clip, Pooling.clipTime(clip)))
     }
 
-    /** A voice left unmatched still counts as changed with another top candidate or a score moved by more than rounding. */
-    private fun differs(r: Matching.Result, top: Long?, score: Double): Boolean =
-        r.candidates.firstOrNull()?.personId != top || kotlin.math.abs(r.score - score) > 1e-4
+    /**
+     * A voice left unmatched still counts as changed with another decision, another top
+     * candidate, or a score moved by more than [SCORE_MOVED]. Not less: the cohort that
+     * normalizes scores (AsNorm) shifts a little whenever voices are added, and rewriting
+     * thousands of transcripts for the third decimal made every recheck slow.
+     */
+    private fun differs(r: Matching.Result, top: Long?, score: Double, decision: String?): Boolean =
+        r.candidates.firstOrNull()?.personId != top || r.decision.name.lowercase() != decision ||
+            kotlin.math.abs(r.score - score) > SCORE_MOVED
 
     private fun recheckFile(f: File, store: SpeakerStore, refs: List<Matching.Reference>): Int {
         val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.logged("recheck: reading ${f.name}").getOrNull() ?: return 0
@@ -209,7 +215,7 @@ class VoiceReview(private val context: Context) {
                 matched++; changed = true
                 sp.copy(name = store.nameOf(pid), score = r.score, decision = "matched", margin = r.margin, candidates = candidates, personId = pid)
             } else {
-                if (differs(r, sp.candidates.firstOrNull()?.personId, sp.score)) changed = true
+                if (differs(r, sp.candidates.firstOrNull()?.personId, sp.score, sp.decision)) changed = true
                 sp.copy(score = r.score, decision = r.decision.name.lowercase(), margin = r.margin, candidates = candidates)
             }
         }
@@ -350,5 +356,7 @@ class VoiceReview(private val context: Context) {
         const val SINGLE_MIN_SECONDS = 1.5
         /** Where "possible" becomes "likely" in the review's wording and order; matching never uses it. */
         val LIKELY get() = Matching.model.likely
+        /** How far a score must move before a transcript is rewritten for it (see [differs]). */
+        const val SCORE_MOVED = 0.01
     }
 }

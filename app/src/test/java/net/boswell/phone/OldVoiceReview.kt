@@ -88,7 +88,9 @@ class OldVoiceReview(private val context: Context) {
                 sp.copy(name = store.nameOf(pid), score = r.score, decision = "matched", margin = r.margin, candidates = candidates, personId = pid)
             } else {
                 val top = candidates.firstOrNull()?.personId
-                if (top != sp.candidates.firstOrNull()?.personId || kotlin.math.abs(r.score - sp.score) > 1e-4) changed = true
+                // The reference follows the shipped rule (VoiceReview.SCORE_MOVED, decisions counted).
+                if (top != sp.candidates.firstOrNull()?.personId || r.decision.name.lowercase() != sp.decision ||
+                    kotlin.math.abs(r.score - sp.score) > net.boswell.phone.speakers.VoiceReview.SCORE_MOVED) changed = true
                 sp.copy(score = r.score, decision = r.decision.name.lowercase(), margin = r.margin, candidates = candidates)
             }
         }
