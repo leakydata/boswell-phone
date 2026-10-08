@@ -152,26 +152,37 @@ fun PeopleScreen(vm: ArchiveViewModel, pad: PaddingValues, onPerson: (Long) -> U
             }
         }
 
+        // People you know, then the named voices from TV, videos and radio (a creator, a host, a show).
+        val (onScreen, known) = s.named.partition { it.kind == "media" }
         item { Text("Known", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp)) }
-        if (s.named.isEmpty()) item {
+        if (known.isEmpty()) item {
             Text("Nobody named yet. Open a conversation and tap a voice to say who it is.",
                 Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        items(s.named, key = { it.id }) { p ->
-            ListItem(
-                modifier = Modifier.padding(horizontal = 4.dp),
-                leadingContent = { Avatar(p.asVoice(), 44) },
-                headlineContent = { Text(p.name ?: "") },
-                supportingContent = { Text("Last heard ${Fmt.ago(p.lastHeard)} · ${p.voiceprints} voice sample${if (p.voiceprints == 1) "" else "s"}") },
-                trailingContent = { TextButton(onClick = { onPerson(p.id) }) { Text("Open") } },
-            )
+        items(known, key = { it.id }) { p -> NamedRow(p, onPerson) }
+        if (onScreen.isNotEmpty()) {
+            item { Text("TV & video", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp)) }
+            items(onScreen, key = { it.id }) { p -> NamedRow(p, onPerson) }
         }
-        if (s.media.isNotEmpty()) item {
-            Text("${s.media.size} voice${if (s.media.size == 1) "" else "s"} marked as TV or media", Modifier.padding(horizontal = 16.dp),
+        val unnamedMedia = s.media.count { it.name == null }
+        if (unnamedMedia > 0) item {
+            Text("$unnamedMedia unnamed voice${if (unnamedMedia == 1) "" else "s"} marked as TV or media", Modifier.padding(horizontal = 16.dp),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
     naming?.let { p -> NameDialog(p.name, onDismiss = { naming = null }) { vm.namePerson(p.id, it); naming = null } }
+}
+
+@Composable
+private fun NamedRow(p: Person, onPerson: (Long) -> Unit) {
+    ListItem(
+        modifier = Modifier.padding(horizontal = 4.dp),
+        leadingContent = { Avatar(p.asVoice(), 44) },
+        headlineContent = { Text(p.name ?: "") },
+        supportingContent = { Text((if (p.kind == "media") "On TV or video · " else "") +
+            "Last heard ${Fmt.ago(p.lastHeard)} · ${p.voiceprints} voice sample${if (p.voiceprints == 1) "" else "s"}") },
+        trailingContent = { TextButton(onClick = { onPerson(p.id) }) { Text("Open") } },
+    )
 }
 
 @Composable
@@ -217,7 +228,17 @@ fun PersonScreen(vm: ArchiveViewModel, id: Long, onBack: () -> Unit, onOpen: (Lo
                     }
                 }
             }
-            if (p?.name != null) item {
+            if (p?.name != null && p.id != vm.ownerId()) item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("On TV, video or radio", style = MaterialTheme.typography.bodyLarge)
+                        Text("A creator, host or show you watch or listen to: never counted as someone you're with.",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                    androidx.compose.material3.Switch(checked = p.kind == "media", onCheckedChange = { vm.setKind(p.id, if (it) "media" else null) })
+                }
+            }
+            if (p?.name != null && p.kind != "media") item {
                 val ctx = androidx.compose.ui.platform.LocalContext.current
                 var me by remember(p.id) { mutableStateOf(net.boswell.phone.assistant.AssistantPrefs.owner(ctx) == p.id) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -230,7 +251,7 @@ fun PersonScreen(vm: ArchiveViewModel, id: Long, onBack: () -> Unit, onOpen: (Lo
                     })
                 }
             }
-            if (p?.name != null) item { ContactCard(p.id) }
+            if (p?.name != null && p.kind != "media") item { ContactCard(p.id) }
             // What the assistant has learned about them, from what was said or told it.
             item {
                 val ctx = androidx.compose.ui.platform.LocalContext.current

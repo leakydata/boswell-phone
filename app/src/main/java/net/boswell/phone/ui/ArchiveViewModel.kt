@@ -418,6 +418,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     fun namePerson(id: Long, name: String) = actVoices { speakers.name(id, name) }
     fun setKind(id: Long, kind: String?) = act { if (kind != "media" || id != owner()) speakers.setKind(id, kind) }
     private fun owner() = net.boswell.phone.assistant.AssistantPrefs.owner(getApplication())
+    fun ownerId() = owner()
     fun unnameGroup(personId: Long, group: Long) = actVoices { speakers.unnameGroup(personId, group) }
 
     /** An identity action, then another look at every voice with what is now known. */
