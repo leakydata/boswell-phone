@@ -18,6 +18,10 @@ data class Bookmark(val id: Long, val at: Double, val note: String?)
  * always visible, and the daily budget has something to count.
  */
 class AssistantStore(context: Context) : SQLiteOpenHelper(context, "assistant.db", null, 6) {
+    init { net.boswell.phone.Databases.share(this) }
+
+    override fun onConfigure(db: SQLiteDatabase) = net.boswell.phone.Databases.waitForWriters(db)
+
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE calls (id INTEGER PRIMARY KEY, at REAL, purpose TEXT, model TEXT, prompt_tokens INTEGER, completion_tokens INTEGER, cost REAL, error TEXT)")
         db.execSQL("CREATE TABLE exchanges (id INTEGER PRIMARY KEY, at REAL, source TEXT, question TEXT, answer TEXT, cost REAL, error INTEGER, asked_from REAL, asked_to REAL)")

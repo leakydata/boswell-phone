@@ -8,6 +8,7 @@ import android.database.sqlite.SQLiteOpenHelper
 import kotlinx.serialization.json.Json
 import net.boswell.phone.capture.CaptureService
 import net.boswell.phone.capture.ClipTimes
+import net.boswell.phone.capture.logged
 import net.boswell.phone.process.ProcessingWorker
 import net.boswell.phone.process.Transcript
 import net.boswell.phone.process.TranscriptJson
@@ -48,16 +49,14 @@ data class SearchHit(val line: LineRow, val conversation: Long?, val snippet: St
  * CONVERSATION_GAP of the previous one ending: the desktop's measured value,
  * after 300 s turned an evening into one 183-minute "conversation".
  */
-class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive.db", null, 5) {
+class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive.db", null, 6) {
 
     // The screen, processing and catch-up each open their own copy at once. A write ahead log lets
     // reading go on during another's write, and a writer waits its turn instead of failing after
     // Android's 2.5 s: catch-up rebuilding the index made naming a voice crash ("database is locked").
-    init { setWriteAheadLoggingEnabled(true) }
+    init { net.boswell.phone.Databases.share(this) }
 
-    override fun onConfigure(db: SQLiteDatabase) {
-        db.rawQuery("PRAGMA busy_timeout = 30000", null).use { it.moveToFirst() }
-    }
+    override fun onConfigure(db: SQLiteDatabase) = net.boswell.phone.Databases.waitForWriters(db)
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE clips (
@@ -68,7 +67,7 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
         db.execSQL("CREATE INDEX clips_conv ON clips(conversation)")
         db.execSQL("""CREATE TABLE clip_speakers (
             clip TEXT, label TEXT, person_id INTEGER, seconds REAL, decision TEXT, score REAL,
-            candidate_id INTEGER, candidate_score REAL, emb BLOB, conv_key TEXT,
+            candidate_id INTEGER, candidate_score REAL, emb BLOB, conv_key TEXT, snr_db REAL,
             PRIMARY KEY (clip, label))""")
         db.execSQL("""CREATE TABLE lines (
             id INTEGER PRIMARY KEY, clip TEXT, t0 REAL, t1 REAL, offset REAL, label TEXT, text TEXT, original TEXT)""")
@@ -83,10 +82,21 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
         db.execSQL("CREATE INDEX conv_day ON conversations(day)")
     }
 
-    /** The index is rebuilt from the files, so an upgrade simply starts it over. */
+    /**
+     * The index is rebuilt from the files, so an upgrade can simply start it over. From 5 on it
+     * keeps what it has and marks every clip for indexing again instead: thrown away, every
+     * screen would be blank until thousands of transcripts were read again, while this way the
+     * next sync does that in one transaction and the screens show the old index meanwhile.
+     */
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        for (t in listOf("clips", "clip_speakers", "lines", "lines_fts", "sounds", "conversations")) db.execSQL("DROP TABLE IF EXISTS $t")
-        onCreate(db)
+        if (oldVersion < 5) {
+            for (t in listOf("clips", "clip_speakers", "lines", "lines_fts", "sounds", "conversations")) db.execSQL("DROP TABLE IF EXISTS $t")
+            onCreate(db)
+            return
+        }
+        // 6: each voice's loudness, so a recheck matches from the index instead of every transcript.
+        if (oldVersion < 6) db.execSQL("ALTER TABLE clip_speakers ADD COLUMN snr_db REAL")
+        db.execSQL("UPDATE clips SET indexed_mtime = -1")
     }
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -96,20 +106,79 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
 
     // ------------------------------------------------------------------ sync
 
+    /** What one sync did: clips indexed again, conversations regrouped, and whether it looked at the files at all. */
+    data class Synced(val reindexed: Int, val regrouped: Int, val scanned: Boolean)
+
     /**
      * Bring the index up to date with the files: index what is new or has
      * changed, forget what is gone, and regroup the conversations around
-     * them (all of them when [force]d: who someone is changed everywhere).
-     * Cheap when nothing changed -- one stat per file.
+     * them. Who someone is can change without any file changing (a voice
+     * named, two people merged): [people] are the person ids such a change
+     * touched -- whoever a changed voice was before or is now -- and the
+     * conversations they're in are regrouped too. When that isn't known,
+     * [force] regroups every conversation.
+     *
+     * Looks at the files only when something may have changed since it last
+     * did (ArchiveChanges, and the folders' modification times); otherwise
+     * one stat per file, thousands of them.
      */
     @Synchronized
     /** One sync at a time in this process: a second would only wait on the first's write, then find it done. */
-    fun sync(speakers: SpeakerStore, force: Boolean = false) = synchronized(SYNC) { syncNow(speakers, force) }
+    fun sync(speakers: SpeakerStore, force: Boolean = false, people: Collection<Long>? = null): Synced =
+        synchronized(SYNC) { syncNow(speakers, force, people) }
 
-    private fun syncNow(speakers: SpeakerStore, force: Boolean) {
+    private fun syncNow(speakers: SpeakerStore, force: Boolean, people: Collection<Long>?): Synced {
+        val t0 = System.currentTimeMillis()
         val clipsDir = CaptureService.clipsDir(context)
         val tDir = ProcessingWorker.transcriptsDir(context)
+        // Read before the files are, so a change made during the scan is seen next time.
+        val generation = ArchiveChanges.generation
         val db = writableDatabase
+        val dirs = listOf(clipsDir, tDir).map(::stateOf)
+        // The database itself by identity only (a restore puts another file there); its time changes with every write.
+        val dbFile = context.getDatabasePath(databaseName)
+        val seen = Seen(generation, dirs, stateOf(dbFile)?.first)
+        val unchanged = synchronized(SEEN) { SEEN[dbFile.path] } == seen
+        if (unchanged && !force && people.isNullOrEmpty()) return Synced(0, 0, false)
+
+        var reindexed = 0
+        var regrouped = 0
+        db.beginTransaction()
+        try {
+            if (!unchanged) {
+                val (n, span) = scan(db, clipsDir, tDir)
+                reindexed = n
+                // A full rebuild reads every clip's voices (thousands), seconds of work: only when it's asked for.
+                if (!force && span != null) regrouped += rebuildConversations(db, speakers.currentPeople(), span.first, span.second)
+            }
+            if (force) regrouped += rebuildConversations(db, speakers.currentPeople())
+            else if (!people.isNullOrEmpty()) regrouped += rebuildPeople(db, speakers, people.toSet())
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        // Only a folder last changed a moment ago could change again within its clock's resolution unseen: look again next time.
+        val now = System.currentTimeMillis()
+        synchronized(SEEN) {
+            if (dirs.all { it != null && now - it.second > SETTLED_MS }) SEEN[dbFile.path] = seen else SEEN.remove(dbFile.path)
+        }
+        val ms = System.currentTimeMillis() - t0
+        if (ms > SLOW_MS) net.boswell.phone.capture.CaptureRepository.log(
+            "slow: archive sync $ms ms ($reindexed clips reindexed, $regrouped conversations regrouped)")
+        return Synced(reindexed, regrouped, !unchanged)
+    }
+
+    /** A file's identity (inode) and when it last changed, or null if it can't be read. */
+    private fun stateOf(f: File): Pair<Any?, Long>? = runCatching {
+        val a = java.nio.file.Files.readAttributes(f.toPath(), java.nio.file.attribute.BasicFileAttributes::class.java)
+        a.fileKey() to a.lastModifiedTime().toMillis()
+    }.logged("archive: reading ${f.name}'s time").getOrNull()
+
+    /**
+     * Index the clips whose files are new or changed and forget the ones that are gone.
+     * Returns how many, and the span of time (before and after) they cover, if any.
+     */
+    private fun scan(db: SQLiteDatabase, clipsDir: File, tDir: File): Pair<Int, Pair<Double, Double>?> {
         val known = HashMap<String, Long>()
         db.rawQuery("SELECT name, indexed_mtime FROM clips", null).use { c -> while (c.moveToNext()) known[c.getString(0)] = c.getLong(1) }
 
@@ -118,34 +187,29 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
         // When the clips that changed were (before) and are (after): only the conversations there can change.
         var lo = Double.MAX_VALUE
         var hi = -Double.MAX_VALUE
+        var n = 0
         fun touch(name: String) = db.rawQuery("SELECT started, ended FROM clips WHERE name = ?", arrayOf(name)).use { c ->
             if (c.moveToFirst()) { lo = minOf(lo, c.getDouble(0)); hi = maxOf(hi, c.getDouble(1)) }
         }
-        db.beginTransaction()
-        try {
-            for ((name, side) in sidecars) {
-                val t = File(tDir, side.nameWithoutExtension + ".json")
-                val wav = File(clipsDir, name)
-                // The sound moving from WAV to its compact copy changes the size the index shows.
-                val sound = net.boswell.phone.audio.ClipAudio.file(clipsDir, name)
-                val stamp = maxOf(side.lastModified(), if (t.exists()) t.lastModified() else 0L) +
-                    (if (sound == null) 1 else if (sound.extension == "ogg") 2 else 0)
-                if (known[name] == stamp) continue
-                touch(name)
-                index(db, name, side, t, wav, stamp)
-                touch(name)
-            }
-            for (name in known.keys - sidecars.keys) {
-                touch(name)
-                forget(db, name)
-            }
-            // A full rebuild reads every clip's voices (thousands), seconds of work: only when it's asked for.
-            if (force) rebuildConversations(db, speakers)
-            else if (lo <= hi) rebuildConversations(db, speakers, lo, hi)
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
+        for ((name, side) in sidecars) {
+            val t = File(tDir, side.nameWithoutExtension + ".json")
+            val wav = File(clipsDir, name)
+            // The sound moving from WAV to its compact copy changes the size the index shows.
+            val sound = net.boswell.phone.audio.ClipAudio.file(clipsDir, name)
+            val stamp = maxOf(side.lastModified(), if (t.exists()) t.lastModified() else 0L) +
+                (if (sound == null) 1 else if (sound.extension == "ogg") 2 else 0)
+            if (known[name] == stamp) continue
+            touch(name)
+            index(db, name, side, t, wav, stamp)
+            touch(name)
+            n++
         }
+        for (name in known.keys - sidecars.keys) {
+            touch(name)
+            forget(db, name)
+            n++
+        }
+        return n to (if (lo <= hi) lo to hi else null)
     }
 
     private fun forget(db: SQLiteDatabase, name: String) {
@@ -156,8 +220,11 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
 
     private fun index(db: SQLiteDatabase, name: String, side: File, tFile: File, wav: File, stamp: Long) {
         forget(db, name)
-        val times = runCatching { json.decodeFromString(ClipTimes.serializer(), side.readText()) }.getOrNull() ?: return
-        val t = if (tFile.exists()) runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), tFile.readText()) }.getOrNull() else null
+        val times = runCatching { json.decodeFromString(ClipTimes.serializer(), side.readText()) }.logged("archive: reading ${side.name}").getOrNull() ?: return
+        // A clip that couldn't be transcribed has a transcript that only says why ("error"): expected, and not one to read.
+        val t = if (tFile.exists()) runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), tFile.readText()) }
+            .let { r -> if (r.exceptionOrNull() is kotlinx.serialization.SerializationException) r else r.logged("archive: reading transcript ${tFile.name}") }
+            .getOrNull() else null
         val top = t?.sounds?.firstOrNull { it.label !in Sounds.AMBIENT && it.label !in Sounds.VOICE && it.score >= Sounds.EVENT_FLOOR }
         db.insert("clips", null, ContentValues().apply {
             put("name", name); put("started", times.started); put("ended", times.ended); put("seconds", times.seconds)
@@ -183,7 +250,7 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
             val emb = t.embeddings[label]
             db.insert("clip_speakers", null, ContentValues().apply {
                 put("clip", name); put("label", label); id.personId?.let { put("person_id", it) }
-                put("seconds", id.seconds); put("decision", id.decision); put("score", id.score)
+                put("seconds", id.seconds); put("decision", id.decision); put("score", id.score); id.snrDb?.let { put("snr_db", it) }
                 id.candidates.firstOrNull()?.let { put("candidate_id", it.personId); put("candidate_score", it.score) }
                 emb?.let { put("emb", SpeakerStore.pack(it.toFloatArray())) }
             })
@@ -208,40 +275,48 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
      * starts a new one): all of them, or only those from [lo] to [hi] (when
      * clips changed) together with every conversation within reach of that
      * span, whole, so the result is what regrouping everything would give.
+     * [who] is SpeakerStore.currentPeople. Returns how many conversations it made.
      */
-    private fun rebuildConversations(db: SQLiteDatabase, speakers: SpeakerStore, lo: Double? = null, hi: Double? = null) {
+    private fun rebuildConversations(db: SQLiteDatabase, who: (String, String, Long?) -> Long?, lo: Double? = null, hi: Double? = null): Int {
         data class C(val name: String, val started: Double, val ended: Double, val seconds: Double)
         val speech = if (lo == null || hi == null) {
             db.execSQL("DELETE FROM conversations")
             db.execSQL("UPDATE clips SET conversation = NULL")
-            db.rawQuery("SELECT name, started, ended, seconds FROM clips WHERE speech = 1 ORDER BY started", null).use { c ->
+            db.rawQuery("SELECT name, started, ended, seconds FROM clips WHERE speech = 1 ORDER BY started, name", null).use { c ->
                 buildList { while (c.moveToNext()) add(C(c.getString(0), c.getDouble(1), c.getDouble(2), c.getDouble(3))) }
             }
         } else {
             // Out to the whole of each conversation the span (and a gap's reach either side) touches.
+            // Found by its own times as well as its clips': one whose clips were all just indexed
+            // again or forgotten has no clip left that says so, and would otherwise stay behind.
             var from = lo - CONVERSATION_GAP
             var to = hi + CONVERSATION_GAP
             val ids = HashSet<Long>()
             while (true) {
-                val found = db.rawQuery("SELECT DISTINCT conversation FROM clips WHERE conversation IS NOT NULL AND ended >= ? AND started <= ?",
-                    arrayOf(from.toString(), to.toString())).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }.filter { it !in ids }
+                val span = arrayOf(from.toString(), to.toString())
+                val found = (db.rawQuery("SELECT DISTINCT conversation FROM clips WHERE conversation IS NOT NULL AND ended >= ? AND started <= ?", span)
+                    .use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } } +
+                    db.rawQuery("SELECT id FROM conversations WHERE ended >= ? AND started <= ?", span)
+                    .use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }).filter { it !in ids }.distinct()
                 if (found.isEmpty()) break
                 ids += found
-                db.rawQuery("SELECT MIN(started), MAX(ended) FROM clips WHERE conversation IN (${found.joinToString(",")})", null).use { c ->
-                    if (c.moveToFirst()) { from = minOf(from, c.getDouble(0)); to = maxOf(to, c.getDouble(1)) }
+                val within = found.joinToString(",")
+                db.rawQuery("SELECT MIN(started), MAX(ended) FROM (SELECT started, ended FROM clips WHERE conversation IN ($within) " +
+                    "UNION ALL SELECT started, ended FROM conversations WHERE id IN ($within))", null).use { c ->
+                    if (c.moveToFirst() && !c.isNull(0)) { from = minOf(from, c.getDouble(0)); to = maxOf(to, c.getDouble(1)) }
                 }
             }
             if (ids.isNotEmpty()) {
                 db.execSQL("DELETE FROM conversations WHERE id IN (${ids.joinToString(",")})")
                 db.execSQL("UPDATE clips SET conversation = NULL WHERE conversation IN (${ids.joinToString(",")})")
             }
-            db.rawQuery("SELECT name, started, ended, seconds FROM clips WHERE speech = 1 AND ended >= ? AND started <= ? ORDER BY started",
+            db.rawQuery("SELECT name, started, ended, seconds FROM clips WHERE speech = 1 AND ended >= ? AND started <= ? ORDER BY started, name",
                 arrayOf(from.toString(), to.toString())).use { c ->
                 buildList { while (c.moveToNext()) add(C(c.getString(0), c.getDouble(1), c.getDouble(2), c.getDouble(3))) }
             }
         }
-        val who = speakers.currentPeople()
         var i = 0
+        var made = 0
         while (i < speech.size) {
             var j = i
             while (j + 1 < speech.size && speech[j + 1].started - speech[j].ended <= CONVERSATION_GAP) j++
@@ -269,8 +344,50 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
                 put("speakers", talk.entries.sortedByDescending { it.value }.joinToString("|") { it.key })
                 put("snippet", snippet.take(240)); put("sounds", sounds.joinToString("|"))
             })
+            made++
             i = j + 1
         }
+        return made
+    }
+
+    /**
+     * Regroup the conversations a change of who someone is reaches: those
+     * with a voice that is one of [people] now, was one when last grouped
+     * (its key), or was recorded as one. Conversations are made of clip
+     * times and speech alone, so a voice's person changing changes only the
+     * keys inside its own conversation, and regrouping just those (each as
+     * [rebuildConversations] regroups a span) gives what regrouping all
+     * would, as long as [people] has each changed voice's old or new person.
+     * Most of the archive touched (the owner, say): all of it, more simply.
+     */
+    private fun rebuildPeople(db: SQLiteDatabase, speakers: SpeakerStore, people: Set<Long>): Int {
+        val who = speakers.currentPeople()
+        val keys = people.mapTo(HashSet()) { "p$it" }
+        val hit = HashSet<Long>()
+        db.rawQuery("""SELECT s.clip, s.label, s.person_id, s.conv_key, c.conversation FROM clip_speakers s JOIN clips c ON c.name = s.clip
+            WHERE c.conversation IS NOT NULL""", null).use { c ->
+            while (c.moveToNext()) {
+                val conv = c.getLong(4)
+                if (conv in hit) continue
+                val recorded = if (c.isNull(2)) null else c.getLong(2)
+                if (recorded in people || (!c.isNull(3) && c.getString(3) in keys) || who(c.getString(0), c.getString(1), recorded) in people) hit += conv
+            }
+        }
+        if (hit.isEmpty()) return 0
+        val all = db.rawQuery("SELECT COUNT(*) FROM conversations", null).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+        if (hit.size * 2 > all) return rebuildConversations(db, who)
+        // Each conversation's span; ones that overlap once widened by a gap are one span, regrouped once.
+        val spans = db.rawQuery("SELECT conversation, MIN(started), MAX(ended) FROM clips WHERE conversation IN (${hit.joinToString(",")}) GROUP BY conversation", null)
+            .use { c -> buildList { while (c.moveToNext()) add(c.getDouble(1) to c.getDouble(2)) } }.sortedBy { it.first }
+        var made = 0
+        var lo = spans.first().first
+        var hi = spans.first().second
+        for ((a, b) in spans.drop(1)) {
+            if (a - hi <= 2 * CONVERSATION_GAP) { hi = maxOf(hi, b); continue }
+            made += rebuildConversations(db, who, lo, hi)
+            lo = a; hi = b
+        }
+        return made + rebuildConversations(db, who, lo, hi)
     }
 
     private fun linkSpeakers(db: SQLiteDatabase, clips: List<String>, who: (String, String, Long?) -> Long?) {
@@ -462,6 +579,40 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
         }
     }
 
+    // ---------------------------------------------------------------- voices
+
+    /** One clip voice as indexed: what its transcript says about it, with its voiceprint ([emb], null if none). */
+    class IndexedVoice(val clip: String, val label: String, val personId: Long?, val decision: String?, val score: Double,
+                       /** The person of its top candidate. */
+                       val top: Long?, val seconds: Double, val snrDb: Double?, val emb: FloatArray?)
+
+    /**
+     * Every clip voice with a voiceprint, in each clip in its transcript's order, for [take] to
+     * look at one at a time (thousands of voiceprints: none of them kept unless [take] keeps it).
+     * Read whole inside a transaction: a read bigger than one cursor window, changed between
+     * windows by a sync, would fail ("Couldn't read row").
+     */
+    fun eachVoice(take: (IndexedVoice) -> Unit) = whole { db ->
+        db.rawQuery("SELECT clip, label, person_id, decision, score, candidate_id, seconds, snr_db, emb FROM clip_speakers WHERE emb IS NOT NULL ORDER BY rowid", null).use { c ->
+            while (c.moveToNext()) take(IndexedVoice(c.getString(0), c.getString(1), if (c.isNull(2)) null else c.getLong(2), c.getString(3), c.getDouble(4),
+                if (c.isNull(5)) null else c.getLong(5), c.getDouble(6), if (c.isNull(7)) null else c.getDouble(7), SpeakerStore.unpack(c.getBlob(8))))
+        }
+    }
+
+    /** Clips with voices and a line nobody was attributed to, which a recheck may still give one (Lines.attributeOrphans). */
+    fun clipsWithOrphans(): Set<String> = readableDatabase.rawQuery(
+        "SELECT DISTINCT l.clip FROM lines l WHERE l.label IS NULL AND EXISTS (SELECT 1 FROM clip_speakers s WHERE s.clip = l.clip)", null).use { c ->
+        buildSet { while (c.moveToNext()) add(c.getString(0)) }
+    }
+
+    private fun <T> whole(read: (SQLiteDatabase) -> T): T {
+        val db = writableDatabase
+        // Android 15 has a read-only transaction, which runs beside a writer; before it, one that reserves writing.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.VANILLA_ICE_CREAM) db.beginTransactionReadOnly()
+        else db.beginTransactionNonExclusive()
+        try { return read(db).also { db.setTransactionSuccessful() } } finally { db.endTransaction() }
+    }
+
     // --------------------------------------------------------------- storage
 
     data class Usage(val clips: Int, val audioBytes: Long, val quietClips: Int, val quietBytes: Long)
@@ -492,6 +643,14 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
 
     companion object {
         private val SYNC = Any()
+        /** What the files looked like when a sync last read them all: the change count, the two folders and the database file. */
+        private data class Seen(val generation: Long, val dirs: List<Pair<Any?, Long>?>, val db: Any?)
+        /** By database path. Guarded by itself. */
+        private val SEEN = HashMap<String, Seen>()
+        /** A folder changed more recently than this may have changed again within the same tick of its clock. */
+        private const val SETTLED_MS = 2_000L
+        /** A sync slower than this is written to the Device log. */
+        private const val SLOW_MS = 2_000L
         const val CONVERSATION_GAP = 60.0
         /** Boswell's own voice (BoswellLines.KEY): a speaker key, but not a person. */
         const val BOSWELL = net.boswell.phone.process.BoswellLines.KEY

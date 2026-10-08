@@ -11,6 +11,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import net.boswell.phone.capture.CaptureRepository
 import net.boswell.phone.capture.CaptureService
+import net.boswell.phone.capture.logged
+import net.boswell.phone.capture.timed
 import net.boswell.phone.diarize.Turn
 import net.boswell.phone.process.BoswellLines
 import net.boswell.phone.process.ProcessingWorker
@@ -66,7 +68,7 @@ object SnrBackfill {
     }
 
     private fun read(f: java.io.File): Transcript? =
-        runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.getOrNull()
+        runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.let { if (f.exists()) it.logged("voice levels: reading ${f.name}") else it }.getOrNull()
 
     /** What [run] did; [matched] is how many more recordings the recheck recognized. */
     data class Outcome(val message: String, val matched: Int = 0)
@@ -83,13 +85,13 @@ object SnrBackfill {
             val t = read(f) ?: continue
             if (!pending(t)) continue
             if (!net.boswell.phone.audio.ClipAudio.exists(clips, t.clip)) { skipped++; continue }
-            val pcm = runCatching { net.boswell.phone.audio.ClipAudio.readPcm(clips, t.clip) }.getOrNull() ?: run { skipped++; continue }
+            val pcm = runCatching { net.boswell.phone.audio.ClipAudio.readPcm(clips, t.clip) }.logged("voice levels: reading audio").getOrNull() ?: run { skipped++; continue }
             // Processing may have written it again meanwhile: fill what's missing now, not in the copy read before the audio.
             val u = fill(read(f) ?: continue, pcm) ?: continue
             net.boswell.phone.audio.writeAtomically(f, TranscriptJson.json.encodeToString(Transcript.serializer(), u).toByteArray())
             filled++
         }
-        val recheck = runCatching { VoiceReview(c).recheck() }.getOrNull()
+        val recheck = runCatching { timed("voice recheck", 10_000) { VoiceReview(c).recheck() } }.logged("voice recheck").getOrNull()
         // A recheck that failed is tried again at the next start (every SNR is in by then, so that's all it does).
         if (recheck != null) prefs(c).edit().putBoolean(DONE, true).apply()
         val msg = "voice levels worked out for $filled recordings" +
@@ -103,9 +105,9 @@ object SnrBackfill {
 class SnrBackfillWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): androidx.work.ListenableWorker.Result = withContext(Dispatchers.IO) {
         // In the foreground, as transcription is: a background app doing minutes of work gets frozen.
-        runCatching { setForeground(foreground("Measuring voice levels…")) }
+        runCatching { setForeground(foreground("Measuring voice levels…")) }.logged("voice levels: foreground")
         val r = SnrBackfill.run(applicationContext, { isStopped }) { done, total ->
-            runCatching { kotlinx.coroutines.runBlocking { setForeground(foreground("Measuring voice levels… $done of $total recordings")) } }
+            runCatching { kotlinx.coroutines.runBlocking { setForeground(foreground("Measuring voice levels… $done of $total recordings")) } }.logged("voice levels: foreground")
         }
         if (r.message == "paused") return@withContext androidx.work.ListenableWorker.Result.retry()
         if (r.message == "waiting" || r.message == "nothing to do") return@withContext androidx.work.ListenableWorker.Result.success()
@@ -114,7 +116,7 @@ class SnrBackfillWorker(context: Context, params: WorkerParameters) : CoroutineW
             val speakers = SpeakerStore(applicationContext)
             val archive = net.boswell.phone.archive.Archive(applicationContext)
             try { archive.sync(speakers, force = true) } finally { archive.close(); speakers.close() }
-        }
+        }.logged("archive rebuild")
         // Quiet unless it found someone.
         val n = r.matched
         if (n > 0) net.boswell.phone.assistant.AssistantNotify.post(applicationContext, net.boswell.phone.assistant.AssistantNotify.ANSWERS,

@@ -15,6 +15,10 @@ data class LogEntry(val id: Long, val kind: String, val note: String?, val amoun
  * twice. Everything is on the phone.
  */
 class LifeStore(context: Context) : SQLiteOpenHelper(context, "life.db", null, 1) {
+    init { net.boswell.phone.Databases.share(this) }
+
+    override fun onConfigure(db: SQLiteDatabase) = net.boswell.phone.Databases.waitForWriters(db)
+
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE facts (id INTEGER PRIMARY KEY, person TEXT NOT NULL, fact TEXT NOT NULL, at REAL NOT NULL)")
         db.execSQL("CREATE TABLE logs (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, note TEXT, amount REAL, at REAL NOT NULL)")

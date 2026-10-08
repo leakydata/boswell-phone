@@ -16,10 +16,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import net.boswell.phone.R
+import net.boswell.phone.archive.ArchiveChanges
 import net.boswell.phone.asr.LocalAsr
 import net.boswell.phone.audio.Wav
 import net.boswell.phone.audio.writeAtomically
 import net.boswell.phone.capture.CaptureService
+import net.boswell.phone.capture.Problems
+import net.boswell.phone.capture.logged
+import net.boswell.phone.capture.timed
 import net.boswell.phone.diarize.OrtModels
 import net.boswell.phone.models.ModelCatalog
 import net.boswell.phone.models.ModelStore
@@ -59,11 +63,11 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
             ProcessingRepository.state.value = ProcessingState(lastError = "models not installed")
             return@withContext Result.success()
         }
-        runCatching { setForeground(foreground("Transcribing…")) }
+        runCatching { setForeground(foreground("Transcribing…")) }.logged("processing: foreground")
         val clips = CaptureService.clipsDir(applicationContext)
         val out = transcriptsDir(applicationContext)
         // A person named for Boswell's voice becomes Boswell first, so no new clip is filed under them.
-        runCatching { net.boswell.phone.speakers.BoswellPerson.convert(applicationContext) }
+        runCatching { net.boswell.phone.speakers.BoswellPerson.convert(applicationContext) }.logged("processing: Boswell's voice")
         val store = SpeakerStore(applicationContext)
         var done = 0
         val tagger = if (!home && models.isInstalled(net.boswell.phone.sound.SoundTagger.ID)) net.boswell.phone.sound.SoundTagger(models) else null
@@ -88,7 +92,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
                     ProcessingRepository.state.value = ProcessingState(true, todo.size, done, waitingForCharger = deferred)
                     val wav = todo.firstOrNull() ?: break
                     ProcessingRepository.state.value = ProcessingState(true, todo.size, done, wav.name)
-                    try {
+                    try { timed("processing ${wav.name}", CLIP_SLOW_MS) {
                         val t = net.boswell.phone.asr.Transcription
                         if (home && !t.requested(applicationContext, wav.name)) {
                             try {
@@ -105,20 +109,21 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
                             }
                         } else process(wav, local(), store, out, tagger)
                         // Deleted while it was being worked on: drop the result, leave no trace.
-                        if (!net.boswell.phone.audio.ClipAudio.exists(clips, wav.name)) File(out, wav.nameWithoutExtension + ".json").delete()
+                        if (!net.boswell.phone.audio.ClipAudio.exists(clips, wav.name)) { File(out, wav.nameWithoutExtension + ".json").delete(); ArchiveChanges.bump() }
                         else afterTranscript(clips, wav.name, File(out, wav.nameWithoutExtension + ".json"))
-                    } catch (e: Exception) {
+                    } } catch (e: Exception) {
                         if (!net.boswell.phone.audio.ClipAudio.exists(clips, wav.name)) { done++; continue }
+                        Problems.report("processing a recording", e, wav.name)
                         // A clip that cannot be read or decoded is recorded as such
                         // rather than retried forever; one being done again keeps the transcript it had.
                         val held = Redone.held(applicationContext, wav.name)
-                        if (held.exists()) held.renameTo(File(out, wav.nameWithoutExtension + ".json"))
+                        if (held.exists()) { held.renameTo(File(out, wav.nameWithoutExtension + ".json")); ArchiveChanges.bump() }
                         else writeAtomically(File(out, wav.nameWithoutExtension + ".json"),
                             """{"clip":"${wav.name}","error":${org.json.JSONObject.quote(e.toString())}}""".toByteArray())
                         ProcessingRepository.state.value = ProcessingRepository.state.value.copy(lastError = "${wav.name}: ${e.message}")
                     }
                     done++
-                    runCatching { setForeground(foreground("Transcribing… ${todo.size - 1} left")) }
+                    runCatching { setForeground(foreground("Transcribing… ${todo.size - 1} left")) }.logged("processing: foreground")
                 }
         } finally {
             local?.close()
@@ -153,7 +158,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
             .filter { !it.readText().contains("\"sounds\":[") }
         for (f in todo) {
             if (isStopped) return
-            val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.getOrNull() ?: continue
+            val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.logged("sound backfill: reading ${f.name}").getOrNull() ?: continue
             if (!net.boswell.phone.audio.ClipAudio.exists(clips, t.clip)) continue
             val pcm = net.boswell.phone.audio.ClipAudio.readPcm(clips, t.clip)
             val tags = tagger.tag(FloatArray(pcm.size) { pcm[it] / 32768f })
@@ -171,7 +176,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
     private var redoWhy: String? = null
 
     /** Words Boswell should know, read once per run (names change rarely). */
-    private val vocabulary by lazy { runCatching { net.boswell.phone.asr.Vocabulary.all(applicationContext) }.getOrDefault(emptyList()) }
+    private val vocabulary by lazy { runCatching { net.boswell.phone.asr.Vocabulary.all(applicationContext) }.logged("processing: vocabulary").getOrDefault(emptyList()) }
 
     /** The phone's own models (and the cloud's words, when wanted), loaded only when a clip needs them. */
     private class Local(models: ModelStore, c: Context) : AutoCloseable {
@@ -197,8 +202,8 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
         val clips = wav.parentFile!!
         val audio = net.boswell.phone.audio.ClipAudio.ogg(clips, wav.name).takeIf { it.exists() }
             ?: net.boswell.phone.audio.ClipAudio.file(clips, wav.name) ?: error("no audio")
-        val r = net.boswell.phone.home.HomeServer.analyze(applicationContext, audio, wav.name,
-            net.boswell.phone.diarize.VoiceModels.active(applicationContext).id, vocabulary)
+        val r = timed("home analyze", HOME_SLOW_MS) { net.boswell.phone.home.HomeServer.analyze(applicationContext, audio, wav.name,
+            net.boswell.phone.diarize.VoiceModels.active(applicationContext).id, vocabulary) }
         if (r.speech <= net.boswell.phone.diarize.Diarizer.SPEECH_MIN_S) {
             quiet(wav, Transcript(wav.name, System.currentTimeMillis() / 1000.0, emptyList(), emptyMap(), emptyMap(),
                 engine = r.engine, processMs = System.currentTimeMillis() - t0, sounds = r.sounds, verdict = verdictFor(false, r.sounds)), store, out)
@@ -213,22 +218,22 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
         val t0 = System.currentTimeMillis()
         val pcm = net.boswell.phone.audio.ClipAudio.readPcm(wav.parentFile!!, wav.name)
         val audio = FloatArray(pcm.size) { pcm[it] / 32768f }
-        if (diarizer.speechSeconds(audio) <= net.boswell.phone.diarize.Diarizer.SPEECH_MIN_S) {
+        if (timed("speech check") { diarizer.speechSeconds(audio) } <= net.boswell.phone.diarize.Diarizer.SPEECH_MIN_S) {
             // Nobody speaking: record that without running the recognizer.
-            val tags = tagger?.tag(audio)
+            val tags = timed("sound tags") { tagger?.tag(audio) }
             quiet(wav, Transcript(wav.name, System.currentTimeMillis() / 1000.0, emptyList(), emptyMap(), emptyMap(),
                 engine = "pyannote-seg-3.0 speech check" + (if (tags != null) " + ced-mini" else ""),
                 processMs = System.currentTimeMillis() - t0, sounds = tags, verdict = tags?.let { verdictFor(false, it) }), store, out)
             return
         }
         // How far each voice stands above the room: the home server sends its own.
-        val d = diarizer.run(audio).let { r -> r.copy(speakers = r.speakers.map { it.copy(snr = net.boswell.phone.speakers.Snr.db(audio, it.turns)) }) }
-        val cloud = cloudWords(wav, pcm, diarizer, othersSpeak(wav.name, d, store))
-        val heard = cloud ?: asr.transcribe(audio)
-        val tags = tagger?.tag(audio)
+        val d = timed("diarize", STAGE_SLOW_MS) { diarizer.run(audio) }.let { r -> r.copy(speakers = r.speakers.map { it.copy(snr = net.boswell.phone.speakers.Snr.db(audio, it.turns)) }) }
+        val cloud = timed("cloud words", HOME_SLOW_MS) { cloudWords(wav, pcm, diarizer, timed("others speak") { othersSpeak(wav.name, d, store) }) }
+        val heard = cloud ?: timed("phone transcription", STAGE_SLOW_MS) { asr.transcribe(audio) }
+        val tags = timed("sound tags") { tagger?.tag(audio) }
         val engine = (if (cloud != null) "${net.boswell.phone.asr.Transcription.ENGINE.id} (cloud)" else "nemotron-3.5-asr-1120ms-int8") +
             " + pyannote-seg-3.0 + ${net.boswell.phone.diarize.VoiceModels.active(applicationContext).id}" + (if (tags != null) " + ced-mini" else "")
-        finish(wav, t0, heard, d, tags, engine, store, out)
+        timed("transcript and voices") { finish(wav, t0, heard, d, tags, engine, store, out) }
     }
 
     /**
@@ -287,7 +292,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
         writeAtomically(File(out, wav.nameWithoutExtension + ".json"), TranscriptJson.json.encodeToString(Transcript.serializer(), t).toByteArray())
         replaced(wav, old)
         // Voice triggers act on new transcripts only (not one done again); the line's own time goes with it.
-        if (times != null && old == null) runCatching { net.boswell.phone.assistant.TriggerEngine(applicationContext).run(t, times.started) }
+        if (times != null && old == null) runCatching { net.boswell.phone.assistant.TriggerEngine(applicationContext).run(t, times.started) }.logged("voice triggers")
     }
 
     /**
@@ -296,7 +301,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
      */
     private fun previous(wav: File, out: File): Transcript? =
         (Redone.held(applicationContext, wav.name).takeIf { it.exists() } ?: File(out, wav.nameWithoutExtension + ".json").takeIf { it.exists() })
-            ?.let { f -> runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.getOrNull() }
+            ?.let { f -> runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.logged("reading the transcript replaced").getOrNull() }
 
     /** Written: the held transcript goes, and its words are kept for another look at the conversation's title (ConversationNotes). */
     private fun replaced(wav: File, old: Transcript?) {
@@ -343,7 +348,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
                 val spoken = times?.let { a.spoken(it.started - BoswellLines.AFTER, it.ended + BoswellLines.BEFORE) }.orEmpty()
                 spoken to a.lastVoice(times?.ended ?: Double.MAX_VALUE)
             }
-        }.getOrDefault(emptyList<BoswellLines.Spoken>() to null)
+        }.logged("Boswell's voice: what it said").getOrDefault(emptyList<BoswellLines.Spoken>() to null)
         if (times != null) {
             val by = BoswellLines.claim(words, times.started, spoken, diar, times.seconds)
             for (i in words.indices) mine[i] = by[i] >= 0
@@ -385,7 +390,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
      */
     private fun othersSpeak(clip: String, d: net.boswell.phone.diarize.Diarization, store: SpeakerStore): Boolean {
         val owner = net.boswell.phone.assistant.AssistantPrefs.owner(applicationContext)
-        val voice = runCatching { net.boswell.phone.assistant.AssistantStore(applicationContext).use { it.lastVoice(Double.MAX_VALUE) } }.getOrNull()
+        val voice = runCatching { net.boswell.phone.assistant.AssistantStore(applicationContext).use { it.lastVoice(Double.MAX_VALUE) } }.logged("Boswell's last voice").getOrNull()
         return d.speakers.any { s ->
             if (s.seconds < 1.0) return@any false
             val vp = s.voiceprint?.takeIf { Matching.usable(it) } ?: return@any true
@@ -424,6 +429,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
                     words
                 },
                 { e ->
+                    Problems.report("cloud transcription", e)
                     store.logCall(t.PURPOSE, t.ENGINE.id, null, e.message ?: e.toString())
                     fellBack("the cloud didn't answer (${e.message ?: "error"})")
                 })
@@ -436,10 +442,10 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
      * setting; anything else is kept as its compact copy.
      */
     private fun afterTranscript(clips: File, name: String, transcript: File) {
-        val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), transcript.readText()) }.getOrNull()
+        val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), transcript.readText()) }.logged("reading a new transcript").getOrNull()
         val quiet = t != null && t.segments.isEmpty() && t.verdict == "empty"
         if (quiet && CleanupWorker.days(applicationContext) == 0) net.boswell.phone.audio.ClipAudio.delete(clips, name)
-        else runCatching { net.boswell.phone.audio.ClipAudio.compact(clips, name) }
+        else runCatching { net.boswell.phone.audio.ClipAudio.compact(clips, name) }.logged("compacting audio")
     }
 
     private fun foreground(text: String, id: Int = NOTIFICATION_ID): ForegroundInfo {
@@ -485,7 +491,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
                 CatchUp.next(ctx, 30, java.util.concurrent.TimeUnit.MINUTES)
                 return Result.success()
             }
-            runCatching { setForeground(foreground("Catching up at home…", CATCH_UP_ID)) }
+            runCatching { setForeground(foreground("Catching up at home…", CATCH_UP_ID)) }.logged("catch-up: foreground")
             val began = System.currentTimeMillis()
             while (!isStopped) {
                 val queue = CatchUp.queue(ctx, archive).filter { it !in tried }
@@ -503,7 +509,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
                 if (t == null || !CatchUp.byPhone(t.engine) || !net.boswell.phone.audio.ClipAudio.exists(clips, name)) { CatchUp.handled(ctx, name); continue }
                 try {
                     processHome(wav, store, out)
-                    if (!net.boswell.phone.audio.ClipAudio.exists(clips, name)) f.delete()
+                    if (!net.boswell.phone.audio.ClipAudio.exists(clips, name)) { f.delete(); ArchiveChanges.bump() }
                     done++
                     CatchUp.handled(ctx, name)
                 } catch (e: net.boswell.phone.home.HomeServer.Unavailable) {
@@ -514,14 +520,14 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
                     net.boswell.phone.capture.CaptureRepository.log("catch-up at home: $name not redone (${e.message})")
                     CatchUp.skip(ctx, name)
                 }
-                runCatching { setForeground(foreground("Catching up at home… ${queue.size - 1} left", CATCH_UP_ID)) }
+                runCatching { setForeground(foreground("Catching up at home… ${queue.size - 1} left", CATCH_UP_ID)) }.logged("catch-up: foreground")
             }
             if (done > 0) {
                 archive.sync(store, force = true)
                 net.boswell.phone.capture.CaptureRepository.log("caught up at home: $done recording${if (done == 1) "" else "s"}")
             }
         } finally {
-            CatchUp.state.value = CatchUpState(false, done, runCatching { CatchUp.queue(ctx, archive).size }.getOrDefault(0))
+            CatchUp.state.value = CatchUpState(false, done, runCatching { CatchUp.queue(ctx, archive).size }.logged("catch-up: queue").getOrDefault(0))
             archive.close(); store.close()
         }
         return Result.success()
@@ -537,6 +543,10 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
         private const val RUN_MS = 15 * 60_000L
         /** New recordings waiting that make catch-up step aside: more than Live's one or two in flight. */
         private const val BEHIND = 3
+        /** Slow-step limits: a whole recording, one model stage, a network round trip. */
+        private const val CLIP_SLOW_MS = 60_000L
+        private const val STAGE_SLOW_MS = 20_000L
+        private const val HOME_SLOW_MS = 15_000L
 
         fun transcriptsDir(context: Context) = File(context.filesDir, "transcripts").apply { mkdirs() }
 

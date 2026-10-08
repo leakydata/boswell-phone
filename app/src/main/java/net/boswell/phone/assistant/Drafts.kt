@@ -9,6 +9,7 @@ import android.net.Uri
 import android.provider.ContactsContract
 import androidx.core.app.NotificationCompat
 import net.boswell.phone.R
+import net.boswell.phone.capture.logged
 
 /**
  * Message drafts: the assistant writes it, the person sends it. A draft is a
@@ -40,7 +41,7 @@ object Drafts {
             .addAction(0, "Open to send", PendingIntent.getActivity(c, id + 1, intent, PendingIntent.FLAG_IMMUTABLE))
             .setAutoCancel(true)
             .build()
-        runCatching { c.getSystemService(android.app.NotificationManager::class.java).notify(id, n) }
+        runCatching { c.getSystemService(android.app.NotificationManager::class.java).notify(id, n) }.logged("posting a notification")
         return "draft ready as a notification" + (if (target == null) "; ${to} wasn't found in contacts, so they'll pick the recipient" else " to $to ($target)") +
             ". It is not sent until they tap it and send it themselves."
     }

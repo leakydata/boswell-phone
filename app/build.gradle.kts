@@ -24,8 +24,8 @@ android {
         // callbacks are both there, so there is one code path, not two.
         minSdk = 33
         targetSdk = 36
-        versionCode = 14
-        versionName = "0.9.1"
+        versionCode = 15
+        versionName = "0.9.2"
         // The only ABI anything ships for. Models run on-device and a 32-bit
         // or x86 build would be a build nobody runs.
         ndk { abiFilters += listOf("arm64-v8a") }
@@ -66,7 +66,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
 
     // arm64 only (see abiFilters). sherpa's x86 build carries its own
     // libonnxruntime.so, which would collide with onnxruntime-android's.
@@ -76,7 +76,11 @@ android {
         resources { pickFirsts += listOf("META-INF/NOTICE.md", "META-INF/LICENSE.md") }
     }
 
-    testOptions { unitTests.isReturnDefaultValues = true }
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+        // Robolectric (the archive's tests) reaches into FileDescriptor, closed by default since Java 17.
+        unitTests.all { it.jvmArgs("--add-opens=java.base/java.io=ALL-UNNAMED", "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED") }
+    }
 }
 
 // sherpa-onnx (on-device ASR). The static-link build has ONNX Runtime compiled
@@ -140,6 +144,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.onnxruntime.jvm)
+    testImplementation(libs.robolectric)
 }
 
 // Unit tests run on the desktop JVM: use ONNX Runtime's desktop build there,

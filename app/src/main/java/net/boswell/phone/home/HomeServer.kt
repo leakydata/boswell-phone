@@ -13,6 +13,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import net.boswell.phone.asr.Word
 import net.boswell.phone.assistant.Secrets
+import net.boswell.phone.capture.logged
 import net.boswell.phone.diarize.DiarizedSpeaker
 import net.boswell.phone.diarize.Diarization
 import net.boswell.phone.diarize.Turn
@@ -104,7 +105,7 @@ object HomeServer {
                 .setContentText(explain(message) + if (fallback(c) == Fallback.PHONE) " The phone is transcribing meanwhile." else " Recordings wait for it.")
                 .setStyle(androidx.core.app.NotificationCompat.BigTextStyle())
                 .build()
-            runCatching { c.getSystemService(android.app.NotificationManager::class.java).notify(TROUBLE_ID, n) }
+            runCatching { c.getSystemService(android.app.NotificationManager::class.java).notify(TROUBLE_ID, n) }.logged("home server: trouble notification")
         }
     }
 

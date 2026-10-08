@@ -10,6 +10,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import net.boswell.phone.archive.Archive
+import net.boswell.phone.capture.Problems
 import net.boswell.phone.process.BoswellLines
 import net.boswell.phone.speakers.SpeakerStore
 import java.time.Instant
@@ -78,6 +79,7 @@ class FactCheck(private val context: Context) {
             val reply = try {
                 llm.chat(listOf(Llm.user(prompt)), maxTokens = 500, temperature = 0.1)
             } catch (e: Exception) {
+                Problems.report("fact check: AI call", e)
                 store.logCall(SPOT, llm.name, null, e.message)
                 return FactStatus.error(context, e.message ?: e.toString())
             }
@@ -123,6 +125,7 @@ class FactCheck(private val context: Context) {
                 add(buildJsonObject { put("id", JsonPrimitive("web")); put("max_results", JsonPrimitive(WEB_RESULTS)) })
             }))
         } catch (e: Exception) {
+            Problems.report("fact check: web check", e)
             store.logCall(PURPOSE, web.name, null, e.message)
             return FactStatus.error(context, e.message ?: e.toString())
         }

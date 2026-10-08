@@ -71,7 +71,7 @@ object BatteryWatch {
             .setAutoCancel(true)
         if (offerSync) b.addAction(0, "Switch to Sync", PendingIntent.getBroadcast(c, id,
             Intent(c, SwitchToSyncReceiver::class.java).putExtra("id", id), PendingIntent.FLAG_IMMUTABLE))
-        runCatching { NotificationManagerCompat.from(c).notify(id, b.build()) }
+        runCatching { NotificationManagerCompat.from(c).notify(id, b.build()) }.logged("posting a notification")
         CaptureRepository.log(title)
     }
 }

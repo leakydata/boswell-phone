@@ -47,4 +47,6 @@ fun writeAtomically(target: File, bytes: ByteArray) {
         tmp.delete()
         error("could not rename $tmp to $target")
     }
+    // Clip sidecars and transcripts are all written this way: the archive's index looks again.
+    net.boswell.phone.archive.ArchiveChanges.bump()
 }

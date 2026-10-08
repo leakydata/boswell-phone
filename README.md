@@ -125,7 +125,9 @@ what the assistant remembers — to one file, **automatically every week** into 
 you choose, and **restore** it in setup on a new phone. Paired with
 [Boswell Server](https://github.com/leakydata/boswell-server), it also backs up **every day
 to your own computer** (the newest 7 kept there, API keys never included), and restores from
-there in Device → Home server.
+there in Device → Home server. Those backups are incremental: only new and changed recordings
+and transcripts go up, plus the databases and settings, and the server still hands back a whole
+backup for any of its days.
 
 ### 🔒 Private by default
 Everything is recorded, transcribed, identified and stored **on the phone**. Nothing

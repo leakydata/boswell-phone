@@ -17,7 +17,7 @@ class BootReceiver : BroadcastReceiver() {
         val address = net.boswell.phone.sync.Modes.address(context) ?: return
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
         when (net.boswell.phone.sync.Modes.mode(context)) {
-            net.boswell.phone.sync.Mode.LIVE -> runCatching { CaptureService.start(context, address) }
+            net.boswell.phone.sync.Mode.LIVE -> runCatching { CaptureService.start(context, address) }.logged("starting after boot")
             // WorkManager keeps the periodic visit across reboots; this only re-arms it after an update.
             net.boswell.phone.sync.Mode.SYNC -> net.boswell.phone.sync.SyncWorker.schedule(context)
             net.boswell.phone.sync.Mode.OFF -> Unit

@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import net.boswell.phone.R
+import net.boswell.phone.capture.logged
 import net.boswell.phone.process.Notifications
 
 data class ModelProgress(val bytes: Long, val total: Long, val error: String? = null, val running: Boolean = false)
@@ -40,7 +41,7 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
         val id = inputData.getString(KEY_ID) ?: return@withContext Result.failure()
         val store = ModelStore(applicationContext)
         val spec = store.catalog.byId(id)
-        runCatching { setForeground(foreground(spec.name, 0)) }
+        runCatching { setForeground(foreground(spec.name, 0)) }.logged("model download: foreground")
         var done = 0L
         try {
             for (f in spec.files) {
@@ -51,7 +52,7 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
                     },
                     isCancelled = { isStopped })
                 done += f.size
-                runCatching { setForeground(foreground(spec.name, (done * 100 / spec.totalBytes).toInt())) }
+                runCatching { setForeground(foreground(spec.name, (done * 100 / spec.totalBytes).toInt())) }.logged("model download: foreground")
             }
             ModelProgressRepository.set(id, ModelProgress(spec.totalBytes, spec.totalBytes))
             net.boswell.phone.speakers.VoiceMigration.schedule(applicationContext)

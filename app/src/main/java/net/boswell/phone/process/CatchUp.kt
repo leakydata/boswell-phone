@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import net.boswell.phone.archive.Archive
 import java.io.File
 import java.util.concurrent.TimeUnit
+import net.boswell.phone.capture.logged
 
 /** Catching up at home, while it runs: [done] of [done] + [left], for Device → Home server. */
 data class CatchUpState(val running: Boolean = false, val done: Int = 0, val left: Int = 0, val note: String? = null)
@@ -153,7 +154,7 @@ object CatchUp {
     fun enqueue(c: Context, now: Boolean = false) {
         val wm = WorkManager.getInstance(c)
         // By hand: right away, in place of one waiting for later -- but a run under way is let finish (it takes the new ones too).
-        val running = now && runCatching { wm.getWorkInfosForUniqueWork(WORK).get().any { it.state == androidx.work.WorkInfo.State.RUNNING } }.getOrDefault(false)
+        val running = now && runCatching { wm.getWorkInfosForUniqueWork(WORK).get().any { it.state == androidx.work.WorkInfo.State.RUNNING } }.logged("catch-up: work state").getOrDefault(false)
         wm.enqueueUniqueWork(WORK, if (now && !running) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP, request(if (now) 0 else 1, TimeUnit.MINUTES))
     }
 

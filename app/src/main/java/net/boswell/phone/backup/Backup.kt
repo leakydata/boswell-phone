@@ -36,12 +36,12 @@ import java.util.zip.ZipOutputStream
  */
 object Backup {
     const val FORMAT = 1
-    private const val MANIFEST = "boswell-backup.json"
+    internal const val MANIFEST = "boswell-backup.json"
     private val DATABASES = listOf("speakers.db", "todo.db", "life.db", "assistant.db")
     private val FOLDERS = listOf("clips", "transcripts")
     private val SKIP_PREFS = setOf("setup_done", "calendar_id", "last_sync", "last_sync_result", "omi_battery_band", "restored",
         "backup_folder", "backup_last", "backup_last_result",   // a folder permission belongs to this install
-        "home_backup_last", "home_backup_last_result", "home_backup_bytes")
+        "home_backup_last", "home_backup_last_result", "home_backup_bytes", "home_backup_total")
     private val json = Json { prettyPrint = false }
 
     data class Summary(val recordings: Int, val bytes: Long, val keys: Boolean, val created: Long)
@@ -54,7 +54,7 @@ object Backup {
 
     /** Write a backup to [out] as it's made (nothing is gathered first), and close it. [progress] gets 0..1. */
     fun export(c: Context, out: java.io.OutputStream, includeKeys: Boolean, progress: (Float) -> Unit = {}): Summary {
-        val files = FOLDERS.flatMap { d -> File(c.filesDir, d).listFiles().orEmpty().filter { it.isFile }.map { "files/$d/${it.name}" to it } }
+        val files = listFiles(c.filesDir)
         val total = files.sumOf { it.second.length() }.coerceAtLeast(1)
         val tmp = File(c.cacheDir, "backup-db").apply { deleteRecursively(); mkdirs() }
         var written = 0L
@@ -66,21 +66,14 @@ object Backup {
                 ZipOutputStream(raw.buffered()).use { zip ->
                     fun put(name: String, bytes: ByteArray) { zip.putNextEntry(ZipEntry(name)); zip.write(bytes); zip.closeEntry() }
                     // The manifest goes first, so a restore can refuse a wrong file before reading the rest.
-                    put(MANIFEST, json.encodeToString(JsonObject.serializer(), buildJsonObject {
-                        put("format", FORMAT); put("app", c.packageManager.getPackageInfo(c.packageName, 0).versionName ?: ""); put("created", created)
-                        put("recordings", files.count { it.first.startsWith("files/transcripts/") }); put("keys", includeKeys)
-                    }).toByteArray())
-                    put("settings.json", json.encodeToString(JsonObject.serializer(), prefsToJson(c)).toByteArray())
+                    put(MANIFEST, manifest(c, files, created, includeKeys))
+                    put("settings.json", settings(c))
                     if (includeKeys) put("keys.json", json.encodeToString(JsonObject.serializer(), buildJsonObject {
                         Secrets.get(c, Secrets.OPENROUTER)?.let { put(Secrets.OPENROUTER, it) }
                         Secrets.get(c, net.boswell.phone.assistant.Email.PASSWORD)?.let { put(net.boswell.phone.assistant.Email.PASSWORD, it) }
                     }).toByteArray())
-                    // A consistent copy of each database, even while the app is using it.
-                    for (name in DATABASES) {
-                        val src = c.getDatabasePath(name).takeIf { it.exists() } ?: continue
-                        val copy = File(tmp, name)
-                        SQLiteDatabase.openDatabase(src.path, null, SQLiteDatabase.OPEN_READONLY).use { it.execSQL("VACUUM INTO ?", arrayOf(copy.path)) }
-                        zip.putNextEntry(ZipEntry("databases/$name")); copy.inputStream().use { it.copyTo(zip) }; zip.closeEntry()
+                    for ((name, copy) in copyDatabases(c, tmp)) {
+                        zip.putNextEntry(ZipEntry(name)); copy.inputStream().use { it.copyTo(zip) }; zip.closeEntry()
                     }
                     for ((name, f) in files) {
                         val listed = f.length()
@@ -93,6 +86,28 @@ object Backup {
             }
         } finally { tmp.deleteRecursively() }
         return Summary(recordings, bytes, includeKeys, created)
+    }
+
+    /** The recordings and transcripts a backup holds, as (name in the zip, file), in the order it holds them. */
+    internal fun listFiles(filesDir: File): List<Pair<String, File>> =
+        FOLDERS.flatMap { d -> File(filesDir, d).listFiles().orEmpty().filter { it.isFile }.map { "files/$d/${it.name}" to it } }
+
+    /** The backup's own manifest (boswell-backup.json), for a backup of [files] made at [created] (epoch seconds). */
+    internal fun manifest(c: Context, files: List<Pair<String, File>>, created: Long, includeKeys: Boolean): ByteArray =
+        json.encodeToString(JsonObject.serializer(), buildJsonObject {
+            put("format", FORMAT); put("app", c.packageManager.getPackageInfo(c.packageName, 0).versionName ?: ""); put("created", created)
+            put("recordings", files.count { it.first.startsWith("files/transcripts/") }); put("keys", includeKeys)
+        }).toByteArray()
+
+    /** The settings, as settings.json. */
+    internal fun settings(c: Context): ByteArray = json.encodeToString(JsonObject.serializer(), prefsToJson(c)).toByteArray()
+
+    /** A consistent copy of each database in [tmp], even while the app is using it: (name in the zip, copy). */
+    internal fun copyDatabases(c: Context, tmp: File): List<Pair<String, File>> = DATABASES.mapNotNull { name ->
+        val src = c.getDatabasePath(name).takeIf { it.exists() } ?: return@mapNotNull null
+        val copy = File(tmp, name).apply { delete() }
+        SQLiteDatabase.openDatabase(src.path, null, SQLiteDatabase.OPEN_READONLY).use { it.execSQL("VACUUM INTO ?", arrayOf(copy.path)) }
+        "databases/$name" to copy
     }
 
     /**
@@ -180,6 +195,10 @@ object Backup {
             }
             for (name in DATABASES + "archive.db") {
                 val db = c.getDatabasePath(name)
+                // Close this process's copies first, and drop the old log with the file: an old
+                // write ahead log left beside the restored file would be replayed over it, and a
+                // copy still open would delete the new one's log by name when it closed.
+                net.boswell.phone.Databases.closeAll(name)
                 for (suffix in listOf("", "-journal", "-wal", "-shm")) File(db.path + suffix).delete()
                 val from = File(stage, "databases/$name")
                 if (from.exists()) { db.parentFile!!.mkdirs(); check(from.renameTo(db)) { "couldn't move $name into place" } }

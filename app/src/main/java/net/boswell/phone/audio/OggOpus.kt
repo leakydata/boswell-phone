@@ -66,6 +66,7 @@ object OggOpus {
             out.fd.sync()
         }
         if (!tmp.renameTo(file)) throw java.io.IOException("could not write ${file.name}")
+        net.boswell.phone.archive.ArchiveChanges.bump()
     }
 
     data class Stream(val packets: List<ByteArray>, val inputRate: Int, val preSkip: Int)

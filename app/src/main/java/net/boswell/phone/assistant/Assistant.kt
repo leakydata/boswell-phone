@@ -8,6 +8,8 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import net.boswell.phone.archive.Archive
+import net.boswell.phone.capture.Problems
+import net.boswell.phone.capture.logged
 import net.boswell.phone.speakers.SpeakerStore
 import java.time.Instant
 import java.time.LocalDate
@@ -124,7 +126,7 @@ class Assistant(private val context: Context) {
                 }
                 messages += reply.message
                 for (call in reply.toolCalls) {
-                    val result = runCatching { runTool(call, archive, speakers, source) }.getOrElse { "error: ${it.message}" }
+                    val result = runCatching { runTool(call, archive, speakers, source) }.logged("assistant tool ${call.name}").getOrElse { "error: ${it.message}" }
                     messages += Llm.toolResult(call.id, result.take(12_000))
                 }
             }
@@ -132,6 +134,7 @@ class Assistant(private val context: Context) {
             store.addExchange(source, display ?: question, text, cost, error = true, asked = asked)
             return Answer(text, cost, true)
         } catch (e: Exception) {
+            Problems.report("assistant", e)
             val text = "Couldn't reach the assistant: ${e.message?.take(160)}"
             store.addExchange(source, display ?: question, text, cost, error = true, asked = asked)
             return Answer(text, cost, true)

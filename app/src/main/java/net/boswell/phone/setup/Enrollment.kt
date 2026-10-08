@@ -4,6 +4,8 @@ import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import net.boswell.phone.capture.logged
+import net.boswell.phone.capture.timed
 import net.boswell.phone.diarize.OrtModels
 import net.boswell.phone.models.ModelCatalog
 import net.boswell.phone.models.ModelStore
@@ -113,7 +115,8 @@ object Enrollment {
         } finally { store.close() }
         net.boswell.phone.capture.CaptureRepository.log("learned the voice of $name (%.0f s)".format(audio.size / 16_000.0))
         // Past recordings get another look with the new sample.
-        runCatching { net.boswell.phone.speakers.VoiceReview(context).recheck() }
+        runCatching { timed("voice recheck", 10_000) { net.boswell.phone.speakers.VoiceReview(context).recheck() } }
+            .logged("voice recheck")
             .onSuccess { if (it.matched > 0) net.boswell.phone.capture.CaptureRepository.log("recognized $name in ${it.matched} more recordings") }
         id
     }

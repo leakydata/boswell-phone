@@ -9,6 +9,7 @@ coroutines = "1.11.0"
 serialization = "1.11.0"
 concentus = "1.0.2"
 junit = "4.13.2"
+robolectric = "4.17"
 work = "2.12.0"
 onnxruntime = "1.30.0"
 navigation = "2.10.2"
@@ -38,6 +39,8 @@ kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-t
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
 concentus = { module = "io.github.jaredmdobson:concentus", version.ref = "concentus" }
 junit = { module = "junit:junit", version.ref = "junit" }
+# Android (SQLite, files, preferences) on the desktop JVM, for the archive's tests.
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigation" }
 androidx-media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "media3" }
 androidx-work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }

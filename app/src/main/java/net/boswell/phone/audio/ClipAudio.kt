@@ -1,6 +1,7 @@
 package net.boswell.phone.audio
 
 import java.io.File
+import net.boswell.phone.capture.logged
 
 /**
  * A clip's audio, wherever it is kept. A clip is known everywhere by its
@@ -33,6 +34,7 @@ object ClipAudio {
     fun delete(dir: File, name: String) {
         wav(dir, name).delete()
         ogg(dir, name).delete()
+        net.boswell.phone.archive.ArchiveChanges.bump()
     }
 
     /** Write the compact copy from the Opus frames the clip was decoded from. */
@@ -53,7 +55,7 @@ object ClipAudio {
         // (32 kbps; measured on 60 real clips: 8x smaller, voiceprints of the
         // copy 0.97 alike the original's -- and those already in transcripts
         // were made from the original). A failure keeps the WAV.
-        if (!o.exists() && runCatching { OpusEncode.toOgg(pcm, o) }.isFailure) { o.delete(); return 0 }
+        if (!o.exists() && runCatching { OpusEncode.toOgg(pcm, o) }.logged("compacting audio").isFailure) { o.delete(); return 0 }
         val back = runCatching { OggOpus.readPcm(o) }.getOrNull()
         // A frame or two of encoder delay is fine; anything else is a bad copy.
         if (back == null || kotlin.math.abs(back.size - pcm.size) > 2 * 320) {
@@ -62,6 +64,7 @@ object ClipAudio {
         }
         val saved = w.length() - o.length()
         w.delete()
+        net.boswell.phone.archive.ArchiveChanges.bump()
         return saved
     }
 }

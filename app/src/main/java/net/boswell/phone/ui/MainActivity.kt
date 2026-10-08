@@ -15,6 +15,10 @@ class MainActivity : ComponentActivity() {
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Debug builds only: disk reads and writes on the main thread go to logcat (tag StrictMode),
+        // the database work behind a screen that stutters.
+        if (net.boswell.phone.BuildConfig.DEBUG) android.os.StrictMode.setThreadPolicy(
+            android.os.StrictMode.ThreadPolicy.Builder().detectDiskReads().detectDiskWrites().penaltyLog().build())
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         // On first run the setup's Permissions step asks, with an explanation;

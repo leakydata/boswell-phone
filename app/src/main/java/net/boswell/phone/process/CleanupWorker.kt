@@ -7,6 +7,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import net.boswell.phone.archive.Archive
+import net.boswell.phone.capture.logged
 import net.boswell.phone.speakers.SpeakerStore
 import java.util.concurrent.TimeUnit
 
@@ -47,7 +48,7 @@ class CleanupWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         for (w in clips.listFiles { f -> f.extension == "wav" }.orEmpty().sortedBy { it.name }) {
             if (isStopped) break
             if (!java.io.File(tdir, w.nameWithoutExtension + ".json").exists()) continue      // not transcribed yet
-            val s = runCatching { net.boswell.phone.audio.ClipAudio.compact(clips, w.name) }.getOrDefault(0L)
+            val s = runCatching { net.boswell.phone.audio.ClipAudio.compact(clips, w.name) }.logged("compacting audio").getOrDefault(0L)
             if (s > 0) { saved += s; n++ }
         }
         if (n > 0) net.boswell.phone.capture.CaptureRepository.log("compacted $n clips, freed ${saved / 1_000_000} MB")

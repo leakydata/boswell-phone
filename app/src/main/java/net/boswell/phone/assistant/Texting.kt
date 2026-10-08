@@ -17,6 +17,7 @@ import net.boswell.phone.R
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import net.boswell.phone.capture.logged
 
 /** A contact the assistant may read texts from and text (after confirmation). */
 @Serializable
@@ -124,7 +125,7 @@ object Texting {
             .setTimeoutAfter(CONFIRM_MS)
             .setAutoCancel(true)
             .build()
-        runCatching { c.getSystemService(NotificationManager::class.java).notify(id, n) }
+        runCatching { c.getSystemService(NotificationManager::class.java).notify(id, n) }.logged("posting a notification")
         return "held for confirmation: “$text” to ${to.name} (${to.number}). It is NOT sent. Ask them to confirm: they can tap Send on the notification, or say yes within two minutes."
     }
 
@@ -157,7 +158,7 @@ object Texting {
             if (p.id >= 0) { pending = null; c.getSystemService(NotificationManager::class.java).cancel(p.id) }
             net.boswell.phone.capture.CaptureRepository.log("texted ${p.to.name}")
             "sent to ${p.to.name}: “${p.text}”"
-        }.getOrElse { "couldn't send: ${it.message}" }
+        }.logged("sending a text").getOrElse { "couldn't send: ${it.message}" }
     }
 
     /** The person's own words say to send it: a yes, and nothing that takes it back. */
@@ -204,7 +205,7 @@ object AutoSend {
             .addAction(0, "Cancel", cancel)
             .setTimeoutAfter((DELAY_S + 2) * 1000)
             .build()
-        runCatching { c.getSystemService(NotificationManager::class.java).notify(id, n) }
+        runCatching { c.getSystemService(NotificationManager::class.java).notify(id, n) }.logged("posting a notification")
         net.boswell.phone.capture.CaptureService.buzz(c, 1)
         return "sending to ${to.name} in $DELAY_S seconds unless they tap Cancel: \u201c$text\u201d (${to.name} is set to send right away)"
     }

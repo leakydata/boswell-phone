@@ -11,6 +11,7 @@ import android.media.AudioAttributes
 import android.media.RingtoneManager
 import androidx.core.app.NotificationCompat
 import net.boswell.phone.R
+import net.boswell.phone.capture.logged
 import net.boswell.phone.ui.MainActivity
 
 /**
@@ -59,7 +60,7 @@ class AlarmReceiver : BroadcastReceiver() {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
             .build().apply { flags = flags or android.app.Notification.FLAG_INSISTENT }   // rings until seen
-        runCatching { context.getSystemService(NotificationManager::class.java).notify(intent.getIntExtra("id", 77), n) }
+        runCatching { context.getSystemService(NotificationManager::class.java).notify(intent.getIntExtra("id", 77), n) }.logged("posting an alarm")
         net.boswell.phone.capture.CaptureService.buzz(context, 3)
     }
 }

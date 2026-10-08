@@ -90,7 +90,7 @@ class Clipper(
         val wav = uniqueName(ended.toLong())
         Wav.write(wav, audio, sampleRate)
         // The compact copy kept after transcription: the Omi's own frames, not re-encoded.
-        opus?.let { frames -> runCatching { net.boswell.phone.audio.ClipAudio.writeCompact(dir, wav.name, frames) } }
+        opus?.let { frames -> runCatching { net.boswell.phone.audio.ClipAudio.writeCompact(dir, wav.name, frames) }.logged("writing compact audio") }
         val times = ClipTimes(
             started = ended - seconds, ended = ended, seconds = seconds, source = "omi",
             firstMs = firstMs, lastMs = lastMs, bootId = bootId, deviceId = deviceId,

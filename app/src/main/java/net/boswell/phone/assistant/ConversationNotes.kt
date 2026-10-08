@@ -5,6 +5,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import net.boswell.phone.archive.Archive
+import net.boswell.phone.capture.logged
 import net.boswell.phone.speakers.SpeakerStore
 import java.time.LocalDate
 
@@ -53,7 +54,7 @@ object ConversationNotes {
                             "leave out unknown speakers rather than calling them 'someone'. If it's only the user talking, it's notes or thinking aloud: title the topic. " +
                             "If it's TV, music or chatter with nothing to it, say so plainly."),
                         Llm.user(text.take(8_000))), maxTokens = 400, temperature = 0.2)
-                }
+                }.logged("conversation notes: AI call")
                 store.logCall("titles", llm.name, reply.getOrNull(), reply.exceptionOrNull()?.message)
                 val body = reply.getOrNull()?.text ?: continue
                 val o = runCatching { Llm.json.parseToJsonElement(body.substring(body.indexOf('{'), body.lastIndexOf('}') + 1)).jsonObject }.getOrNull() ?: continue

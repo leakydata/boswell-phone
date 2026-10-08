@@ -6,6 +6,7 @@ import androidx.core.content.FileProvider
 import net.boswell.phone.archive.Archive
 import net.boswell.phone.audio.Wav
 import net.boswell.phone.capture.CaptureService
+import net.boswell.phone.capture.logged
 import net.boswell.phone.speakers.SpeakerStore
 import java.io.File
 
@@ -25,12 +26,14 @@ object ClipActions {
             File(cdir, "$base.json").delete()
             File(tdir, "$base.json").delete()
         }
+        net.boswell.phone.archive.ArchiveChanges.bump()
         Redone.delete(context, clips)
         val speakers = SpeakerStore(context)
         val archive = Archive(context)
         try {
             speakers.forgetClips(clips)
-            archive.sync(speakers, force = true)
+            // Only these clips' own voices change, and their files are gone: regrouping around them is enough.
+            archive.sync(speakers)
         } finally { speakers.close(); archive.close() }
     }
 
@@ -66,7 +69,8 @@ object ClipActions {
             t.copy(segments = t.segments.toMutableList().also { it[i] = it[i].copy(speaker = label) })).toByteArray())
         val speakers = SpeakerStore(context)
         val archive = Archive(context)
-        try { archive.sync(speakers, force = true) } finally { speakers.close(); archive.close() }
+        // One transcript changed: regrouping around it is enough.
+        try { archive.sync(speakers) } finally { speakers.close(); archive.close() }
     }
 
     /**
@@ -82,7 +86,8 @@ object ClipActions {
         try {
             for (clip in clips) {
                 val f = File(tdir, clip.removeSuffix(".wav") + ".json")
-                val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.getOrNull() ?: continue
+                val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }
+                    .let { if (f.exists()) it.logged("not Boswell: reading ${f.name}") else it }.getOrNull() ?: continue
                 if (t.speakers.values.none(BoswellLines::isBoswell)) continue
                 speakers.notBoswell(listOf(t.clip))
                 val segments = t.segments.map { if (it.speaker == BoswellLines.LABEL) it.copy(speaker = it.diarized, diarized = null) else it }
@@ -109,9 +114,10 @@ object ClipActions {
         for (name in clips) {
             val f = File(tdir, name.removeSuffix(".wav") + ".json")
             if (!f.exists()) continue
-            val ok = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.isSuccess
+            val ok = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.logged("redo: reading ${f.name}").isSuccess
             if (ok) f.renameTo(Redone.held(context, name)) else f.delete()
         }
+        net.boswell.phone.archive.ArchiveChanges.bump()
         ProcessingWorker.enqueue(context)
     }
 

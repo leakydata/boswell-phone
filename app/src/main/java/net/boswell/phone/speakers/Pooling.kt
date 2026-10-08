@@ -1,5 +1,6 @@
 package net.boswell.phone.speakers
 
+import net.boswell.phone.capture.logged
 import net.boswell.phone.process.Transcript
 import net.boswell.phone.process.TranscriptJson
 import java.io.File
@@ -66,20 +67,44 @@ object Pooling {
         }
     }
 
+    /** The voices of the recordings made in the [WINDOW] seconds before one, for many recordings in turn. */
+    interface Earlier {
+        fun before(clip: String): List<Voice>
+    }
+
+    /**
+     * [Earlier] from voices already at hand (the archive's index has every
+     * voice's print, speech and loudness): no transcript read at all. Only
+     * clean voices are kept, as [pooled] uses no other.
+     */
+    class Known(voices: List<Voice>) : Earlier {
+        // Stable: voices of one time stay in the order given (a clip's, in its transcript's order).
+        private val voices = voices.filter { it.snr >= MIN_SNR }.sortedBy { it.time }
+
+        override fun before(clip: String): List<Voice> {
+            val time = clipTime(clip) ?: return emptyList()
+            var i = voices.binarySearchBy(time - WINDOW) { it.time }.let { if (it < 0) -it - 1 else it }
+            while (i > 0 && voices[i - 1].time >= time - WINDOW) i--
+            val out = mutableListOf<Voice>()
+            while (i < voices.size && voices[i].time < time) out += voices[i++]
+            return out
+        }
+    }
+
     /** [before] for many recordings: the folder listed once, and each transcript read at most once. */
-    class Index(dir: File) {
+    class Index(dir: File) : Earlier {
         private val files = dir.listFiles { f -> f.extension == "json" }.orEmpty()
             .mapNotNull { f -> clipTime(f.name)?.let { it to f } }.sortedBy { it.first }
         private val read = HashMap<File, List<Voice>>()
 
-        fun before(clip: String): List<Voice> {
+        override fun before(clip: String): List<Voice> {
             val time = clipTime(clip) ?: return emptyList()
             var i = files.binarySearchBy(time - WINDOW) { it.first }.let { if (it < 0) -it - 1 else it }
             while (i > 0 && files[i - 1].first >= time - WINDOW) i--
             val out = mutableListOf<Voice>()
             while (i < files.size && files[i].first < time) {
                 val f = files[i++].second
-                out += read.getOrPut(f) { runCatching { voicesOf(TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText())) }.getOrDefault(emptyList()) }
+                out += read.getOrPut(f) { runCatching { voicesOf(TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText())) }.logged("pooling: reading ${f.name}").getOrDefault(emptyList()) }
             }
             return out
         }
@@ -89,6 +114,6 @@ object Pooling {
     fun before(dir: File, clip: String): List<Voice> {
         val time = clipTime(clip) ?: return emptyList()
         return dir.listFiles { f -> f.extension == "json" && clipTime(f.name)?.let { it < time && it >= time - WINDOW } == true }.orEmpty()
-            .flatMap { f -> runCatching { voicesOf(TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText())) }.getOrDefault(emptyList()) }
+            .flatMap { f -> runCatching { voicesOf(TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText())) }.logged("pooling: reading ${f.name}").getOrDefault(emptyList()) }
     }
 }

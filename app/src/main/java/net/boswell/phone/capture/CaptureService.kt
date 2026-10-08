@@ -160,7 +160,7 @@ class CaptureService : LifecycleService() {
                 } catch (e: Exception) {
                     CaptureRepository.log("link lost: ${e.message}")
                 } finally {
-                    withContext(audioThread) { runCatching { clipper?.flush() } }
+                    withContext(audioThread) { runCatching { clipper?.flush() }.logged("saving the last clip") }
                     connection?.close()
                     connection = null
                 }
@@ -350,11 +350,11 @@ class CaptureService : LifecycleService() {
                     if (ok && question == null) checkCharger()
                 }
                 if (tick % net.boswell.phone.assistant.Watcher.EVERY_SECONDS == 0 && watching?.isActive != true) {
-                    watching = lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { watcher.tick() } }
+                    watching = lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { timed("watcher", 30_000) { watcher.tick() } }.logged("watcher") }
                 }
                 // Its own job: a slow web check never holds up the watcher, or the next look.
                 if (tick % net.boswell.phone.assistant.FactCheck.EVERY_SECONDS == 0 && checking?.isActive != true) {
-                    checking = lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { factCheck.tick() } }
+                    checking = lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { timed("fact check", 30_000) { factCheck.tick() } }.logged("fact check") }
                 }
                 if (tick % 10 == 0) {
                     val n = conn.notifications; val f = CaptureRepository.state.value.frames
@@ -457,7 +457,7 @@ class CaptureService : LifecycleService() {
     private fun buzz(level: Int) {
         val c = connection ?: return
         if (!c.has(OmiUuids.HAPTIC)) return
-        lifecycleScope.launch { runCatching { c.write(OmiUuids.HAPTIC, byteArrayOf(level.toByte())) } }
+        lifecycleScope.launch { runCatching { c.write(OmiUuids.HAPTIC, byteArrayOf(level.toByte())) }.logged("buzzing the Omi") }
     }
 
     private fun onButton(code: Int) {
@@ -755,7 +755,7 @@ class CaptureService : LifecycleService() {
         captureJob?.cancel()
         captureJob?.join()
         captureJob = null
-        withContext(audioThread) { runCatching { clipper?.flush() } }
+        withContext(audioThread) { runCatching { clipper?.flush() }.logged("saving the last clip") }
         connection?.close()
         connection = null
         CaptureRepository.update { it.copy(link = Link.IDLE, nextRetryMillis = null, heldSeconds = 0.0) }
@@ -763,7 +763,7 @@ class CaptureService : LifecycleService() {
     }
 
     override fun onDestroy() {
-        runCatching { clipper?.flush() }
+        runCatching { clipper?.flush() }.logged("saving the last clip")
         connection?.close()
         audioThread.close()
         super.onDestroy()
@@ -780,13 +780,13 @@ class CaptureService : LifecycleService() {
         fun applyLedNow(context: Context) {
             val l = CaptureRepository.state.value.link
             if (l != Link.STREAMING && l != Link.SYNCING) return
-            runCatching { context.startService(Intent(context, CaptureService::class.java).setAction(ACTION_LED)) }
+            runCatching { context.startService(Intent(context, CaptureService::class.java).setAction(ACTION_LED)) }.logged("setting the Omi's light")
         }
 
         /** Buzz the Omi if Live capture is connected (a timer going off); nothing otherwise. */
         fun buzz(context: Context, level: Int) {
             if (CaptureRepository.state.value.link != Link.STREAMING) return
-            runCatching { context.startService(Intent(context, CaptureService::class.java).setAction(ACTION_BUZZ).putExtra("level", level)) }
+            runCatching { context.startService(Intent(context, CaptureService::class.java).setAction(ACTION_BUZZ).putExtra("level", level)) }.logged("buzzing the Omi")
         }
         const val EXTRA_ADDRESS = "address"
         private const val CHANNEL = "capture"

@@ -27,3 +27,4 @@ captures/
 .externalNativeBuild/
 .cxx/
 /app/libs/
+.kotlin/

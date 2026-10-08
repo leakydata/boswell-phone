@@ -103,6 +103,7 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
     val progress by ModelProgressRepository.state.collectAsStateWithLifecycle()
     var confirmClean by remember { mutableStateOf(false) }
     var showLog by remember { mutableStateOf(false) }
+    var onlyProblems by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { vm.refreshStorage(); vm.refreshModels(); vm.refreshSync(ctx as? android.app.Activity) }
 
     LazyColumn(
@@ -598,14 +599,19 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                 Row2("Device restarts seen", "${cap.reboots}")
                 Row2("Last button tap", cap.lastButton?.let { (code, at) -> (if (code == 2) "double · " else "") + ago(at) }
                     ?: if (cap.buttonReady == true) "none yet (tap quickly)" else "not available")
+                // Failures and slow steps (Problems, Slow), so they don't drown in the rest of the log.
+                val problems = cap.log.count(net.boswell.phone.capture.Problems::isProblem)
+                if (problems > 0) Row2("Problems and slow steps", "$problems")
                 Row {
-                    TextButton(onClick = { showLog = !showLog }) { Text(if (showLog) "Hide log" else "Show log") }
+                    TextButton(onClick = { showLog = !showLog; onlyProblems = false }) { Text(if (showLog) "Hide log" else "Show log") }
+                    if (problems > 0) TextButton(onClick = { onlyProblems = !onlyProblems; showLog = true }) { Text(if (onlyProblems) "All lines" else "Problems only") }
                     TextButton(onClick = onSetup) { Text("Run setup again") }
                 }
             }
         }
-        if (showLog) items(cap.log.asReversed().take(80)) { line ->
-            Text(line, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+        if (showLog) items(cap.log.asReversed().filter { !onlyProblems || net.boswell.phone.capture.Problems.isProblem(it) }.take(80)) { line ->
+            Text(line, fontFamily = FontFamily.Monospace, fontSize = 11.sp,
+                color = if (net.boswell.phone.capture.Problems.isProblem(line)) MaterialTheme.colorScheme.error else androidx.compose.ui.graphics.Color.Unspecified)
         }
     }
 
@@ -1007,7 +1013,10 @@ private fun HomeBackupRows() {
     val sending by B.progress.collectAsStateWithLifecycle()
     val asked by remember { B.asked(ctx) }.collectAsStateWithLifecycle(false)
     fun summary() = listOfNotNull(B.lastResult(ctx),
-        B.last(ctx).takeIf { it > 0 }?.let { "last one ${Fmt.ago(it / 1000.0)}, ${Fmt.bytes(B.lastBytes(ctx))}" }).joinToString(" · ").ifBlank { null }
+        B.last(ctx).takeIf { it > 0 }?.let {
+            val sent = B.lastBytes(ctx); val total = B.lastTotal(ctx)
+            "last one ${Fmt.ago(it / 1000.0)}, " + if (total > sent) "${Fmt.bytes(sent)} sent of ${Fmt.bytes(total)}" else Fmt.bytes(sent)
+        }).joinToString(" · ").ifBlank { null }
     var last by remember { mutableStateOf(summary()) }
     LaunchedEffect(sending, asked) { last = summary() }
     var remote by remember { mutableStateOf<List<net.boswell.phone.backup.HomeBackup.Remote>?>(null) }
@@ -1022,7 +1031,7 @@ private fun HomeBackupRows() {
         Column(Modifier.weight(1f)) {
             Text("Back up to the home server every day", style = MaterialTheme.typography.bodyLarge)
             Text("Everything in Boswell, as in Storage → Back up, goes to your computer about once a day over Wi-Fi, whenever it's on; " +
-                "it keeps the newest 7. API keys are never included.",
+                "only what changed goes up, and it keeps the newest 7. API keys are never included.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Switch(checked = on, onCheckedChange = { on = it; B.setOn(ctx, it) })

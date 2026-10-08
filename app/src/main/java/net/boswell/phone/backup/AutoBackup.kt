@@ -12,6 +12,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import net.boswell.phone.capture.logged
 import java.util.concurrent.TimeUnit
 
 /**
@@ -67,7 +68,7 @@ object AutoBackup {
             val doc = DocumentsContract.createDocument(c.contentResolver, parent, "application/zip", Backup.suggestedName())
                 ?: error("the folder wouldn't take a new file")
             val s = try { Backup.export(c, doc, includeKeys = false) }
-                catch (e: Exception) { runCatching { DocumentsContract.deleteDocument(c.contentResolver, doc) }; throw e }
+                catch (e: Exception) { runCatching { DocumentsContract.deleteDocument(c.contentResolver, doc) }.logged("auto backup: delete the unfinished file"); throw e }
             prune(c, tree)
             "Backed up ${s.recordings} recordings"
         }.getOrElse { "Backup failed: ${it.message}" }
@@ -85,6 +86,7 @@ object AutoBackup {
         }.orEmpty().filter { it.second.matches(Regex("""boswell-backup-\d{4}-\d{2}-\d{2}( \(\d+\))?\.zip""")) }
         for (old in ours.sortedByDescending { it.third }.drop(KEEP))
             runCatching { DocumentsContract.deleteDocument(c.contentResolver, DocumentsContract.buildDocumentUriUsingTree(tree, old.first)) }
+                .logged("auto backup: delete an old backup")
     }
 }
 

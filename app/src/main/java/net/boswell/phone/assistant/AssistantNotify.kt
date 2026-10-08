@@ -8,6 +8,7 @@ import android.content.Intent
 import android.speech.tts.TextToSpeech
 import androidx.core.app.NotificationCompat
 import net.boswell.phone.R
+import net.boswell.phone.capture.logged
 import net.boswell.phone.ui.MainActivity
 import java.util.Locale
 
@@ -54,7 +55,7 @@ object AssistantNotify {
         val text = SpeechText.plain(Moments.strip(rawText))
         val open = PendingIntent.getActivity(c, 0, Intent(c, MainActivity::class.java).putExtra("open", "ask"), PendingIntent.FLAG_IMMUTABLE)
         // The first quoted moment, a tap away.
-        val moment = Moments.ids(rawText).firstOrNull()?.let { runCatching { Moments.resolve(c, it) }.getOrNull() }
+        val moment = Moments.ids(rawText).firstOrNull()?.let { runCatching { Moments.resolve(c, it) }.logged("notification: moment").getOrNull() }
         val b = NotificationCompat.Builder(c, channel)
             .setSmallIcon(R.drawable.ic_stat_mic)
             .setContentTitle(title)
@@ -86,8 +87,8 @@ object AssistantNotify {
             // The answer itself replaces the stub once the phone is unlocked, without a second alert.
             hidden[id] = b.setOnlyAlertOnce(true).setSilent(true).build()
             whenUnlocked(c)
-            runCatching { nm.notify(id, stub.build()) }
-        } else runCatching { nm.notify(id, b.build()) }
+            runCatching { nm.notify(id, stub.build()) }.logged("posting a notification")
+        } else runCatching { nm.notify(id, b.build()) }.logged("posting a notification")
         if (speak) this.speak(c, text)
     }
 
@@ -107,7 +108,7 @@ object AssistantNotify {
                     val nm = app.getSystemService(NotificationManager::class.java)
                     // Only those still showing: one swiped away stays gone.
                     val showing = nm.activeNotifications.map { it.id }.toSet()
-                    for (id in hidden.keys.toList()) hidden.remove(id)?.let { if (id in showing) runCatching { nm.notify(id, it) } }
+                    for (id in hidden.keys.toList()) hidden.remove(id)?.let { if (id in showing) runCatching { nm.notify(id, it) }.logged("posting a notification") }
                 }
             }
             androidx.core.content.ContextCompat.registerReceiver(app, r, android.content.IntentFilter(Intent.ACTION_USER_PRESENT),
@@ -187,7 +188,7 @@ object AssistantNotify {
             val at = now()
             val guess = at + said.split(' ').size * 0.45 + 1.0
             speakingUntil = (guess * 1000).toLong()
-            runCatching { AssistantStore(app).use { it.addSpoken(at, guess, said, voice) } }.onSuccess { rows[id] = it }
+            runCatching { AssistantStore(app).use { it.addSpoken(at, guess, said, voice) } }.logged("noting what was spoken").onSuccess { rows[id] = it }
         }
         override fun onDone(id: String) = ended(id)
         override fun onStop(id: String, interrupted: Boolean) = ended(id)
@@ -199,7 +200,7 @@ object AssistantNotify {
             // Unless a newer utterance cut this one off: that one keeps the other audio down.
             if (pending.isEmpty() && rows.isEmpty()) unduck(app)
             row ?: return
-            runCatching { AssistantStore(app).use { it.endSpoken(row, now()) } }
+            runCatching { AssistantStore(app).use { it.endSpoken(row, now()) } }.logged("noting what was spoken")
         }
     }
 

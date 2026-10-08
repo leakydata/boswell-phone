@@ -14,6 +14,7 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import net.boswell.phone.R
 import net.boswell.phone.assistant.AssistantNotify
+import net.boswell.phone.capture.logged
 import net.boswell.phone.ui.MainActivity
 import java.util.concurrent.TimeUnit
 
@@ -45,7 +46,7 @@ object TodoReminders {
             .addAction(0, "Done", done)
             .setAutoCancel(true)
             .build()
-        runCatching { NotificationManagerCompat.from(context).notify(ID_BASE + t.id.toInt(), n) }
+        runCatching { NotificationManagerCompat.from(context).notify(ID_BASE + t.id.toInt(), n) }.logged("posting a reminder")
     }
 
     const val ID_BASE = 50_000

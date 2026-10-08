@@ -26,6 +26,7 @@ import kotlinx.serialization.json.Json
 import net.boswell.phone.capture.CaptureRepository
 import net.boswell.phone.capture.CaptureService
 import net.boswell.phone.capture.ClipTimes
+import net.boswell.phone.capture.logged
 import net.boswell.phone.models.ModelCatalog
 import net.boswell.phone.models.ModelDownloadWorker
 import net.boswell.phone.models.ModelProgressRepository
@@ -99,7 +100,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val address = net.boswell.phone.sync.Modes.address(ctx)
             if (net.boswell.phone.sync.Modes.mode(ctx) == net.boswell.phone.sync.Mode.LIVE && address != null &&
                 CaptureRepository.state.value.link == net.boswell.phone.capture.Link.IDLE) {
-                runCatching { CaptureService.start(ctx, address) }
+                runCatching { CaptureService.start(ctx, address) }.logged("starting Live capture")
             }
         }
         // Older clips become compact copies; quiet ones lose their sound, per the setting.
@@ -236,7 +237,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshStorage() {
         viewModelScope.launch {
             val u = withContext(Dispatchers.IO) {
-                runCatching { archive.sync(speakers) }
+                runCatching { archive.sync(speakers) }.logged("archive sync")
                 archive.usage(net.boswell.phone.process.CleanupWorker.days(getApplication()).coerceAtLeast(0))
             }
             val pm = getApplication<Application>().getSystemService(android.os.PowerManager::class.java)

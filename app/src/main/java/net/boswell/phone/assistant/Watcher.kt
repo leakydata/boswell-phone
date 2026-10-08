@@ -6,6 +6,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import net.boswell.phone.archive.Archive
+import net.boswell.phone.capture.Problems
 import net.boswell.phone.speakers.SpeakerStore
 
 /**
@@ -64,6 +65,7 @@ class Watcher(private val context: Context) {
             val reply = try {
                 llm.chat(listOf(Llm.user(prompt)), maxTokens = 200, temperature = 0.2)
             } catch (e: Exception) {
+                Problems.report("watcher: AI call", e)
                 store.logCall(PURPOSE, model, null, e.message)
                 return WatchStatus.error(context, e.message ?: e.toString())
             }

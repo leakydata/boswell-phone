@@ -1,6 +1,7 @@
 package net.boswell.phone.speakers
 
 import android.content.Context
+import net.boswell.phone.capture.timed
 
 /**
  * "Check the labels": the few voiceprints worth a second look, because a
@@ -172,7 +173,9 @@ object LabelCheck {
  */
 class LabelChecks(private val context: Context) {
 
-    fun find(): List<LabelCheck.Item> {
+    fun find(): List<LabelCheck.Item> = timed("label checks") { findNow() }
+
+    private fun findNow(): List<LabelCheck.Item> {
         val store = SpeakerStore(context)
         try {
             val clusters = store.unnamedClusters().mapValues { (cid, ms) -> ms.map { LabelCheck.Print(it.id, cid, it.clip, it.speaker, it.vec, it.seconds) } }

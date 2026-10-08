@@ -36,6 +36,7 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
     init {
         Matching.model = net.boswell.phone.diarize.VoiceModels.active(context)
         Matching.owner = net.boswell.phone.assistant.AssistantPrefs.owner(context)
+        net.boswell.phone.Databases.share(this)
     }
 
 
@@ -113,18 +114,25 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         if (oldVersion < 9) db.execSQL(LABEL_CHECKS)
     }
 
-    override fun onConfigure(db: SQLiteDatabase) = db.setForeignKeyConstraintsEnabled(true)
+    override fun onConfigure(db: SQLiteDatabase) {
+        db.setForeignKeyConstraintsEnabled(true)
+        net.boswell.phone.Databases.waitForWriters(db)
+    }
 
     private fun now() = System.currentTimeMillis() / 1000.0
 
     /**
      * A read too big for one cursor window (voiceprints: thousands of rows) is fetched a window
      * at a time, and another connection changing the rows between windows makes it fail
-     * ("Couldn't read row"). Inside a transaction, nobody else writes until it's read.
+     * ("Couldn't read row"). Inside a transaction every window comes from the same moment.
+     * Android 15 has a read-only transaction, which with the write ahead log runs beside
+     * writers; before that it has to be one that reserves writing, so other writers wait
+     * until it's read (the rows are copied out inside, so not for long).
      */
     private fun <T> whole(read: (SQLiteDatabase) -> T): T {
         val db = writableDatabase
-        db.beginTransactionNonExclusive()
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.VANILLA_ICE_CREAM) db.beginTransactionReadOnly()
+        else db.beginTransactionNonExclusive()
         try { return read(db).also { db.setTransactionSuccessful() } } finally { db.endTransaction() }
     }
 

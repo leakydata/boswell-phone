@@ -1,7 +1,9 @@
 package net.boswell.phone.speakers
 
 import android.content.Context
+import net.boswell.phone.archive.Archive
 import net.boswell.phone.audio.writeAtomically
+import net.boswell.phone.capture.logged
 import net.boswell.phone.process.Candidate
 import net.boswell.phone.process.ProcessingWorker
 import net.boswell.phone.process.Transcript
@@ -46,24 +48,114 @@ data class Suggestion(
  */
 class VoiceReview(private val context: Context) {
 
-    data class Recheck(val matched: Int, val merged: Int)
+    /**
+     * [people]: the unnamed voices folded together, both sides of each (Archive.sync's people).
+     * [read]: transcripts read to do it.
+     */
+    data class Recheck(val matched: Int, val merged: Int, val people: Set<Long> = emptySet(), val read: Int = 0)
 
+    /**
+     * Which voices to look at comes from the archive's index, which keeps
+     * every voice's print, speech, loudness and what its transcript said: a
+     * transcript is read and written again only when one of its voices
+     * would come out differently (matched, another top candidate, another
+     * score), so a recheck no longer reads thousands of transcripts to
+     * change a few. Those are rechecked whole, as before, from the file.
+     */
     fun recheck(): Recheck {
         val store = SpeakerStore(context)
         try {
             var matched = 0
+            var read = 0
             val refs = store.namedRefs()
             field = store.unnamedField()
             norm = store.norm(refs, field)
             if (refs.isNotEmpty()) {
                 val dir = ProcessingWorker.transcriptsDir(context)
-                earlier = Pooling.Index(dir)
-                for (f in dir.listFiles { x -> x.extension == "json" }.orEmpty()) {
-                    matched += recheckFile(f, store, refs)
+                for (clip in due(store, refs)) { matched += recheckFile(File(dir, clip.removeSuffix(".wav") + ".json"), store, refs); read++ }
+            }
+            val merges = tidy(store)
+            return Recheck(matched, merges.size, merges.flatMapTo(HashSet()) { listOf(it.first, it.second) }, read)
+        } finally { store.close() }
+    }
+
+    /**
+     * The clips [recheckFile] would change, from the index: each voice that
+     * [recheckFile] would look at, matched the same way from the same
+     * inputs, and kept if it comes out matched or [differs]. Clips with a
+     * line nobody was attributed to too, as the file may still give it one.
+     * Brings the index up to date first, so it says what the files say.
+     */
+    private fun due(store: SpeakerStore, refs: List<Matching.Reference>): Set<String> = Archive(context).use { archive ->
+        archive.sync(store)
+        val known = Known(store)
+        val voices = mutableListOf<Archive.IndexedVoice>()
+        val pool = mutableListOf<Pooling.Voice>()
+        archive.eachVoice { v ->
+            // Boswell's own voice is nobody to match, nor to pool with.
+            if (v.decision == net.boswell.phone.process.BoswellLines.DECISION) return@eachVoice
+            Pooling.clipTime(v.clip)?.let { time ->
+                if (v.snrDb != null && v.snrDb >= Pooling.MIN_SNR && Matching.usable(v.emb!!)) pool += Pooling.Voice(v.clip, time, Matching.unit(v.emb), v.seconds, v.snrDb)
+            }
+            if (known.candidate(v.clip, v.label, v.personId)) voices += v
+        }
+        earlier = Pooling.Known(pool)
+        val due = LinkedHashSet(archive.clipsWithOrphans())
+        for (v in voices) {
+            if (v.clip in due) continue
+            val no = known.rejected(v.clip, v.label)
+            val own = known.own(v.clip, v.label)
+            val r = matchVoice(v.emb!!, v.clip, v.seconds, v.snrDb, if (no.isEmpty()) refs else refs.filter { it.personId !in no },
+                if (own.isEmpty()) field else field.filter { it.voiceprintId !in own })
+            if (r.decision == Matching.Decision.MATCHED || differs(r, v.top, v.score)) due += v.clip
+        }
+        due
+    }
+
+    /**
+     * What the speaker store says about every clip voice, read at once (a
+     * recheck asks it of thousands): the same answers as decidedByHand,
+     * currentPerson, nameOf, rejected and [ownRows], one voice at a time.
+     */
+    private class Known(store: SpeakerStore) {
+        private val who = store.currentPeople()
+        private val hand = HashSet<Pair<String, String>>()
+        private val rows = HashMap<Pair<String, String>, MutableSet<Long>>()
+        private val named = HashSet<Long>()
+        private val no = HashMap<Pair<String, String>, MutableSet<Long>>()
+
+        init {
+            val db = store.readableDatabase
+            db.rawQuery("SELECT id, clip, speaker, origin FROM voiceprints WHERE clip IS NOT NULL AND speaker IS NOT NULL", null).use { c ->
+                while (c.moveToNext()) {
+                    val k = c.getString(1) to c.getString(2)
+                    rows.getOrPut(k) { HashSet() } += c.getLong(0)
+                    if (c.getString(3) in HAND) hand += k
                 }
             }
-            return Recheck(matched, tidy(store))
-        } finally { store.close() }
+            db.rawQuery("SELECT id FROM people WHERE name IS NOT NULL", null).use { c -> while (c.moveToNext()) named += c.getLong(0) }
+            val merges = HashMap<Long, Long>()
+            db.rawQuery("SELECT from_id, into_id FROM merges", null).use { c -> while (c.moveToNext()) merges[c.getLong(0)] = c.getLong(1) }
+            fun resolve(id: Long): Long { var x = id; repeat(32) { x = merges[x] ?: return x }; return x }
+            db.rawQuery("SELECT clip, speaker, person_id FROM rejections", null).use { c ->
+                while (c.moveToNext()) no.getOrPut(c.getString(0) to c.getString(1)) { HashSet() } += resolve(c.getLong(2))
+            }
+        }
+
+        /** Not decided by hand, and not someone named now: a voice a recheck looks at. */
+        fun candidate(clip: String, label: String, recorded: Long?): Boolean {
+            if ((clip to label) in hand) return false
+            val now = who(clip, label, recorded)
+            return now == null || now !in named
+        }
+
+        /** Not decided by hand and nobody at all now (neither named nor an unnamed voice): a single voice to suggest. */
+        fun single(clip: String, label: String, recorded: Long?): Boolean = (clip to label) !in hand && who(clip, label, recorded) == null
+
+        fun rejected(clip: String, label: String): Set<Long> = no[clip to label].orEmpty()
+        fun own(clip: String, label: String): Set<Long> = rows[clip to label].orEmpty()
+
+        companion object { val HAND = setOf("manual", "confirmed") }
     }
 
     /** This clip voice's own filed voiceprints, which must not compete with it. */
@@ -74,7 +166,7 @@ class VoiceReview(private val context: Context) {
 
     private var field: List<Matching.Reference> = emptyList()
     private var norm: AsNorm.Norm? = null
-    private var earlier: Pooling.Index? = null
+    private var earlier: Pooling.Earlier? = null
 
     /**
      * A transcript's voice matched as a new one would be: pooled with the
@@ -82,15 +174,19 @@ class VoiceReview(private val context: Context) {
      * of a transcript made before the loudness was kept is neither pooled
      * nor judged by it; normalized all the same.
      */
-    private fun matchVoice(emb: FloatArray, clip: String, sp: net.boswell.phone.process.SpeakerId, refs: List<Matching.Reference>,
+    private fun matchVoice(emb: FloatArray, clip: String, seconds: Double, snrDb: Double?, refs: List<Matching.Reference>,
                            field: List<Matching.Reference>): Matching.Result {
-        val near = sp.snrDb?.takeIf { it >= Pooling.MIN_SNR }?.let { earlier?.before(clip) }.orEmpty()
-        val vec = Pooling.pooled(emb, sp.seconds, sp.snrDb, clip, near)
-        return Matching.match(vec, refs, field, sp.seconds.takeIf { it > 0 }, sp.snrDb, norm?.forVoice(vec, clip, Pooling.clipTime(clip)))
+        val near = snrDb?.takeIf { it >= Pooling.MIN_SNR }?.let { earlier?.before(clip) }.orEmpty()
+        val vec = Pooling.pooled(emb, seconds, snrDb, clip, near)
+        return Matching.match(vec, refs, field, seconds.takeIf { it > 0 }, snrDb, norm?.forVoice(vec, clip, Pooling.clipTime(clip)))
     }
 
+    /** A voice left unmatched still counts as changed with another top candidate or a score moved by more than rounding. */
+    private fun differs(r: Matching.Result, top: Long?, score: Double): Boolean =
+        r.candidates.firstOrNull()?.personId != top || kotlin.math.abs(r.score - score) > 1e-4
+
     private fun recheckFile(f: File, store: SpeakerStore, refs: List<Matching.Reference>): Int {
-        val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.getOrNull() ?: return 0
+        val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.logged("recheck: reading ${f.name}").getOrNull() ?: return 0
         if (t.speakers.isEmpty()) return 0
         var matched = 0
         // Lines left without a speaker by an older transcript get the nearest one's.
@@ -105,7 +201,7 @@ class VoiceReview(private val context: Context) {
             if (now != null && store.nameOf(now) != null) return@mapValues sp
             val no = store.rejected(t.clip, label)
             val own = ownRows(store, t.clip, label)
-            val r = matchVoice(emb, t.clip, sp, if (no.isEmpty()) refs else refs.filter { it.personId !in no }, field.filter { it.voiceprintId !in own })
+            val r = matchVoice(emb, t.clip, sp.seconds, sp.snrDb, if (no.isEmpty()) refs else refs.filter { it.personId !in no }, field.filter { it.voiceprintId !in own })
             val candidates = r.candidates.map { Candidate(it.personId, store.nameOf(it.personId), it.score, it.voiceprintId) }
             if (r.decision == Matching.Decision.MATCHED) {
                 val pid = r.personId!!
@@ -113,8 +209,7 @@ class VoiceReview(private val context: Context) {
                 matched++; changed = true
                 sp.copy(name = store.nameOf(pid), score = r.score, decision = "matched", margin = r.margin, candidates = candidates, personId = pid)
             } else {
-                val top = candidates.firstOrNull()?.personId
-                if (top != sp.candidates.firstOrNull()?.personId || kotlin.math.abs(r.score - sp.score) > 1e-4) changed = true
+                if (differs(r, sp.candidates.firstOrNull()?.personId, sp.score)) changed = true
                 sp.copy(score = r.score, decision = r.decision.name.lowercase(), margin = r.margin, candidates = candidates)
             }
         }
@@ -127,11 +222,11 @@ class VoiceReview(private val context: Context) {
      * Fold together unnamed voices that are clearly one person: on average
      * as alike as CLUSTER_MIN, the bar a voice clears to join one. Measured
      * on real data, the looser "any one pair alike" rule chained a stranger
-     * into the owner's voice, so the average it is.
+     * into the owner's voice, so the average it is. Returns each fold, (from, into).
      */
-    private fun tidy(store: SpeakerStore): Int {
+    private fun tidy(store: SpeakerStore): List<Pair<Long, Long>> {
         val groups = store.unnamedClusters().mapValues { (_, m) -> m.map { Matching.unit(it.vec) } }.toMutableMap()
-        var merged = 0
+        val merged = mutableListOf<Pair<Long, Long>>()
         while (groups.size > 1) {
             var best = -2.0; var a = -1L; var b = -1L
             val ids = groups.keys.toList()
@@ -148,7 +243,7 @@ class VoiceReview(private val context: Context) {
             store.mergeUnnamed(from, into)
             groups[into] = groups.getValue(into) + groups.getValue(from)
             groups.remove(from)
-            merged++
+            merged += from to into
         }
         return merged
     }
@@ -157,15 +252,18 @@ class VoiceReview(private val context: Context) {
      * Voices that might be someone known, closest first. An unnamed voice is
      * scored by how alike its recordings are to the person on average; a
      * single voice by the ordinary match. Anything the matcher would have
-     * called uncertain qualifies (MATCH_LOW and up).
+     * called uncertain qualifies (MATCH_LOW and up). Single voices come
+     * from the archive's index, not from reading every transcript.
      */
     fun suggestions(limit: Int = 60): List<Suggestion> {
         val store = SpeakerStore(context)
+        val archive = Archive(context)
         try {
             val refs = store.namedRefs()
             if (refs.isEmpty()) return emptyList()
             norm = store.norm(refs)
-            earlier = Pooling.Index(ProcessingWorker.transcriptsDir(context))
+            archive.sync(store)
+            val known = Known(store)
             val out = mutableListOf<Suggestion>()
             val filed = HashSet<String>()
 
@@ -173,7 +271,7 @@ class VoiceReview(private val context: Context) {
                 val sums = HashMap<Long, Pair<Double, Int>>()
                 for (m in members) {
                     if (m.clip != null && m.speaker != null) filed += "${m.clip}|${m.speaker}"
-                    val no = if (m.clip != null && m.speaker != null) store.rejected(m.clip, m.speaker) else emptySet()
+                    val no = if (m.clip != null && m.speaker != null) known.rejected(m.clip, m.speaker) else emptySet()
                     val v = Matching.unit(m.vec)
                     val best = HashMap<Long, Double>()
                     for (r in refs) if (r.personId !in no) {
@@ -190,26 +288,29 @@ class VoiceReview(private val context: Context) {
                 out += Suggestion(pid, store.nameOf(pid) ?: continue, sc, cid, members.size, members.sumOf { it.seconds }, sample.clip!!, sample.speaker!!)
             }
 
-            for (f in ProcessingWorker.transcriptsDir(context).listFiles { x -> x.extension == "json" }.orEmpty()) {
-                val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.getOrNull() ?: continue
-                for ((label, sp) in t.speakers) {
-                    if ("${t.clip}|$label" in filed || sp.seconds < SINGLE_MIN_SECONDS || net.boswell.phone.process.BoswellLines.isBoswell(sp)) continue
-                    val emb = t.embeddings[label]?.toFloatArray() ?: continue
-                    if (store.decidedByHand(t.clip, label)) continue
-                    val now = store.currentPerson(t.clip, label, sp.personId)
-                    if (now != null) continue          // named, or filed in an unnamed voice (covered above)
-                    val no = store.rejected(t.clip, label)
-                    val r = matchVoice(emb, t.clip, sp, if (no.isEmpty()) refs else refs.filter { it.personId !in no }, emptyList())
-                    if (r.decision != Matching.Decision.UNCERTAIN) continue
-                    val pid = r.candidates.first().personId
-                    out += Suggestion(pid, store.nameOf(pid) ?: continue, r.score, null, 1, sp.seconds, t.clip, label)
+            val singles = mutableListOf<Archive.IndexedVoice>()
+            val pool = mutableListOf<Pooling.Voice>()
+            archive.eachVoice { v ->
+                if (v.decision == net.boswell.phone.process.BoswellLines.DECISION) return@eachVoice
+                Pooling.clipTime(v.clip)?.let { time ->
+                    if (v.snrDb != null && v.snrDb >= Pooling.MIN_SNR && Matching.usable(v.emb!!)) pool += Pooling.Voice(v.clip, time, Matching.unit(v.emb), v.seconds, v.snrDb)
                 }
+                // Not named, nor filed in an unnamed voice (covered above).
+                if ("${v.clip}|${v.label}" !in filed && v.seconds >= SINGLE_MIN_SECONDS && known.single(v.clip, v.label, v.personId)) singles += v
+            }
+            earlier = Pooling.Known(pool)
+            for (v in singles) {
+                val no = known.rejected(v.clip, v.label)
+                val r = matchVoice(v.emb!!, v.clip, v.seconds, v.snrDb, if (no.isEmpty()) refs else refs.filter { it.personId !in no }, emptyList())
+                if (r.decision != Matching.Decision.UNCERTAIN) continue
+                val pid = r.candidates.first().personId
+                out += Suggestion(pid, store.nameOf(pid) ?: continue, r.score, null, 1, v.seconds, v.clip, v.label)
             }
             // Likely ones first, and among them the voices with the most
             // recordings: one answer there labels the most.
             return out.sortedWith(compareByDescending<Suggestion> { it.score >= LIKELY }.thenByDescending { it.recordings }.thenByDescending { it.score })
                 .take(limit)
-        } finally { store.close() }
+        } finally { archive.close(); store.close() }
     }
 
     /** "Yes": an unnamed voice takes the person's name (undoable per group); a single voice becomes a confirmed sample. */
@@ -241,7 +342,7 @@ class VoiceReview(private val context: Context) {
 
     private fun transcript(clip: String): Transcript? {
         val f = File(ProcessingWorker.transcriptsDir(context), clip.removeSuffix(".wav") + ".json")
-        return runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.getOrNull()
+        return runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.logged("review: reading ${f.name}").getOrNull()
     }
 
     companion object {

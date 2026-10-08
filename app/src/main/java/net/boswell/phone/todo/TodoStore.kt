@@ -25,6 +25,10 @@ data class Todo(
  * delete it.
  */
 class TodoStore(context: Context) : SQLiteOpenHelper(context, "todo.db", null, 1) {
+    init { net.boswell.phone.Databases.share(this) }
+
+    override fun onConfigure(db: SQLiteDatabase) = net.boswell.phone.Databases.waitForWriters(db)
+
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE todos (id INTEGER PRIMARY KEY, text TEXT NOT NULL, category TEXT NOT NULL DEFAULT 'Inbox',
             due REAL, done INTEGER NOT NULL DEFAULT 0, created REAL, done_at REAL, source TEXT)""")

@@ -12,6 +12,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import net.boswell.phone.capture.CaptureRepository
 import net.boswell.phone.capture.CaptureService
+import net.boswell.phone.capture.logged
+import net.boswell.phone.capture.timed
 import net.boswell.phone.diarize.VoiceModel
 import net.boswell.phone.diarize.VoiceModels
 import net.boswell.phone.models.ModelStore
@@ -78,11 +80,11 @@ object VoiceMigration {
             for ((n, f) in files.withIndex()) {
                 if (isStopped()) return "paused"
                 if (n % 25 == 0) progress(n, files.size)
-                val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.getOrNull() ?: continue
+                val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.let { if (f.exists()) it.logged("voice update: reading ${f.name}") else it }.getOrNull() ?: continue
                 if (t.embeddings.isEmpty()) continue
                 if (t.embeddings.values.all { it.size == dim }) { t.embeddings.forEach { (l, v) -> newEmb[t.clip to l] = v.toFloatArray() }; continue }
                 if (!net.boswell.phone.audio.ClipAudio.exists(clips, t.clip)) { skipped++; continue }
-                val pcm = runCatching { net.boswell.phone.audio.ClipAudio.readPcm(clips, t.clip) }.getOrNull() ?: run { skipped++; continue }
+                val pcm = runCatching { net.boswell.phone.audio.ClipAudio.readPcm(clips, t.clip) }.logged("voice update: reading audio").getOrNull() ?: run { skipped++; continue }
                 val emb = LinkedHashMap<String, List<Float>>()
                 for (label in t.embeddings.keys) {
                     val v = embed(speech(pcm, t, label))?.takeIf { Matching.usable(it) } ?: continue
@@ -120,7 +122,7 @@ object VoiceMigration {
         }
         // 3. The switch, and every past recording looked at again with the new model.
         VoiceModels.setActive(c, target)
-        val recheck = runCatching { VoiceReview(c).recheck() }.getOrNull()
+        val recheck = runCatching { timed("voice recheck", 10_000) { VoiceReview(c).recheck() } }.logged("voice recheck").getOrNull()
         val msg = "voices moved to ${if (target == VoiceModel.SPEAKER_ID) "better voice recognition" else "standard voice recognition"}: " +
             "$transcripts recordings and $prints voiceprints made again" +
             (if (skipped > 0) "; $skipped recordings had no sound left" else "") +
@@ -133,9 +135,9 @@ object VoiceMigration {
 class VoiceMigrationWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): androidx.work.ListenableWorker.Result = withContext(Dispatchers.IO) {
         // In the foreground, as transcription is: a background app doing minutes of work gets frozen.
-        runCatching { setForeground(foreground("Updating voice recognition…")) }
+        runCatching { setForeground(foreground("Updating voice recognition…")) }.logged("voice update: foreground")
         val r = VoiceMigration.run(applicationContext, { isStopped }) { done, total ->
-            runCatching { kotlinx.coroutines.runBlocking { setForeground(foreground("Updating voice recognition… $done of $total recordings")) } }
+            runCatching { kotlinx.coroutines.runBlocking { setForeground(foreground("Updating voice recognition… $done of $total recordings")) } }.logged("voice update: foreground")
         }
         if (r == "paused") return@withContext androidx.work.ListenableWorker.Result.retry()
         // The archive index holds voiceprints too: rebuild it from the rewritten transcripts.
@@ -143,7 +145,7 @@ class VoiceMigrationWorker(context: Context, params: WorkerParameters) : Corouti
             val speakers = SpeakerStore(applicationContext)
             val archive = net.boswell.phone.archive.Archive(applicationContext)
             try { archive.sync(speakers, force = true) } finally { archive.close(); speakers.close() }
-        }
+        }.logged("archive rebuild")
         net.boswell.phone.assistant.AssistantNotify.post(applicationContext, net.boswell.phone.assistant.AssistantNotify.ANSWERS,
             "Voice recognition updated", r.replaceFirstChar { it.uppercase() } + ".")
         androidx.work.ListenableWorker.Result.success()

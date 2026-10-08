@@ -16,6 +16,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import net.boswell.phone.archive.Archive
+import net.boswell.phone.capture.logged
 import net.boswell.phone.speakers.SpeakerStore
 import java.time.LocalDate
 import java.time.LocalTime
@@ -52,7 +53,7 @@ class RoutinesWorker(context: Context, params: WorkerParameters) : CoroutineWork
             }
             if (AssistantPrefs.promises(c)) notice(life)
             if (AssistantPrefs.meetingBriefs(c)) meetings(life)
-            runCatching { ConversationNotes.run(c) }
+            runCatching { ConversationNotes.run(c) }.logged("conversation notes")
         } finally { life.close() }
         Result.success()
     }

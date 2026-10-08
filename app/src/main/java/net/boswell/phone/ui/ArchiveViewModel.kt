@@ -24,6 +24,8 @@ import net.boswell.phone.archive.LineRow
 import net.boswell.phone.archive.SearchHit
 import net.boswell.phone.capture.CaptureRepository
 import net.boswell.phone.capture.CaptureService
+import net.boswell.phone.capture.logged
+import net.boswell.phone.capture.timed
 import net.boswell.phone.process.ProcessingRepository
 import net.boswell.phone.speakers.Person
 import net.boswell.phone.speakers.SpeakerStore
@@ -119,14 +121,14 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         // Once per change to how voices are matched: look at past recordings again.
         val wave = "voices_rechecked_v5"     // v5: normalized scores and the owner rule on them (AsNorm, Matching.isOwner)
         if (!prefs.getBoolean(wave, false)) viewModelScope.launch(Dispatchers.IO) {
-            runCatching { net.boswell.phone.speakers.VoiceReview(app).recheck() }
+            runCatching { timed("voice recheck", 10_000) { net.boswell.phone.speakers.VoiceReview(app).recheck() } }.logged("voice recheck")
                 .onSuccess { if (it.matched > 0) net.boswell.phone.capture.CaptureRepository.log("re-check: ${it.matched} more voices recognized") }
             prefs.edit().putBoolean(wave, true).putBoolean("orphans_attributed_v1", true).apply()
             refresh(force = true)
         }
         // A person once named for Boswell's own voice ("Boswell Male Voice") is Boswell.
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { net.boswell.phone.speakers.BoswellPerson.convert(app) }.onSuccess { if (it > 0) refresh(force = true) }
+            runCatching { net.boswell.phone.speakers.BoswellPerson.convert(app) }.logged("Boswell's voice as a person").onSuccess { if (it > 0) refresh(force = true) }
         }
         // You are never a TV: undo it if "It's a TV" on one of your lines once marked all of you.
         viewModelScope.launch(Dispatchers.IO) {
@@ -192,7 +194,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Titles and summaries the assistant made (ConversationNotes), where there are any. */
     private fun withNotes(convs: List<net.boswell.phone.archive.Conversation>): List<net.boswell.phone.archive.Conversation> {
-        val notes = runCatching { net.boswell.phone.assistant.AssistantStore(getApplication()).use { it.notes(convs.map { c -> c.id }) } }.getOrDefault(emptyMap())
+        val notes = runCatching { net.boswell.phone.assistant.AssistantStore(getApplication()).use { it.notes(convs.map { c -> c.id }) } }.logged("conversation notes").getOrDefault(emptyMap())
         return convs.map { c -> notes[c.id]?.let { n -> c.copy(title = n.title, summary = n.summary.ifBlank { null }) } ?: c }
     }
 
@@ -244,7 +246,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
             }.toMap()
         }
         val checks = withContext(Dispatchers.IO) {
-            runCatching { net.boswell.phone.assistant.AssistantStore(getApplication()).use { it.factChecksIn(lines.map { l -> l.clip }.distinct()) } }.getOrDefault(emptyList())
+            runCatching { net.boswell.phone.assistant.AssistantStore(getApplication()).use { it.factChecksIn(lines.map { l -> l.clip }.distinct()) } }.logged("fact checks").getOrDefault(emptyList())
         }
         val sameConversation = _conv.value.conversation?.id == id
         _conv.update { it.copy(conversation = c, lines = lines, voices = vs, guesses = guesses, checks = checks) }
@@ -352,23 +354,25 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     fun nameVoice(conversation: Long, key: String, name: String) = actVoices {
         val v = _conv.value.voices[key]
         val pid = v?.personId
-        if (pid != null && v.named.not()) speakers.name(pid, name)
+        if (pid != null && v.named.not()) setOf(pid, speakers.name(pid, name))
         else {
             val target = speakers.people().firstOrNull { it.name == name }?.id ?: speakers.newPerson(name)
             fileVoice(conversation, key, target)
+            setOfNotNull(target, pid)
         }
     }
 
     /** "Not Boswell": its lines in this conversation go back to the voices they were heard in, as ordinary voices. */
     fun notBoswell(conversation: Long) = actVoices {
         net.boswell.phone.process.ClipActions.notBoswell(getApplication(), archive.clipsOf(conversation).map { it.name })
+        null
     }
 
     /** "Yes, that's them": the guess becomes a confirmed reference covering this condition. */
     fun confirmGuess(conversation: Long, key: String, person: Person) = actVoices {
         val v = _conv.value.voices[key]
-        if (v?.personId != null && !v.named) speakers.name(v.personId, person.name ?: return@actVoices)
-        else fileVoice(conversation, key, person.id)
+        if (v?.personId != null && !v.named) setOf(v.personId, speakers.name(v.personId, person.name ?: return@actVoices emptySet()))
+        else { fileVoice(conversation, key, person.id); setOfNotNull(person.id, v?.personId) }
     }
 
     /**
@@ -376,16 +380,16 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
      * A voice already put down as someone is moved off them: it's this voice that
      * was the TV, not the person, who'd otherwise show as TV everywhere.
      */
-    fun markMedia(conversation: Long, key: String) = act {
+    fun markMedia(conversation: Long, key: String) = actOn {
         val v = _conv.value.voices[key]
         if (v?.named == true) {
             val p = speakers.newPerson(null)
             fileVoice(conversation, key, p)
             speakers.setKind(p, "media")
-            return@act
+            return@actOn setOfNotNull(p, v.personId)
         }
         val pid = v?.personId ?: run {
-            val (emb, secs, clip) = archive.voiceOf(conversation, key) ?: return@act
+            val (emb, secs, clip) = archive.voiceOf(conversation, key) ?: return@actOn emptySet()
             speakers.newPerson(null).also { p ->
                 if (net.boswell.phone.speakers.Matching.printable(secs)) speakers.addVoiceprint(p, emb, secs, clip, labelOf(conversation, key, clip), "auto")
                 // Too short to be a reference: still marked, just here, by assignment.
@@ -393,6 +397,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         speakers.setKind(pid, "media")
+        setOf(pid)
     }
 
     /**
@@ -405,7 +410,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     private fun fileVoice(conversation: Long, key: String, person: Long) {
         val slots = archive.slotsOf(conversation, key)
         slots.filter { it.second != null && net.boswell.phone.speakers.Matching.printable(it.third) }.maxByOrNull { it.third }?.let { (slot, emb, secs) ->
-            runCatching { speakers.addVoiceprint(person, emb!!, secs, slot.first, slot.second, "confirmed") }
+            runCatching { speakers.addVoiceprint(person, emb!!, secs, slot.first, slot.second, "confirmed") }.logged("naming: voiceprint")
         }
         for ((slot, _, _) in slots) speakers.assign(slot.first, slot.second, person)
     }
@@ -415,15 +420,16 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
             if (c.moveToFirst()) c.getString(0) else null
         }
 
-    fun namePerson(id: Long, name: String) = actVoices { speakers.name(id, name) }
-    fun setKind(id: Long, kind: String?) = act { if (kind != "media" || id != owner()) speakers.setKind(id, kind) }
+    fun namePerson(id: Long, name: String) = actVoices { setOf(id, speakers.name(id, name)) }
+    // A kind changes how a voice shows, not who it is: no conversation changes.
+    fun setKind(id: Long, kind: String?) = actOn { if (kind != "media" || id != owner()) speakers.setKind(id, kind); emptySet() }
     private fun owner() = net.boswell.phone.assistant.AssistantPrefs.owner(getApplication())
     fun ownerId() = owner()
-    fun unnameGroup(personId: Long, group: Long) = actVoices { speakers.unnameGroup(personId, group) }
+    fun unnameGroup(personId: Long, group: Long) = actVoices { setOf(personId, speakers.unnameGroup(personId, group)) }
 
-    /** An identity action, then another look at every voice with what is now known. */
-    private fun actVoices(block: () -> Unit) {
-        act(block)
+    /** An identity action ([actOn]), then another look at every voice with what is now known. */
+    private fun actVoices(block: () -> Set<Long>?) {
+        actOn(block)
         recheckSoon()
     }
 
@@ -431,9 +437,9 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     private val recheckLock = kotlinx.coroutines.sync.Mutex()
 
     /**
-     * Every past recording looked at again with what's now known. That reads every transcript
-     * (thousands), so it used to make each name take seconds to appear while labeling: now the
-     * name shows at once and this runs once labeling pauses, in the background.
+     * Every past recording looked at again with what's now known. That matches every voice
+     * nobody named (thousands), so it used to make each name take seconds to appear while
+     * labeling: now the name shows at once and this runs once labeling pauses, in the background.
      */
     private fun recheckSoon() {
         recheckJob?.cancel()
@@ -441,8 +447,9 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
             delay(RECHECK_AFTER_MS)
             val r = recheckLock.withLock {
                 withContext(Dispatchers.IO) {
-                    net.boswell.phone.speakers.VoiceReview(getApplication()).recheck()
-                        .also { if (it.matched > 0 || it.merged > 0) runCatching { archive.sync(speakers, force = true) } }
+                    // Voices matched rewrote their transcripts, which a sync finds; voices folded together changed no file.
+                    timed("voice recheck", 10_000) { net.boswell.phone.speakers.VoiceReview(getApplication()).recheck() }
+                        .also { if (it.matched > 0 || it.merged > 0) runCatching { archive.sync(speakers, people = it.people) }.logged("archive sync after recheck") }
                 }
             }
             if (r.matched > 0 || r.merged > 0) {
@@ -462,9 +469,11 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         if (r.merged > 0) "${r.merged} unnamed voice${if (r.merged == 1) "" else "s"} combined" else null,
     ).joinToString(" · ").ifEmpty { "No changes: nothing new to recognize yet" }
 
-    fun recheckVoices() = act {
-        _recheckNote.value = recheckText(net.boswell.phone.speakers.VoiceReview(getApplication()).recheck())
+    fun recheckVoices() = actOn {
+        val r = timed("voice recheck", 10_000) { net.boswell.phone.speakers.VoiceReview(getApplication()).recheck() }
+        _recheckNote.value = recheckText(r)
         if (_review.value != null) loadReviewNow()
+        r.people
     }
 
     fun clearRecheckNote() { _recheckNote.value = null }
@@ -473,15 +482,15 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
 
     // A list that couldn't be made this time keeps the last one: never worth closing the app over.
     private fun loadReviewNow() = runCatching {
-        _review.value = net.boswell.phone.speakers.VoiceReview(getApplication()).suggestions().map {
+        _review.value = timed("voice suggestions") { net.boswell.phone.speakers.VoiceReview(getApplication()).suggestions() }.map {
             ReviewItem(it, archive.linesOf(it.clip, it.label).joinToString(" "))
         }
-    }
+    }.logged("voice suggestions")
 
     /** A screen talking: kept and still collected, never given a person's name, and no longer asked about. */
     fun reviewIsMedia(item: ReviewItem) {
         _review.value = _review.value?.filter { it.s.key != item.s.key }
-        act { item.s.clusterId?.takeIf { it != owner() }?.let { speakers.setKind(it, "media") } }
+        actOn { item.s.clusterId?.takeIf { it != owner() }?.let { speakers.setKind(it, "media") }; emptySet() }
     }
 
     fun answerReview(item: ReviewItem, yes: Boolean) {
@@ -489,6 +498,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         actVoices {
             val vr = net.boswell.phone.speakers.VoiceReview(getApplication())
             if (yes) vr.confirm(item.s) else vr.reject(item.s)
+            setOfNotNull(item.s.personId, item.s.clusterId)
         }
     }
     fun skip(id: Long) { skipped += id; viewModelScope.launch { loadPeople() } }
@@ -497,7 +507,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
 
     fun loadLabels() = viewModelScope.launch(Dispatchers.IO) { loadLabelsNow() }
 
-    private fun loadLabelsNow() = runCatching {
+    private fun loadLabelsNow() = logged("label checks") {
         _labels.value = net.boswell.phone.speakers.LabelChecks(getApplication()).find().filter { it.key !in labelsSkipped }.map { i ->
             val s = i.sample
             LabelItem(i, if (s.clip != null && s.speaker != null) archive.linesOf(s.clip, s.speaker).joinToString(" ") else "")
@@ -519,21 +529,22 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     fun labelOnly(item: LabelItem, personId: Long) {
         val t = item.item as? net.boswell.phone.speakers.LabelCheck.Twice ?: return
         dropLabel(item)
-        actVoices { net.boswell.phone.speakers.LabelChecks(getApplication()).only(t, personId) }
+        actVoices { net.boswell.phone.speakers.LabelChecks(getApplication()).only(t, personId); t.people.toSet() + personId }
     }
 
     /** Not this person ("Not them"): to the person named [to], or to a new unnamed voice. */
     fun labelTakeOff(item: LabelItem, to: String?) {
         val o = item.item as? net.boswell.phone.speakers.LabelCheck.Outlier ?: return
         dropLabel(item)
-        actVoices { net.boswell.phone.speakers.LabelChecks(getApplication()).takeOff(o, to) }
+        // Every voice that changes was this person's.
+        actVoices { net.boswell.phone.speakers.LabelChecks(getApplication()).takeOff(o, to); setOf(o.sample.personId) }
     }
 
     /** Two people are one: [from] joins [into]. You are never merged into someone else. */
     fun labelMerge(item: LabelItem, from: Long, into: Long) {
         if (from == owner()) return
         dropLabel(item)
-        actVoices { net.boswell.phone.speakers.LabelChecks(getApplication()).merge(from, into) }
+        actVoices { net.boswell.phone.speakers.LabelChecks(getApplication()).merge(from, into); setOf(from, into) }
     }
 
     /** An unnamed voice is the person it sounds like (review's Yes), or someone else (review's No). */
@@ -542,16 +553,23 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         dropLabel(item)
         actVoices {
             val checks = net.boswell.phone.speakers.LabelChecks(getApplication())
-            val s = checks.suggestion(u) ?: return@actVoices
+            val s = checks.suggestion(u) ?: return@actVoices emptySet()
             val vr = net.boswell.phone.speakers.VoiceReview(getApplication())
             if (yes) vr.confirm(s) else vr.reject(s)
+            setOfNotNull(s.personId, s.clusterId)
         }
     }
 
-    private fun act(block: () -> Unit) = viewModelScope.launch {
+    /**
+     * Change who someone is, then show it. [block] returns the people it
+     * touched -- whoever a changed voice was before or is now -- so only
+     * their conversations are regrouped (Archive.sync), or null if that
+     * isn't known, and every conversation is.
+     */
+    private fun actOn(block: () -> Set<Long>?) = viewModelScope.launch {
         withContext(Dispatchers.IO) {
-            block()
-            runCatching { archive.sync(speakers, force = true) }
+            val people = block()
+            runCatching { if (people == null) archive.sync(speakers, force = true) else archive.sync(speakers, people = people) }.logged("archive sync after a change")
         }
         loadDay(_day.value.day)
         loadPeople()

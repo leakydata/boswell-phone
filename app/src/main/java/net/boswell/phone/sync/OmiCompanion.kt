@@ -8,6 +8,7 @@ import android.companion.BluetoothLeDeviceFilter
 import android.companion.CompanionDeviceManager
 import android.content.IntentSender
 import android.os.ParcelUuid
+import net.boswell.phone.capture.logged
 import net.boswell.phone.omi.OmiUuids
 import java.util.concurrent.Executor
 
@@ -39,7 +40,7 @@ object OmiCompanion {
             override fun onAssociationCreated(info: AssociationInfo) {
                 Modes.setAssociationId(activity, info.id)
                 @Suppress("DEPRECATION")
-                runCatching { cdm.startObservingDevicePresence(address) }
+                runCatching { cdm.startObservingDevicePresence(address) }.logged("watching for the Omi")
                 done(null)
             }
 

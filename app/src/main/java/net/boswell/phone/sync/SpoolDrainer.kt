@@ -5,6 +5,7 @@ import net.boswell.phone.audio.Wav
 import net.boswell.phone.audio.writeAtomically
 import net.boswell.phone.capture.ClipTimes
 import net.boswell.phone.capture.Clipper
+import net.boswell.phone.capture.logged
 import net.boswell.phone.omi.Offload
 import net.boswell.phone.omi.StoredPacket
 import java.io.File
@@ -126,7 +127,7 @@ class SpoolDrainer(
         while (wav.exists()) wav = File(clipsDir, "omi_${ended.toLong()}-${k++}.wav")
         Wav.write(wav, audio, sr)
         // The compact copy kept after transcription: the device's own frames, not re-encoded.
-        packets?.let { runCatching { net.boswell.phone.audio.ClipAudio.writeCompact(clipsDir, wav.name, it) } }
+        packets?.let { runCatching { net.boswell.phone.audio.ClipAudio.writeCompact(clipsDir, wav.name, it) }.logged("writing compact audio") }
         val times = ClipTimes(
             started = started, ended = ended, seconds = audio.size / sr.toDouble(), source = "omi-card",
             firstMs = firstMs, lastMs = lastMs, bootId = 1, deviceId = deviceId,

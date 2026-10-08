@@ -17,6 +17,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.double
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -24,6 +28,8 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import net.boswell.phone.assistant.Secrets
 import net.boswell.phone.capture.CaptureRepository
+import net.boswell.phone.capture.logged
+import net.boswell.phone.capture.timed
 import net.boswell.phone.home.HomeServer
 import java.io.File
 import java.io.FilterOutputStream
@@ -32,9 +38,15 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * A backup a day to Boswell Server, which keeps the newest 7 for this phone. Streamed
- * straight from [Backup.export] to the server, so there's no copy of it on the phone.
- * API keys are never included.
+ * A backup a day to Boswell Server, which keeps the newest 7 for this phone. API keys
+ * are never included.
+ *
+ * Incremental: the phone lists every file a backup holds with its sha256 (remembered in
+ * a [HashCache], so only new and changed files are read), the server says which it
+ * doesn't have yet, and only those go up, with the databases and settings, which change
+ * every day. The server keeps each file once and hands back a whole backup zip for any
+ * of its days, so a restore is the same as from any backup. A server too old for that
+ * gets the whole zip, streamed straight from [Backup.export] (no copy on the phone).
  *
  * The computer is off at night, so instead of one nightly try this looks every three
  * hours (on Wi-Fi, battery not low) and backs up once the last one is [EVERY_HOURS] old
@@ -59,6 +71,8 @@ object HomeBackup {
     /** When the last good one went up (ms), and how big it was. */
     fun last(c: Context): Long = p(c).getLong("home_backup_last", 0)
     fun lastBytes(c: Context): Long = p(c).getLong("home_backup_bytes", 0)
+    /** How big the last backup is on the server, all of it (only what changed was sent). */
+    fun lastTotal(c: Context): Long = p(c).getLong("home_backup_total", 0)
     fun lastResult(c: Context): String? = p(c).getString("home_backup_last_result", null)
 
     fun schedule(c: Context) {
@@ -89,7 +103,8 @@ object HomeBackup {
         try {
             val result = runCatching {
                 val (s, sent) = upload(c) { _progress.value = it; progress(it) }
-                p(c).edit().putLong("home_backup_last", System.currentTimeMillis()).putLong("home_backup_bytes", sent).apply()
+                p(c).edit().putLong("home_backup_last", System.currentTimeMillis()).putLong("home_backup_bytes", sent)
+                    .putLong("home_backup_total", s.bytes).apply()
                 "Backed up ${s.recordings} recordings"
             }.getOrElse { "Backup failed: " + HomeServer.explain(it.message) }
             p(c).edit().putString("home_backup_last_result", result).apply()
@@ -114,8 +129,103 @@ object HomeBackup {
         }
     }
 
-    /** The backup, written into the request as it's made (chunked, so nothing is held). Returns it and the bytes sent. */
-    private fun upload(c: Context, progress: (Float) -> Unit): Pair<Backup.Summary, Long> {
+    /** A backup: only what changed if the server can, else all of it. Returns it (bytes: its whole size) and the bytes sent. */
+    private fun upload(c: Context, progress: (Float) -> Unit): Pair<Backup.Summary, Long> =
+        incremental(c, progress) ?: full(c, progress)
+
+    private const val HASHING = 0.1f            // of the progress bar: making the list
+    private const val BATCH_BYTES = 64L shl 20  // files sent per request, at most (so a cut-off loses little)
+    private const val BATCH_FILES = 4000
+
+    /**
+     * The incremental backup; null if the server doesn't do them (it's older), and nothing was sent.
+     * Files sent before a failure stay on the server, so the next try picks up where this stopped.
+     */
+    private fun incremental(c: Context, progress: (Float) -> Unit): Pair<Backup.Summary, Long>? {
+        val tmp = File(c.cacheDir, "home-backup").apply { deleteRecursively(); mkdirs() }
+        try {
+            val created = System.currentTimeMillis() / 1000
+            val files = Backup.listFiles(c.filesDir)
+            val manifest = File(tmp, Backup.MANIFEST).apply { writeBytes(Backup.manifest(c, files, created, includeKeys = false)) }
+            val settings = File(tmp, "settings.json").apply { writeBytes(Backup.settings(c)) }
+            val parts = listOf(Backup.MANIFEST to manifest, "settings.json" to settings) + Backup.copyDatabases(c, tmp)
+            val cache = HashCache(File(c.noBackupFilesDir, "home-backup-hashes.tsv"))
+            val list = Incremental.list(parts, files, cache) { progress(it * HASHING) }
+            cache.save()
+            CaptureRepository.log("home backup: ${list.size} files, ${cache.hashed} read to hash")
+
+            val start = authorized(c, "/v1/backup/start", "POST", 5 * 60_000).apply {
+                doOutput = true; setChunkedStreamingMode(256 * 1024); setRequestProperty("Content-Type", "application/json")
+            }
+            start.outputStream.use { Incremental.writeStart(it, list) }
+            if (start.responseCode == 404) return null
+            check(start)
+            val answer = json.parseToJsonElement(start.inputStream.readBytes().decodeToString()).jsonObject
+            val session = answer["session"]!!.jsonPrimitive.content
+            val missing = answer["missing"]!!.jsonArray.map { it.jsonPrimitive.content }.toHashSet()
+            val toSend = answer["missing_bytes"]!!.jsonPrimitive.long.coerceAtLeast(1)
+
+            var sent = 0L
+            var data = 0L
+            val done = HashSet<String>()
+            val changed = mutableListOf<Pair<Incremental.Listed, Incremental.Sent>>()
+            val drop = mutableListOf<String>()
+            val queue = list.filter { it.sha256 in missing }.iterator()
+            var next: Incremental.Listed? = null
+            fun take(): Incremental.Listed? {
+                while (next == null && queue.hasNext()) next = queue.next().takeIf { it.sha256 !in done }
+                return next.also { next = null }
+            }
+            var l = take()
+            while (l != null) {
+                val conn = authorized(c, "/v1/backup/blobs", "POST", 10 * 60_000).apply {
+                    doOutput = true; setChunkedStreamingMode(256 * 1024); setRequestProperty("Content-Type", "application/octet-stream")
+                }
+                var batch = 0L
+                var count = 0
+                val out = object : FilterOutputStream(conn.outputStream) {
+                    override fun write(b: ByteArray, off: Int, len: Int) { out.write(b, off, len); sent += len }
+                    override fun write(b: Int) { out.write(b); sent++ }
+                }.buffered(256 * 1024)
+                out.use {
+                    while (l != null && batch < BATCH_BYTES && count < BATCH_FILES) {
+                        val f = l!!
+                        val r = Incremental.writeBlob(out, f.file) { n ->
+                            data += n; progress(HASHING + (1 - HASHING) * (data.toFloat() / toSend).coerceAtMost(1f))
+                        }
+                        when {
+                            r == null -> drop += f.path      // gone since it was listed (a .wav compacted to .ogg)
+                            r.sha256 != f.sha256 -> changed += f to r
+                            else -> done += f.sha256
+                        }
+                        batch += r?.size ?: 0; count++
+                        l = take()
+                    }
+                }
+                check(conn)
+                conn.inputStream.use { it.readBytes() }
+            }
+
+            val finish = authorized(c, "/v1/backup/finish", "POST", 10 * 60_000).apply {
+                doOutput = true; setRequestProperty("Content-Type", "application/json")
+            }
+            val body = buildJsonObject {
+                put("session", session)
+                put("drop", JsonArray(drop.map { JsonPrimitive(it) }))
+                put("changed", JsonArray(changed.map { (f, r) ->
+                    buildJsonObject { put("path", f.path); put("size", r.size); put("sha256", r.sha256) } }))
+            }
+            finish.outputStream.use { it.write(body.toString().toByteArray()) }
+            check(finish)
+            val made = json.parseToJsonElement(finish.inputStream.readBytes().decodeToString()).jsonObject
+            progress(1f)
+            val recordings = list.count { it.path.startsWith("files/transcripts/") && it.path !in drop }
+            return Backup.Summary(recordings, made["bytes"]!!.jsonPrimitive.long, false, created) to sent
+        } finally { tmp.deleteRecursively() }
+    }
+
+    /** The whole backup, written into the request as it's made (chunked, so nothing is held). Returns it and the bytes sent. */
+    private fun full(c: Context, progress: (Float) -> Unit): Pair<Backup.Summary, Long> {
         val conn = authorized(c, "/v1/backup", "POST", 10 * 60_000).apply {
             doOutput = true
             setChunkedStreamingMode(256 * 1024)
@@ -128,7 +238,7 @@ object HomeBackup {
         }
         val s = Backup.export(c, counted, includeKeys = false, progress)
         check(conn)
-        return s to sent
+        return s.copy(bytes = sent) to sent
     }
 
     /** One backup on the server: its name, size, and when it was made (epoch seconds). */
@@ -172,11 +282,13 @@ class HomeBackupWorker(context: Context, params: WorkerParameters) : CoroutineWo
             if (runCatching { HomeServer.health(c) }.isFailure) return@withContext Result.success()
         }
         // In the foreground, as transcription is: hundreds of MB going up in the background gets frozen.
-        runCatching { setForeground(foreground(null)) }
+        runCatching { setForeground(foreground(null)) }.logged("home backup: foreground")
         var shown = 0
-        HomeBackup.runNow(c) { f ->
-            val pct = (f * 100).toInt()
-            if (pct >= shown + 5) { shown = pct; runCatching { kotlinx.coroutines.runBlocking { setForeground(foreground(pct)) } } }
+        timed("home backup", 10 * 60_000L) {
+            HomeBackup.runNow(c) { f ->
+                val pct = (f * 100).toInt()
+                if (pct >= shown + 5) { shown = pct; runCatching { kotlinx.coroutines.runBlocking { setForeground(foreground(pct)) } }.logged("home backup: foreground") }
+            }
         }
         Result.success()
     }

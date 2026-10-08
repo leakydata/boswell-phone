@@ -32,6 +32,7 @@ import javax.mail.search.ReceivedDateTerm
 import javax.mail.search.SearchTerm
 import javax.mail.search.SubjectTerm
 import javax.mail.search.BodyTerm
+import net.boswell.phone.capture.logged
 
 /**
  * Email over IMAP (reading) and SMTP (sending) with an app password, so it
@@ -231,7 +232,7 @@ object Email {
             .setTimeoutAfter(Texting.CONFIRM_MS)
             .setAutoCancel(true)
             .build()
-        runCatching { c.getSystemService(NotificationManager::class.java).notify(id, n) }
+        runCatching { c.getSystemService(NotificationManager::class.java).notify(id, n) }.logged("posting a notification")
         return "held for confirmation: email to $name <$to>, subject “$subject”. It is NOT sent. Ask them to confirm: tap Send on the notification, or say yes within two minutes."
     }
 
