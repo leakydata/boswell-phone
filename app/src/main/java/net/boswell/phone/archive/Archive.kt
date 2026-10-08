@@ -98,8 +98,9 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
 
     /**
      * Bring the index up to date with the files: index what is new or has
-     * changed, forget what is gone, and rebuild conversations. Cheap when
-     * nothing changed -- one stat per file.
+     * changed, forget what is gone, and regroup the conversations around
+     * them (all of them when [force]d: who someone is changed everywhere).
+     * Cheap when nothing changed -- one stat per file.
      */
     @Synchronized
     /** One sync at a time in this process: a second would only wait on the first's write, then find it done. */
@@ -114,7 +115,12 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
 
         // A clip exists while its sidecar does; its audio may have been cleaned up.
         val sidecars = clipsDir.listFiles { f -> f.extension == "json" }.orEmpty().associateBy { it.nameWithoutExtension + ".wav" }
-        var changed = false
+        // When the clips that changed were (before) and are (after): only the conversations there can change.
+        var lo = Double.MAX_VALUE
+        var hi = -Double.MAX_VALUE
+        fun touch(name: String) = db.rawQuery("SELECT started, ended FROM clips WHERE name = ?", arrayOf(name)).use { c ->
+            if (c.moveToFirst()) { lo = minOf(lo, c.getDouble(0)); hi = maxOf(hi, c.getDouble(1)) }
+        }
         db.beginTransaction()
         try {
             for ((name, side) in sidecars) {
@@ -125,14 +131,17 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
                 val stamp = maxOf(side.lastModified(), if (t.exists()) t.lastModified() else 0L) +
                     (if (sound == null) 1 else if (sound.extension == "ogg") 2 else 0)
                 if (known[name] == stamp) continue
+                touch(name)
                 index(db, name, side, t, wav, stamp)
-                changed = true
+                touch(name)
             }
             for (name in known.keys - sidecars.keys) {
+                touch(name)
                 forget(db, name)
-                changed = true
             }
-            if (changed || force) rebuildConversations(db, speakers)
+            // A full rebuild reads every clip's voices (thousands), seconds of work: only when it's asked for.
+            if (force) rebuildConversations(db, speakers)
+            else if (lo <= hi) rebuildConversations(db, speakers, lo, hi)
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
@@ -194,12 +203,42 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
      * speaker across a clip boundary. Without this every clip would restart
      * at "Voice 1".
      */
-    private fun rebuildConversations(db: SQLiteDatabase, speakers: SpeakerStore) {
-        db.execSQL("DELETE FROM conversations")
-        db.execSQL("UPDATE clips SET conversation = NULL")
+    /**
+     * Group speech clips into conversations (a gap over CONVERSATION_GAP
+     * starts a new one): all of them, or only those from [lo] to [hi] (when
+     * clips changed) together with every conversation within reach of that
+     * span, whole, so the result is what regrouping everything would give.
+     */
+    private fun rebuildConversations(db: SQLiteDatabase, speakers: SpeakerStore, lo: Double? = null, hi: Double? = null) {
         data class C(val name: String, val started: Double, val ended: Double, val seconds: Double)
-        val speech = db.rawQuery("SELECT name, started, ended, seconds FROM clips WHERE speech = 1 ORDER BY started", null).use { c ->
-            buildList { while (c.moveToNext()) add(C(c.getString(0), c.getDouble(1), c.getDouble(2), c.getDouble(3))) }
+        val speech = if (lo == null || hi == null) {
+            db.execSQL("DELETE FROM conversations")
+            db.execSQL("UPDATE clips SET conversation = NULL")
+            db.rawQuery("SELECT name, started, ended, seconds FROM clips WHERE speech = 1 ORDER BY started", null).use { c ->
+                buildList { while (c.moveToNext()) add(C(c.getString(0), c.getDouble(1), c.getDouble(2), c.getDouble(3))) }
+            }
+        } else {
+            // Out to the whole of each conversation the span (and a gap's reach either side) touches.
+            var from = lo - CONVERSATION_GAP
+            var to = hi + CONVERSATION_GAP
+            val ids = HashSet<Long>()
+            while (true) {
+                val found = db.rawQuery("SELECT DISTINCT conversation FROM clips WHERE conversation IS NOT NULL AND ended >= ? AND started <= ?",
+                    arrayOf(from.toString(), to.toString())).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }.filter { it !in ids }
+                if (found.isEmpty()) break
+                ids += found
+                db.rawQuery("SELECT MIN(started), MAX(ended) FROM clips WHERE conversation IN (${found.joinToString(",")})", null).use { c ->
+                    if (c.moveToFirst()) { from = minOf(from, c.getDouble(0)); to = maxOf(to, c.getDouble(1)) }
+                }
+            }
+            if (ids.isNotEmpty()) {
+                db.execSQL("DELETE FROM conversations WHERE id IN (${ids.joinToString(",")})")
+                db.execSQL("UPDATE clips SET conversation = NULL WHERE conversation IN (${ids.joinToString(",")})")
+            }
+            db.rawQuery("SELECT name, started, ended, seconds FROM clips WHERE speech = 1 AND ended >= ? AND started <= ? ORDER BY started",
+                arrayOf(from.toString(), to.toString())).use { c ->
+                buildList { while (c.moveToNext()) add(C(c.getString(0), c.getDouble(1), c.getDouble(2), c.getDouble(3))) }
+            }
         }
         var i = 0
         while (i < speech.size) {

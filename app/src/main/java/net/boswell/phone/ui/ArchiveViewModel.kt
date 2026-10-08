@@ -108,6 +108,10 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
 
     private val skipped = mutableSetOf<Long>()
     private var searchJob: Job? = null
+    // Before init, which already refreshes.
+    private val refreshWanted = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val refreshForced = java.util.concurrent.atomic.AtomicBoolean(false)
+    private var refresher: Job? = null
 
     init {
         // Once: lines older transcripts left without a speaker get the nearest one's.
@@ -128,19 +132,34 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             owner()?.let { me -> if (speakers.person(me)?.kind == "media") { speakers.setKind(me, null); refresh(force = true) } }
         }
+        // What's indexed already, at once; then brought up to date.
+        viewModelScope.launch { loadDay(_day.value.day); loadPeople() }
         refresh()
         // New transcripts and new clips both change what the day shows.
         viewModelScope.launch { ProcessingRepository.state.distinctUntilChangedBy { it.done to it.running }.collect { refresh() } }
         viewModelScope.launch { CaptureRepository.state.distinctUntilChangedBy { it.clipsWritten }.collect { refresh() } }
     }
 
+    /**
+     * Sync the index and show it again. Asked for with every clip and every transcript, often faster
+     * than a sync finishes, so they're folded together: one at a time, and one more after it at most.
+     */
     fun refresh(force: Boolean = false) {
-        viewModelScope.launch {
-            // A busy archive (processing indexing at the same moment) mustn't close the app; the next refresh catches up.
-            withContext(Dispatchers.IO) { runCatching { archive.sync(speakers, force) } }
-            loadDay(_day.value.day)
-            loadPeople()
-            _conv.value.conversation?.let { openConversation(it.id, keepPlayer = true) }
+        if (force) refreshForced.set(true)
+        refreshWanted.set(true)
+        synchronized(refreshWanted) {
+            if (refresher != null) return
+            refresher = viewModelScope.launch {
+                // It stops under the same lock a new ask takes, so none is missed between.
+                while (synchronized(refreshWanted) { refreshWanted.getAndSet(false).also { if (!it) refresher = null } }) {
+                    val forced = refreshForced.getAndSet(false)
+                    // A busy archive (processing indexing at the same moment) mustn't close the app; the next refresh catches up.
+                    withContext(Dispatchers.IO) { runCatching { archive.sync(speakers, forced) } }
+                    loadDay(_day.value.day)
+                    loadPeople()
+                    _conv.value.conversation?.let { openConversation(it.id, keepPlayer = true) }
+                }
+            }
         }
     }
 
