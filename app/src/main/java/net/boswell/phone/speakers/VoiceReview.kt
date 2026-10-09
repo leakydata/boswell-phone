@@ -122,6 +122,7 @@ class VoiceReview(private val context: Context) {
         private val hand = HashSet<Pair<String, String>>()
         private val rows = HashMap<Pair<String, String>, MutableSet<Long>>()
         private val named = HashSet<Long>()
+        private val kinded = HashSet<Long>()
         private val no = HashMap<Pair<String, String>, MutableSet<Long>>()
 
         init {
@@ -134,6 +135,7 @@ class VoiceReview(private val context: Context) {
                 }
             }
             db.rawQuery("SELECT id FROM people WHERE name IS NOT NULL", null).use { c -> while (c.moveToNext()) named += c.getLong(0) }
+            db.rawQuery("SELECT id FROM people WHERE kind IS NOT NULL", null).use { c -> while (c.moveToNext()) kinded += c.getLong(0) }
             val merges = HashMap<Long, Long>()
             db.rawQuery("SELECT from_id, into_id FROM merges", null).use { c -> while (c.moveToNext()) merges[c.getLong(0)] = c.getLong(1) }
             fun resolve(id: Long): Long { var x = id; repeat(32) { x = merges[x] ?: return x }; return x }
@@ -142,11 +144,15 @@ class VoiceReview(private val context: Context) {
             }
         }
 
-        /** Not decided by hand, and not someone named now: a voice a recheck looks at. */
+        /**
+         * Not decided by hand, and not someone named or a voice marked a TV or ignored now:
+         * a voice a recheck looks at. A TV that sounds like someone stays a TV, as it does
+         * when its clip is done again (ProcessingWorker.identify).
+         */
         fun candidate(clip: String, label: String, recorded: Long?): Boolean {
             if ((clip to label) in hand) return false
             val now = who(clip, label, recorded)
-            return now == null || now !in named
+            return now == null || (now !in named && now !in kinded)
         }
 
         /** Not decided by hand and nobody at all now (neither named nor an unnamed voice): a single voice to suggest. */
@@ -204,7 +210,7 @@ class VoiceReview(private val context: Context) {
             val emb = t.embeddings[label]?.toFloatArray() ?: return@mapValues sp
             if (store.decidedByHand(t.clip, label)) return@mapValues sp
             val now = store.currentPerson(t.clip, label, sp.personId)
-            if (now != null && store.nameOf(now) != null) return@mapValues sp
+            if (now != null && (store.nameOf(now) != null || store.kindOf(now) != null)) return@mapValues sp
             val no = store.rejected(t.clip, label)
             val own = ownRows(store, t.clip, label)
             val r = matchVoice(emb, t.clip, sp.seconds, sp.snrDb, if (no.isEmpty()) refs else refs.filter { it.personId !in no }, field.filter { it.voiceprintId !in own })
@@ -228,15 +234,27 @@ class VoiceReview(private val context: Context) {
      * Fold together unnamed voices that are clearly one person: on average
      * as alike as CLUSTER_MIN, the bar a voice clears to join one. Measured
      * on real data, the looser "any one pair alike" rule chained a stranger
-     * into the owner's voice, so the average it is. Returns each fold, (from, into).
+     * into the owner's voice, so the average it is. Two voices where one's
+     * recordings were said not to be the other (a voice split in two) stay
+     * apart. Returns each fold, (from, into).
      */
     private fun tidy(store: SpeakerStore): List<Pair<Long, Long>> {
-        val groups = store.unnamedClusters().mapValues { (_, m) -> m.map { Matching.unit(it.vec) } }.toMutableMap()
+        val clusters = store.unnamedClusters()
+        val groups = clusters.mapValues { (_, m) -> m.map { Matching.unit(it.vec) } }.toMutableMap()
+        // The voices each one's recordings were said not to be.
+        val said = HashMap<Pair<String, String>, MutableSet<Long>>()
+        store.readableDatabase.rawQuery("SELECT clip, speaker, person_id FROM rejections", null).use { c ->
+            while (c.moveToNext()) said.getOrPut(c.getString(0) to c.getString(1)) { HashSet() } += c.getLong(2)
+        }
+        val no = clusters.mapValues { (_, m) ->
+            m.flatMapTo(HashSet()) { said[(it.clip ?: "") to (it.speaker ?: "")].orEmpty().map(store::resolve) }.toSet()
+        }.toMutableMap()
         val merged = mutableListOf<Pair<Long, Long>>()
         while (groups.size > 1) {
             var best = -2.0; var a = -1L; var b = -1L
             val ids = groups.keys.toList()
             for (i in ids.indices) for (j in i + 1 until ids.size) {
+                if (ids[j] in no[ids[i]].orEmpty() || ids[i] in no[ids[j]].orEmpty()) continue
                 val x = groups.getValue(ids[i]); val y = groups.getValue(ids[j])
                 var s = 0.0
                 for (u in x) for (v in y) s += Matching.dot(u, v)
@@ -249,6 +267,8 @@ class VoiceReview(private val context: Context) {
             store.mergeUnnamed(from, into)
             groups[into] = groups.getValue(into) + groups.getValue(from)
             groups.remove(from)
+            no[into] = no[into].orEmpty() + no.remove(from).orEmpty()
+            for ((k, v) in no.entries.toList()) if (from in v) no[k] = v + into
             merged += from to into
         }
         return merged

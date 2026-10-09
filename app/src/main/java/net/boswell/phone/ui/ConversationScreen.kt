@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -88,6 +89,8 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
     var lineMenu by remember { mutableStateOf<List<LineRow>?>(null) }
     var confirmDelete by remember { mutableStateOf<List<String>?>(null) }
     var factCheck by remember { mutableStateOf<net.boswell.phone.assistant.FactCheckRow?>(null) }
+    // "Split this voice": the voice, and the parts already checked (from a line's "This part isn't…").
+    var split by remember { mutableStateOf<Pair<String, Set<Pair<String, String>>>?>(null) }
     val ctx = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(id) { vm.openConversation(id) }
     DisposableEffect(Unit) { onDispose { vm.closeConversation() } }
@@ -180,7 +183,11 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
         }
     }
 
-    lineMenu?.let { ls -> LineSheet(vm, ls, onDismiss = { lineMenu = null }, onDelete = { confirmDelete = ls.map { it.clip }.distinct(); lineMenu = null }) }
+    lineMenu?.let { ls ->
+        LineSheet(vm, ls, ls.first().speaker?.let { s.voices[it] }, onDismiss = { lineMenu = null },
+            onDelete = { confirmDelete = ls.map { it.clip }.distinct(); lineMenu = null },
+            onSplit = { key -> split = key to ls.mapNotNull { l -> l.label?.let { l.clip to it } }.toSet() })
+    }
     confirmDelete?.let { clips ->
         val whole = "#conversation" in clips
         val targets = clips.filter { it != "#conversation" }
@@ -197,8 +204,10 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
     }
 
     who?.let { key ->
-        WhoSheet(vm, s, key, onDismiss = { who = null }, onPerson = { pid -> who = null; onPerson(pid) })
+        WhoSheet(vm, s, key, onDismiss = { who = null }, onPerson = { pid -> who = null; onPerson(pid) },
+            onSplit = { who = null; split = key to emptySet() })
     }
+    split?.let { (key, checked) -> SplitSheet(vm, s, key, checked, onDismiss = { split = null }) }
     orphan?.let { line -> OrphanSheet(vm, s, line, onDismiss = { orphan = null }) }
     factCheck?.let { f ->
         androidx.compose.material3.AlertDialog(onDismissRequest = { factCheck = null },
@@ -261,7 +270,7 @@ private fun Bubble(line: LineRow, v: Voice?, header: Boolean, playing: Boolean, 
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun LineSheet(vm: ArchiveViewModel, lines: List<LineRow>, onDismiss: () -> Unit, onDelete: () -> Unit) {
+private fun LineSheet(vm: ArchiveViewModel, lines: List<LineRow>, voice: Voice?, onDismiss: () -> Unit, onDelete: () -> Unit, onSplit: (String) -> Unit) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     fun toast(t: String) = android.widget.Toast.makeText(ctx, t, android.widget.Toast.LENGTH_SHORT).show()
@@ -303,6 +312,8 @@ private fun LineSheet(vm: ArchiveViewModel, lines: List<LineRow>, onDismiss: () 
             action("Copy text") { clipboard.setText(androidx.compose.ui.text.AnnotatedString(all)); toast("Copied") }
             action("Make it a to-do") { vm.lineToTodo(lines.first().copy(text = all)); toast("Added to your to-do list") }
             action("Ask the assistant about it") { vm.askAbout(lines.first().copy(text = all)); toast("The answer will appear in Ask") }
+            // Only this part of a voice is someone else (a TV under your name, say): split it off.
+            if (voice != null && !voice.boswell && lines.any { it.label != null }) action("This part isn't ${voice.name}…") { onSplit(voice.key) }
             action("Transcribe again (keeps your fixes)") { vm.retranscribe(lines.map { it.clip }.distinct()); toast("Re-transcribing") }
             action("Delete this clip", danger = true) { onDelete() }
         }
@@ -337,7 +348,7 @@ private fun PlayerBar(s: ConversationState, vm: ArchiveViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun WhoSheet(vm: ArchiveViewModel, s: ConversationState, key: String, onDismiss: () -> Unit, onPerson: (Long) -> Unit) {
+private fun WhoSheet(vm: ArchiveViewModel, s: ConversationState, key: String, onDismiss: () -> Unit, onPerson: (Long) -> Unit, onSplit: () -> Unit) {
     val v = s.voices[key] ?: return
     val conv = s.conversation ?: return
     if (v.boswell) { BoswellSheet(vm, s, key, conv.id, onDismiss); return }
@@ -383,6 +394,78 @@ private fun WhoSheet(vm: ArchiveViewModel, s: ConversationState, key: String, on
                 Button(enabled = name.isNotBlank(), onClick = { vm.nameVoice(conv.id, key, name.trim()); done() }) { Text("Save") }
             }
             if (!v.media) TextButton(onClick = { vm.markMedia(conv.id, key); done() }) { Text("It's a TV, video or radio") }
+            // Two sources heard as one voice (you and a TV): only worth offering with more than one part.
+            if (s.lines.filter { it.speaker == key && it.label != null }.distinctBy { it.clip to it.label }.size >= 2)
+                TextButton(onClick = onSplit) { Text("Split this voice…") }
+        }
+    }
+}
+
+/**
+ * "Split this voice": one conversation voice is often two sources heard as one
+ * (you and a TV). Each part -- one recording's voice -- is listed with when it
+ * speaks, how long and what it said, to hear and check; the checked ones move
+ * to someone else, a TV or a new unnamed voice, and the rest stay.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun SplitSheet(vm: ArchiveViewModel, s: ConversationState, key: String, checked: Set<Pair<String, String>>, onDismiss: () -> Unit) {
+    val v = s.voices[key] ?: return
+    val conv = s.conversation ?: return
+    val slots by androidx.compose.runtime.produceState<List<ArchiveViewModel.Slot>?>(null, conv.id, key) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { vm.slotsIn(conv.id, key) }
+    }
+    var picked by remember(key) { mutableStateOf(checked) }
+    var choosing by remember(key) { mutableStateOf(false) }
+    var name by remember(key) { mutableStateOf("") }
+    val playing by vm.playingClip.collectAsStateWithLifecycle()
+    DisposableEffect(Unit) { onDispose { vm.stopVoice() } }
+    fun move(to: ArchiveViewModel.MoveTo) { vm.splitVoice(conv.id, key, picked, to); onDismiss() }
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 28.dp).imePadding()
+            .verticalScroll(androidx.compose.foundation.rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Split ${v.name}", style = MaterialTheme.typography.titleLarge)
+            Text("Check the parts that are someone or something else. The rest stay ${v.name}.",
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val all = slots
+            if (all == null) Text("Loading…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            else for (slot in all) {
+                val id = slot.clip to slot.label
+                val on = id in picked
+                Surface(onClick = { picked = if (on) picked - id else picked + id }, shape = RoundedCornerShape(14.dp),
+                    color = if (on) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        androidx.compose.material3.Checkbox(checked = on, onCheckedChange = { picked = if (it) picked + id else picked - id })
+                        Column(Modifier.weight(1f)) {
+                            Text("${Fmt.seconds(slot.at)} · ${"%.0f".format(slot.seconds)} s of speech", style = MaterialTheme.typography.labelLarge)
+                            Text(if (slot.said.isBlank()) "(no words)" else if (slot.said.length > 80) slot.said.take(80).trimEnd() + "…" else slot.said,
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                        }
+                        val here = playing == "${slot.clip}|${slot.label}"
+                        IconButton(onClick = { vm.toggleSlot(slot.clip, slot.label) }) {
+                            Icon(if (here) Icons.Filled.PauseBars else Icons.Filled.PlayArrow, if (here) "stop" else "hear this part")
+                        }
+                    }
+                }
+            }
+            if (picked.isNotEmpty() && !choosing) Button(onClick = { choosing = true }, modifier = Modifier.fillMaxWidth()) {
+                Text("Move ${picked.size} part${if (picked.size == 1) "" else "s"} to…")
+            }
+            if (picked.isNotEmpty() && choosing) {
+                HorizontalDivider()
+                Text("Move ${picked.size} part${if (picked.size == 1) "" else "s"} to:", style = MaterialTheme.typography.titleMedium)
+                val others = vm.namedPeople().filter { it.id != v.personId }
+                if (others.isNotEmpty()) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (p in others.take(12)) SuggestionChip(onClick = { move(ArchiveViewModel.MoveTo.Someone(p.id)) }, label = { Text(p.name ?: "") })
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("New name") }, singleLine = true, modifier = Modifier.weight(1f))
+                    Spacer(Modifier.width(8.dp))
+                    Button(enabled = name.isNotBlank() && name.trim() != v.name, onClick = { move(ArchiveViewModel.MoveTo.Named(name.trim())) }) { Text("Move") }
+                }
+                TextButton(onClick = { move(ArchiveViewModel.MoveTo.Media) }) { Text("TV, video or radio") }
+                TextButton(onClick = { move(ArchiveViewModel.MoveTo.Unnamed) }) { Text("A new unnamed voice") }
+            }
         }
     }
 }

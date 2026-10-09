@@ -74,6 +74,81 @@ object ClipActions {
     }
 
     /**
+     * A conversation voice's clip voices ([slots], as Archive.slotsOf gives them) filed by
+     * hand under [person] ([refile]): the longest with a voiceprint long enough to be one
+     * (Matching.MIN_PRINT_SECONDS) is kept as a sample of [origin], and every one --
+     * including those too short to have a voiceprint, which naming used to silently
+     * skip -- is theirs from now on. [from] is who the voice was shown as.
+     */
+    fun fileSlots(context: Context, store: SpeakerStore, slots: List<Triple<Pair<String, String>, FloatArray?, Double>>, person: Long,
+                  from: Long?, origin: String = "confirmed"): Set<Long> {
+        val sample = slots.filter { it.second != null && net.boswell.phone.speakers.Matching.printable(it.third) }.maxByOrNull { it.third }
+            ?.let { (slot, emb, secs) -> SpeakerStore.Sample(slot.first, slot.second, emb!!, secs, origin) }
+        return refile(context, store, slots.map { it.first }, person, sample, from)
+    }
+
+    /**
+     * "It's a TV, video or radio" for a conversation voice ([key], shown as [personId]).
+     * An unnamed voice is a TV wherever it's heard. A voice never filed, or filed as
+     * someone (the owner too, who is never a TV), is moved off them: its parts here
+     * become a new TV voice ([fileSlots]), as it's this voice that was the TV, not the
+     * person, who'd otherwise show as one everywhere. Returns the people touched.
+     */
+    fun markMedia(context: Context, store: SpeakerStore, archive: Archive, conversation: Long, key: String, personId: Long?, named: Boolean): Set<Long> {
+        if (personId != null && !named) { store.setKind(personId, "media"); return setOf(personId) }
+        val tv = store.newPerson(null)
+        store.setKind(tv, "media")
+        return fileSlots(context, store, archive.slotsOf(conversation, key), tv, personId)
+    }
+
+    /**
+     * One conversation voice ([key], shown as [from]) was really two: its clip voices
+     * [moving] go to [target] ([fileSlots]) and the rest stay. A voice never filed holds
+     * together only by sounding alike, so its rest would follow the moved parts on the
+     * next regroup: it's filed as an unnamed voice of its own. Each side is "not them"
+     * for the other, so two unnamed halves are never folded back into one
+     * (VoiceReview.tidy) nor matched across. Returns the people touched.
+     */
+    fun split(context: Context, store: SpeakerStore, archive: Archive, conversation: Long, key: String, from: Long?,
+              moving: Set<Pair<String, String>>, target: Long, origin: String = "confirmed"): Set<Long> {
+        val all = archive.slotsOf(conversation, key)
+        val chosen = all.filter { it.first in moving }
+        if (chosen.isEmpty() || target == from) return emptySet()
+        val rest = all.filter { it.first !in moving }
+        val touched = mutableSetOf<Long>()
+        val stays = if (from == null && rest.isNotEmpty()) store.newPerson(null).also { touched += fileSlots(context, store, rest, it, null, "auto") } else from
+        for ((slot, _, _) in rest) store.reject(slot.first, slot.second, target)
+        if (stays != null) for ((slot, _, _) in chosen) store.reject(slot.first, slot.second, stays)
+        return touched + fileSlots(context, store, chosen, target, from, origin)
+    }
+
+    /**
+     * Clip voices ([slots], clip and label) said by hand to be [to] (SpeakerStore.refile),
+     * and their transcripts made to say so too: the person, their name, and no candidate
+     * they were just said not to be, so a TV that sounded like someone isn't shown as
+     * "TV · them?". Returns everyone they were and [to], for Archive.sync's people.
+     */
+    fun refile(context: Context, store: SpeakerStore, slots: Collection<Pair<String, String>>, to: Long,
+               sample: SpeakerStore.Sample? = null, from: Long? = null): Set<Long> {
+        val touched = store.refile(slots, to, sample, from)
+        val name = store.nameOf(to)
+        val tdir = ProcessingWorker.transcriptsDir(context)
+        for ((clip, labels) in slots.groupBy({ it.first }, { it.second })) {
+            val f = File(tdir, clip.removeSuffix(".wav") + ".json")
+            val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }
+                .let { if (f.exists()) it.logged("refile: reading ${f.name}") else it }.getOrNull() ?: continue
+            val ids = t.speakers.mapValues { (label, sp) ->
+                if (label !in labels || BoswellLines.isBoswell(sp)) return@mapValues sp
+                val no = store.rejected(clip, label)
+                sp.copy(personId = to, name = name, candidates = sp.candidates.filter { store.resolve(it.personId) !in no })
+            }
+            if (ids != t.speakers) net.boswell.phone.audio.writeAtomically(f, TranscriptJson.json.encodeToString(Transcript.serializer(),
+                t.copy(speakers = ids)).toByteArray())
+        }
+        return touched
+    }
+
+    /**
      * "Not Boswell": what was taken for Boswell's own voice in these clips
      * goes back to the voices it was heard in, and those are matched and
      * filed like any other voice. The clips are never labeled Boswell's again,

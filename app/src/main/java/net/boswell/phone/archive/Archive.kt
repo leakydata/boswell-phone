@@ -33,7 +33,9 @@ data class LineRow(val id: Long, val clip: String, val t0: Double, val t1: Doubl
                    /** Transcribed in the cloud (Parakeet) rather than on the phone. */
                    val cloud: Boolean = false,
                    /** Transcribed on the home server (the person's own computer). */
-                   val home: Boolean = false)
+                   val home: Boolean = false,
+                   /** The clip's own label for the voice ("SPEAKER_01"), where [speaker] is the conversation's. */
+                   val label: String? = null)
 
 data class SearchHit(val line: LineRow, val conversation: Long?, val snippet: String)
 
@@ -527,7 +529,7 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
 
     /** Lines of a conversation with each one's conversation-level speaker key. */
     fun lines(conversation: Long): List<LineRow> = readableDatabase.rawQuery("""
-        SELECT l.id, l.clip, l.t0, l.t1, l.offset, s.conv_key, s.person_id, l.text, l.original, c.cloud, c.home FROM lines l
+        SELECT l.id, l.clip, l.t0, l.t1, l.offset, s.conv_key, s.person_id, l.text, l.original, c.cloud, c.home, l.label FROM lines l
         JOIN clips c ON c.name = l.clip LEFT JOIN clip_speakers s ON s.clip = l.clip AND s.label = l.label
         WHERE c.conversation = ? ORDER BY l.t0""", arrayOf(conversation.toString())).use { c ->
         buildList { while (c.moveToNext()) add(c.toLine()) }
@@ -540,7 +542,8 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
             key?.takeIf { it.startsWith("p") }?.drop(1)?.toLongOrNull(), getString(7),
             if (originalIdx >= 0 && !isNull(originalIdx)) getString(originalIdx) else null,
             getColumnIndex("cloud").let { i -> i >= 0 && !isNull(i) && getInt(i) == 1 },
-            getColumnIndex("home").let { i -> i >= 0 && !isNull(i) && getInt(i) == 1 })
+            getColumnIndex("home").let { i -> i >= 0 && !isNull(i) && getInt(i) == 1 },
+            getColumnIndex("label").let { i -> if (i >= 0 && !isNull(i)) getString(i) else null })
     }
 
     /** The best guess for a voice nobody named: its top candidate, if any. */

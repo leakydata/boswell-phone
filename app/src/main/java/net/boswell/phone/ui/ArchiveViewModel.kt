@@ -238,7 +238,8 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         val vs = withContext(Dispatchers.IO) { voices(keys) }
         val guesses = withContext(Dispatchers.IO) {
             val people = speakers.people().associateBy { it.id }
-            keys.filter { vs[it]?.named != true && vs[it]?.boswell != true }.mapNotNull { k ->
+            // A TV is decided: no "sounds like" for it.
+            keys.filter { vs[it]?.named != true && vs[it]?.boswell != true && vs[it]?.media != true }.mapNotNull { k ->
                 archive.guess(id, k)?.let { (pid, score) ->
                     val p = people[speakers.resolve(pid)] ?: return@let null
                     if (p.name != null && score >= 0.55) k to (p to score) else null
@@ -355,11 +356,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         val v = _conv.value.voices[key]
         val pid = v?.personId
         if (pid != null && v.named.not()) setOf(pid, speakers.name(pid, name))
-        else {
-            val target = speakers.people().firstOrNull { it.name == name }?.id ?: speakers.newPerson(name)
-            fileVoice(conversation, key, target)
-            setOfNotNull(target, pid)
-        }
+        else fileVoice(conversation, key, speakers.named(name))
     }
 
     /** "Not Boswell": its lines in this conversation go back to the voices they were heard in, as ordinary voices. */
@@ -372,7 +369,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     fun confirmGuess(conversation: Long, key: String, person: Person) = actVoices {
         val v = _conv.value.voices[key]
         if (v?.personId != null && !v.named) setOf(v.personId, speakers.name(v.personId, person.name ?: return@actVoices emptySet()))
-        else { fileVoice(conversation, key, person.id); setOfNotNull(person.id, v?.personId) }
+        else fileVoice(conversation, key, person.id)
     }
 
     /**
@@ -382,43 +379,44 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun markMedia(conversation: Long, key: String) = actOn {
         val v = _conv.value.voices[key]
-        if (v?.named == true) {
-            val p = speakers.newPerson(null)
-            fileVoice(conversation, key, p)
-            speakers.setKind(p, "media")
-            return@actOn setOfNotNull(p, v.personId)
-        }
-        val pid = v?.personId ?: run {
-            val (emb, secs, clip) = archive.voiceOf(conversation, key) ?: return@actOn emptySet()
-            speakers.newPerson(null).also { p ->
-                if (net.boswell.phone.speakers.Matching.printable(secs)) speakers.addVoiceprint(p, emb, secs, clip, labelOf(conversation, key, clip), "auto")
-                // Too short to be a reference: still marked, just here, by assignment.
-                else for ((slot, _, _) in archive.slotsOf(conversation, key)) speakers.assign(slot.first, slot.second, p)
-            }
-        }
-        speakers.setKind(pid, "media")
-        setOf(pid)
+        net.boswell.phone.process.ClipActions.markMedia(getApplication(), speakers, archive, conversation, key, v?.personId, v?.named == true)
     }
 
-    /**
-     * A voice named in a conversation, everywhere it speaks there: the longest
-     * stretch with a voiceprint becomes a confirmed sample if it's long enough
-     * (Matching.MIN_PRINT_SECONDS), and every clip
-     * voice under that key -- including ones too short to have a voiceprint,
-     * which naming used to silently skip -- is assigned to the person.
-     */
-    private fun fileVoice(conversation: Long, key: String, person: Long) {
-        val slots = archive.slotsOf(conversation, key)
-        slots.filter { it.second != null && net.boswell.phone.speakers.Matching.printable(it.third) }.maxByOrNull { it.third }?.let { (slot, emb, secs) ->
-            runCatching { speakers.addVoiceprint(person, emb!!, secs, slot.first, slot.second, "confirmed") }.logged("naming: voiceprint")
-        }
-        for ((slot, _, _) in slots) speakers.assign(slot.first, slot.second, person)
+    /** A voice named in a conversation, everywhere it speaks there (ClipActions.fileSlots). Returns the people touched, for [actOn]. */
+    private fun fileVoice(conversation: Long, key: String, person: Long): Set<Long> =
+        net.boswell.phone.process.ClipActions.fileSlots(getApplication(), speakers, archive.slotsOf(conversation, key), person, from = _conv.value.voices[key]?.personId)
+
+    /** One clip voice under a conversation voice, for "Split this voice". [at] is when it first speaks. */
+    data class Slot(val clip: String, val label: String, val at: Double, val seconds: Double, val said: String)
+
+    /** The clip voices a conversation voice is made of, in order. */
+    fun slotsIn(conversation: Long, key: String): List<Slot> {
+        val lines = _conv.value.lines
+        return archive.slotsOf(conversation, key).map { (slot, _, secs) ->
+            val mine = lines.filter { it.clip == slot.first && it.label == slot.second }
+            Slot(slot.first, slot.second, mine.firstOrNull()?.t0 ?: archive.clipStarted(slot.first) ?: 0.0, secs, mine.joinToString(" ") { it.text })
+        }.sortedBy { it.at }
     }
 
-    private fun labelOf(conversation: Long, key: String, clip: String): String? =
-        archive.readableDatabase.rawQuery("SELECT label FROM clip_speakers WHERE clip = ? AND conv_key = ? LIMIT 1", arrayOf(clip, key)).use { c ->
-            if (c.moveToFirst()) c.getString(0) else null
+    /** Where "Split this voice" moves the chosen parts. */
+    sealed interface MoveTo {
+        data class Someone(val id: Long) : MoveTo
+        data class Named(val name: String) : MoveTo
+        data object Media : MoveTo
+        data object Unnamed : MoveTo
+    }
+
+    /** One conversation voice was really two (you and a TV, say): the clip voices [moving] go to [to] (ClipActions.split). */
+    fun splitVoice(conversation: Long, key: String, moving: Set<Pair<String, String>>, to: MoveTo) = actVoices {
+        val target = when (to) {
+            is MoveTo.Someone -> to.id
+            is MoveTo.Named -> speakers.named(to.name)
+            MoveTo.Media -> speakers.newPerson(null).also { speakers.setKind(it, "media") }
+            MoveTo.Unnamed -> speakers.newPerson(null)
         }
+        net.boswell.phone.process.ClipActions.split(getApplication(), speakers, archive, conversation, key, _conv.value.voices[key]?.personId,
+            moving, target, if (to == MoveTo.Unnamed) "auto" else "confirmed")
+    }
 
     fun namePerson(id: Long, name: String) = actVoices { setOf(id, speakers.name(id, name)) }
     // A kind changes how a voice shows, not who it is: no conversation changes.
@@ -777,6 +775,18 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
             prepare(); play()
         }
         _playingClip.value = key
+    }
+
+    /** Hear one part of a conversation voice on its own ([toggleVoice]), with the conversation's player paused. */
+    fun toggleSlot(clip: String, label: String) {
+        player?.pause()
+        toggleVoice(clip, label)
+    }
+
+    /** Stop a part playing ([toggleVoice]), if one is. */
+    fun stopVoice() {
+        voicePlayer?.release(); voicePlayer = null
+        if (_playingClip.value?.contains('|') == true) _playingClip.value = null
     }
 
     fun toggleClip(name: String) {

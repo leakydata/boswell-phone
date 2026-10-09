@@ -215,6 +215,11 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         return pid
     }
 
+    /** The person called [name], made if there's nobody yet (people() leaves out someone with no voiceprint). */
+    fun named(name: String): Long = readableDatabase.rawQuery("SELECT id FROM people WHERE name = ?", arrayOf(name)).use { c ->
+        if (c.moveToFirst()) c.getLong(0) else null
+    } ?: newPerson(name)
+
     fun newPerson(name: String?): Long = writableDatabase.insertOrThrow("people", null, ContentValues().apply {
         put("name", name); put("created", now())
     })
@@ -655,6 +660,56 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         } ?: readableDatabase.rawQuery("SELECT person_id FROM assigned WHERE clip = ? AND speaker = ?", arrayOf(clip, label)).use { c ->
             if (c.moveToFirst()) resolve(c.getLong(0)) else null
         } ?: recorded?.let(::resolve)
+
+    /** One clip voice's voiceprint to keep as a sample when it's filed by hand ([refile]). */
+    class Sample(val clip: String, val speaker: String, val vec: FloatArray, val seconds: Double, val origin: String)
+
+    /**
+     * Someone said who these clip voices ([slots], clip and diarized label) are: [to]. Every
+     * answer about them is moved at once, because [currentPerson] reads a voiceprint row
+     * before an assignment, so an assignment alone left a voice auto-filed under someone
+     * still theirs. Their voiceprints, auto or by hand, go to [to] (nothing is deleted);
+     * they're assigned to [to]; and whoever they were before is rejected for them, so
+     * neither a recheck nor a Redo matches them back. [from] is who the caller showed them
+     * as, for voices only a transcript recorded. [sample] is kept as a voiceprint of [to]
+     * (raised to its origin if that voice already has one). Unnamed voices they were
+     * taken from and left with nothing go. Returns everyone they were and [to], for
+     * regrouping (Archive.sync).
+     */
+    fun refile(slots: Collection<Pair<String, String>>, to: Long, sample: Sample? = null, from: Long? = null): Set<Long> {
+        val db = writableDatabase
+        val touched = mutableSetOf(to)
+        db.beginTransaction()
+        try {
+            for ((clip, speaker) in slots.distinct()) {
+                val args = arrayOf(clip, speaker)
+                val before = buildSet {
+                    db.rawQuery("SELECT DISTINCT person_id FROM voiceprints WHERE clip = ? AND speaker = ?", args).use { c -> while (c.moveToNext()) add(c.getLong(0)) }
+                    db.rawQuery("SELECT person_id FROM assigned WHERE clip = ? AND speaker = ?", args).use { c -> while (c.moveToNext()) add(resolve(c.getLong(0))) }
+                    from?.let { add(resolve(it)) }
+                } - to
+                db.execSQL("UPDATE voiceprints SET person_id = ?, source_cluster = NULL WHERE clip = ? AND speaker = ?", arrayOf<Any>(to, clip, speaker))
+                db.execSQL("INSERT OR REPLACE INTO assigned(clip, speaker, person_id) VALUES (?, ?, ?)", arrayOf<Any>(clip, speaker, to))
+                // A "not them" for who it is now no longer holds.
+                val stale = db.rawQuery("SELECT person_id FROM rejections WHERE clip = ? AND speaker = ?", args).use { c ->
+                    buildList { while (c.moveToNext()) add(c.getLong(0)) } }.filter { resolve(it) == to }
+                for (p in stale) db.execSQL("DELETE FROM rejections WHERE clip = ? AND speaker = ? AND person_id = ?", arrayOf<Any>(clip, speaker, p))
+                for (p in before) reject(clip, speaker, p)
+                touched += before
+            }
+            sample?.let { s ->
+                val has = db.rawQuery("SELECT 1 FROM voiceprints WHERE clip = ? AND speaker = ? LIMIT 1", arrayOf(s.clip, s.speaker)).use { it.moveToFirst() }
+                if (!has && Matching.usable(s.vec)) addVoiceprint(to, s.vec, s.seconds, s.clip, s.speaker, s.origin)
+                else if (s.origin != "auto") db.execSQL("UPDATE voiceprints SET origin = ? WHERE clip = ? AND speaker = ? AND origin = 'auto'", arrayOf<Any>(s.origin, s.clip, s.speaker))
+            }
+            // Unnamed voices these were taken from and left with nothing go, as releaseFromCluster tidies;
+            // a TV and a voice known only by assignment stay.
+            for (p in touched - to) db.execSQL("""DELETE FROM people WHERE id = ? AND name IS NULL AND kind IS NULL
+                AND id NOT IN (SELECT DISTINCT person_id FROM voiceprints) AND id NOT IN (SELECT person_id FROM assigned)""", arrayOf<Any>(p))
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        return touched
+    }
 
     /** Name a voice that has no voiceprint (or add to one that has): this clip voice is this person. */
     fun assign(clip: String, speaker: String, personId: Long) {

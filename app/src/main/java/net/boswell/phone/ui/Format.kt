@@ -15,6 +15,9 @@ object Fmt {
 
     fun time(epoch: Double): String = Instant.ofEpochMilli((epoch * 1000).toLong()).atZone(zone).format(time)
 
+    /** To the second (h:mm:ss), to tell apart parts of one conversation a few seconds apart. */
+    fun seconds(epoch: Double): String = Instant.ofEpochMilli((epoch * 1000).toLong()).atZone(zone).format(DateTimeFormatter.ofPattern("h:mm:ss"))
+
     fun day(d: LocalDate): String {
         val today = LocalDate.now(zone)
         return when (d) {
