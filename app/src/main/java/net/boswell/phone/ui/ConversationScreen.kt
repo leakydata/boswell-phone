@@ -47,6 +47,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -106,6 +107,21 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
     }
 
     val c = s.conversation
+    // Consecutive lines from one voice with no real pause between them
+    // are one thing said: the 30 s clip boundary and the transcriber's
+    // own line breaks should not split a sentence into three bubbles.
+    val turns = s.lines.fold(mutableListOf<MutableList<LineRow>>()) { acc, l ->
+        val last = acc.lastOrNull()?.last()
+        if (last != null && last.speaker == l.speaker && l.t0 - last.t1 < 2.5) acc.last() += l else acc += mutableListOf(l)
+        acc
+    }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    /** Bring [line]'s bubble into view: past the title, the transcribed-by line and the voices row. */
+    fun showLine(line: LineRow) {
+        val turn = turns.indexOfFirst { t -> t.any { it.id == line.id } }.takeIf { it >= 0 } ?: return
+        val before = (if (c?.title != null) 1 else 0) + (if (s.lines.isNotEmpty()) 1 else 0) + 1
+        scope.launch { list.animateScrollToItem(before + turn) }
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -160,14 +176,6 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
                     c?.sounds?.map(Sounds::display)?.distinct()?.forEach { SoundChip(it) }
                 }
             }
-            // Consecutive lines from one voice with no real pause between them
-            // are one thing said: the 30 s clip boundary and the transcriber's
-            // own line breaks should not split a sentence into three bubbles.
-            val turns = s.lines.fold(mutableListOf<MutableList<LineRow>>()) { acc, l ->
-                val last = acc.lastOrNull()?.last()
-                if (last != null && last.speaker == l.speaker && l.t0 - last.t1 < 2.5) acc.last() += l else acc += mutableListOf(l)
-                acc
-            }
             itemsIndexed(turns, key = { _, t -> t.first().id }) { i, turn ->
                 val line = turn.first()
                 val prev = turns.getOrNull(i - 1)?.last()
@@ -205,7 +213,7 @@ fun ConversationScreen(vm: ArchiveViewModel, id: Long, focusLine: Long?, onBack:
 
     who?.let { key ->
         WhoSheet(vm, s, key, onDismiss = { who = null }, onPerson = { pid -> who = null; onPerson(pid) },
-            onSplit = { who = null; split = key to emptySet() })
+            onSplit = { who = null; split = key to emptySet() }, onShow = { line -> who = null; showLine(line) })
     }
     split?.let { (key, checked) -> SplitSheet(vm, s, key, checked, onDismiss = { split = null }) }
     orphan?.let { line -> OrphanSheet(vm, s, line, onDismiss = { orphan = null }) }
@@ -348,13 +356,20 @@ private fun PlayerBar(s: ConversationState, vm: ArchiveViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun WhoSheet(vm: ArchiveViewModel, s: ConversationState, key: String, onDismiss: () -> Unit, onPerson: (Long) -> Unit, onSplit: () -> Unit) {
+private fun WhoSheet(vm: ArchiveViewModel, s: ConversationState, key: String, onDismiss: () -> Unit, onPerson: (Long) -> Unit, onSplit: () -> Unit,
+                     onShow: (LineRow) -> Unit = {}) {
     val v = s.voices[key] ?: return
     val conv = s.conversation ?: return
     if (v.boswell) { BoswellSheet(vm, s, key, conv.id, onDismiss); return }
     val guess = s.guesses[key]
     var name by remember(key) { mutableStateOf("") }
     val done = { onDismiss() }
+    // Who it is, heard at once: the voice's longest line plays as the sheet opens, and the arrows
+    // step through its other lines, so a voice can be labeled without scrolling to find it.
+    val said = remember(key, s.lines) { s.lines.filter { it.speaker == key } }
+    var at by remember(key) { mutableStateOf(said.indices.maxByOrNull { said[it].t1 - said[it].t0 } ?: 0) }
+    fun hear(i: Int) { said.getOrNull(i)?.let { at = i; vm.playLine(it) } }
+    LaunchedEffect(key) { hear(at) }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -364,9 +379,21 @@ private fun WhoSheet(vm: ArchiveViewModel, s: ConversationState, key: String, on
                     Text(v.name, style = MaterialTheme.typography.titleLarge)
                     Text(if (v.named) "Named voice" else "Who is this?", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                OutlinedButton(onClick = { s.lines.firstOrNull { it.speaker == key }?.let(vm::playLine) }) {
+                OutlinedButton(onClick = { hear(at) }) {
                     Icon(Icons.Filled.PlayArrow, null); Text("Hear")
                 }
+            }
+            said.getOrNull(at)?.let { line ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { hear(at - 1) }, enabled = at > 0) { Text("◀") }
+                    Column(Modifier.weight(1f)) {
+                        Text("“${line.text.take(120)}”", style = MaterialTheme.typography.bodyMedium, maxLines = 2)
+                        Text("${Fmt.time(line.t0)} · ${at + 1} of ${said.size}", style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    IconButton(onClick = { hear(at + 1) }, enabled = at < said.size - 1) { Text("▶") }
+                }
+                TextButton(onClick = { onShow(line) }) { Text("Show in conversation") }
             }
             // First, where a thumb finds it: while labeling, TV is the most common answer.
             if (!v.media) OutlinedButton(onClick = { vm.markMedia(conv.id, key); done() }, modifier = Modifier.fillMaxWidth()) {
