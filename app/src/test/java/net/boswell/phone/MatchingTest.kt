@@ -107,10 +107,20 @@ class MatchingTest {
     }
 
     @Test fun `the general rule no longer decides the owner`() {
-        val refs = listOf(Reference(1, 1, like(0.85, 1)), Reference(2, 2, like(0.60, 2)))   // 0.25 ahead of the next person
-        val field = listOf(Reference(3, 9, like(0.80, 3)))                                  // but only 0.05 of an unnamed voice
+        val refs = listOf(Reference(1, 1, like(0.84, 1)), Reference(2, 2, like(0.60, 2)))   // 0.24 ahead of the next person
+        val field = listOf(Reference(3, 9, like(0.79, 3)))                                  // but only 0.05 of an unnamed voice
         asOwner(2) { assertEquals(Decision.MATCHED, Matching.match(voice, refs, field).decision) }
         asOwner(1) { assertEquals(Decision.UNCERTAIN, Matching.match(voice, refs, field).decision) }
+    }
+
+    @Test fun `the owner at 0_85 or more needs only a lead over named people`() {
+        // The owner's own unfiled voices close behind no longer refuse a voice this clear.
+        val field = listOf(Reference(3, 9, like(0.84, 3)))
+        asOwner(1) {
+            assertEquals(Decision.MATCHED, Matching.match(voice, listOf(Reference(1, 1, like(0.86, 1)), Reference(2, 2, like(0.60, 2))), field).decision)
+            // Still not without the lead over the next named person.
+            assertEquals(Decision.UNCERTAIN, Matching.match(voice, listOf(Reference(1, 1, like(0.86, 1)), Reference(2, 2, like(0.80, 2))), field).decision)
+        }
     }
 
     @Test fun `a short bit of the owner passes at 0_56 with a 0_14 lead, only when its length is known`() {

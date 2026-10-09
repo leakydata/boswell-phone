@@ -124,6 +124,13 @@ object Matching {
     const val OWNER_NEAR_MARGIN = 0.04
     /** A voice less than this many dB above its room is never the owner, who wears the microphone. */
     const val OWNER_FAR_SNR = 8.0
+    /**
+     * Under [isOwner], a score this high needs only the [OWNER_MARGIN] lead over named people,
+     * whatever unnamed voices score: those were the owner's own unfiled voices, each refused
+     * voice filed among them refusing the next (measured 2026-10-09: 103 -> 139 of 178 owner
+     * voices, no more others taken for the owner; a TV excerpt at 0.848 is the nearest miss).
+     */
+    const val OWNER_HIGH_SCORE = 0.85
 
     /**
      * The owner speaks in nearly every recording, mostly in short bits, and
@@ -132,6 +139,7 @@ object Matching {
      * owner when any of:
      *  - OWNER_SCORE, OWNER_MARGIN ahead of the next named person and
      *    OWNER_FIELD_MARGIN ahead of every unnamed voice;
+     *  - OWNER_HIGH_SCORE with OWNER_MARGIN over the next named person, unnamed voices aside;
      *  - under 3 s of speech, OWNER_SHORT_SCORE with OWNER_SHORT_MARGIN over
      *    the next named person (the length must be known);
      *  - OWNER_NEAR_SNR dB or more above the room (the near voice),
@@ -151,6 +159,7 @@ object Matching {
     private fun isOwner(score: Double, namedMargin: Double, fieldMargin: Double, seconds: Double?, snr: Double?): Boolean {
         if (snr != null && snr < OWNER_FAR_SNR) return false
         if (score >= OWNER_SCORE && namedMargin >= OWNER_MARGIN && fieldMargin >= OWNER_FIELD_MARGIN) return true
+        if (score >= OWNER_HIGH_SCORE && namedMargin >= OWNER_MARGIN) return true
         if (seconds != null && seconds > 0 && seconds < OWNER_SHORT_SECONDS && score >= OWNER_SHORT_SCORE && namedMargin >= OWNER_SHORT_MARGIN) return true
         return snr != null && snr >= OWNER_NEAR_SNR && score >= OWNER_NEAR_SCORE && namedMargin >= OWNER_NEAR_MARGIN
     }
