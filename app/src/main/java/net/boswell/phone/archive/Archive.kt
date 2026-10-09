@@ -126,10 +126,17 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
      */
     @Synchronized
     /** One sync at a time in this process: a second would only wait on the first's write, then find it done. */
-    fun sync(speakers: SpeakerStore, force: Boolean = false, people: Collection<Long>? = null): Synced =
-        synchronized(SYNC) { syncNow(speakers, force, people) }
+    /** [span] (seconds, from..to): conversations there regrouped too, e.g. the one a voice was just relabeled in. */
+    fun sync(speakers: SpeakerStore, force: Boolean = false, people: Collection<Long>? = null, span: Pair<Double, Double>? = null): Synced =
+        synchronized(SYNC) { syncNow(speakers, force, people, span) }
 
-    private fun syncNow(speakers: SpeakerStore, force: Boolean, people: Collection<Long>?): Synced {
+    /** When a conversation's clips start and end, or null if it isn't indexed. */
+    fun spanOf(conversation: Long): Pair<Double, Double>? =
+        readableDatabase.rawQuery("SELECT MIN(started), MAX(ended) FROM clips WHERE conversation = ?", arrayOf(conversation.toString())).use { c ->
+            if (c.moveToFirst() && !c.isNull(0)) c.getDouble(0) to c.getDouble(1) else null
+        }
+
+    private fun syncNow(speakers: SpeakerStore, force: Boolean, people: Collection<Long>?, span: Pair<Double, Double>? = null): Synced {
         val t0 = System.currentTimeMillis()
         val clipsDir = CaptureService.clipsDir(context)
         val tDir = ProcessingWorker.transcriptsDir(context)
@@ -154,7 +161,10 @@ class Archive(private val context: Context) : SQLiteOpenHelper(context, "archive
                 if (!force && span != null) regrouped += rebuildConversations(db, speakers.currentPeople(), span.first, span.second)
             }
             if (force) regrouped += rebuildConversations(db, speakers.currentPeople())
-            else if (!people.isNullOrEmpty()) regrouped += rebuildPeople(db, speakers, people.toSet())
+            else {
+                if (!people.isNullOrEmpty()) regrouped += rebuildPeople(db, speakers, people.toSet())
+                if (span != null) regrouped += rebuildConversations(db, speakers.currentPeople(), span.first, span.second)
+            }
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()

@@ -144,6 +144,37 @@ class RelabelTest {
         markedTv(me, center)
     }
 
+    @Test fun `regrouping only the conversation it was labeled in is the same as regrouping everything`() {
+        // What the screens do now (ArchiveViewModel.actOn): no people, just this conversation's span.
+        val center = randomUnit(rnd, dim)
+        val me = person("Me", center)
+        context.getSharedPreferences("boswell", Context.MODE_PRIVATE).edit().putLong("owner_person", me).commit()
+        Matching.owner = me
+        val bea = person("Bea", randomUnit(rnd, dim))
+        val slots = conversation(4, center, recorded = me, filed = me)
+        archive.sync(store, force = true)
+        val conv = onlyConversation()
+        val span = archive.spanOf(conv)!!
+
+        val moving = slots.filterIndexed { i, _ -> i == 0 || i == 2 }
+        ClipActions.split(context, store, archive, conv, "p$me", me, moving.map { it.clip to it.label }.toSet(), bea)
+        archive.sync(store, span = span)
+        assertAll(moving, bea)
+        assertAll(slots - moving.toSet(), me)
+        val parts = ArchiveFixture.snapshot(archive)
+        archive.sync(store, force = true)
+        assertEquals(parts, ArchiveFixture.snapshot(archive))
+
+        ClipActions.markMedia(context, store, archive, conv, "p$me", me, named = true)
+        archive.sync(store, span = span)
+        val tv = store.currentPerson(slots[1].clip, slots[1].label, null)!!
+        assertEquals("media", store.kindOf(tv))
+        assertAll(slots - moving.toSet(), tv)
+        val again = ArchiveFixture.snapshot(archive)
+        archive.sync(store, force = true)
+        assertEquals(again, ArchiveFixture.snapshot(archive))
+    }
+
     @Test fun `splitting two of four parts moves exactly those`() {
         val center = randomUnit(rnd, dim)
         val me = person("Me", center)

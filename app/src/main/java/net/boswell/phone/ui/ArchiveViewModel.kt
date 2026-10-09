@@ -352,11 +352,12 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
      * sighting at once, merging into an existing person of that name); a voice
      * too short to have been clustered is enrolled as a confirmed voiceprint.
      */
-    fun nameVoice(conversation: Long, key: String, name: String) = actVoices {
+    fun nameVoice(conversation: Long, key: String, name: String) = actVoices(here = conversation) {
         val v = _conv.value.voices[key]
         val pid = v?.personId
-        if (pid != null && v.named.not()) setOf(pid, speakers.name(pid, name))
-        else fileVoice(conversation, key, speakers.named(name))
+        // Only where the unnamed voice was heard do conversations change: not everywhere its new name is.
+        if (pid != null && v.named.not()) { speakers.name(pid, name); setOf(pid) }
+        else { fileVoice(conversation, key, speakers.named(name)); emptySet() }
     }
 
     /** "Not Boswell": its lines in this conversation go back to the voices they were heard in, as ordinary voices. */
@@ -366,10 +367,10 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** "Yes, that's them": the guess becomes a confirmed reference covering this condition. */
-    fun confirmGuess(conversation: Long, key: String, person: Person) = actVoices {
+    fun confirmGuess(conversation: Long, key: String, person: Person) = actVoices(here = conversation) {
         val v = _conv.value.voices[key]
-        if (v?.personId != null && !v.named) setOf(v.personId, speakers.name(v.personId, person.name ?: return@actVoices emptySet()))
-        else fileVoice(conversation, key, person.id)
+        if (v?.personId != null && !v.named) { speakers.name(v.personId, person.name ?: return@actVoices emptySet()); setOf(v.personId) }
+        else { fileVoice(conversation, key, person.id); emptySet() }
     }
 
     /**
@@ -377,9 +378,10 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
      * A voice already put down as someone is moved off them: it's this voice that
      * was the TV, not the person, who'd otherwise show as TV everywhere.
      */
-    fun markMedia(conversation: Long, key: String) = actOn {
+    fun markMedia(conversation: Long, key: String) = actOn(here = conversation) {
         val v = _conv.value.voices[key]
         net.boswell.phone.process.ClipActions.markMedia(getApplication(), speakers, archive, conversation, key, v?.personId, v?.named == true)
+        emptySet()
     }
 
     /** A voice named in a conversation, everywhere it speaks there (ClipActions.fileSlots). Returns the people touched, for [actOn]. */
@@ -407,7 +409,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** One conversation voice was really two (you and a TV, say): the clip voices [moving] go to [to] (ClipActions.split). */
-    fun splitVoice(conversation: Long, key: String, moving: Set<Pair<String, String>>, to: MoveTo) = actVoices {
+    fun splitVoice(conversation: Long, key: String, moving: Set<Pair<String, String>>, to: MoveTo) = actVoices(here = conversation) {
         val target = when (to) {
             is MoveTo.Someone -> to.id
             is MoveTo.Named -> speakers.named(to.name)
@@ -416,6 +418,7 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         }
         net.boswell.phone.process.ClipActions.split(getApplication(), speakers, archive, conversation, key, _conv.value.voices[key]?.personId,
             moving, target, if (to == MoveTo.Unnamed) "auto" else "confirmed")
+        emptySet()
     }
 
     fun namePerson(id: Long, name: String) = actVoices { setOf(id, speakers.name(id, name)) }
@@ -426,8 +429,8 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     fun unnameGroup(personId: Long, group: Long) = actVoices { setOf(personId, speakers.unnameGroup(personId, group)) }
 
     /** An identity action ([actOn]), then another look at every voice with what is now known. */
-    private fun actVoices(block: () -> Set<Long>?) {
-        actOn(block)
+    private fun actVoices(here: Long? = null, block: () -> Set<Long>?) {
+        actOn(here, block)
         recheckSoon()
     }
 
@@ -564,10 +567,18 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
      * their conversations are regrouped (Archive.sync), or null if that
      * isn't known, and every conversation is.
      */
-    private fun actOn(block: () -> Set<Long>?) = viewModelScope.launch {
+    /**
+     * A change to who's who, then the index brought up to date with it. Moving a voice's parts
+     * changes only the conversation they're in ([here], regrouped over its span), so a label
+     * shows at once instead of after a regroup of every conversation the person was ever in.
+     */
+    private fun actOn(here: Long? = null, block: () -> Set<Long>?) = viewModelScope.launch {
         withContext(Dispatchers.IO) {
+            val span = here?.let { runCatching { archive.spanOf(it) }.getOrNull() }
             val people = block()
-            runCatching { if (people == null) archive.sync(speakers, force = true) else archive.sync(speakers, people = people) }.logged("archive sync after a change")
+            runCatching {
+                if (people == null) archive.sync(speakers, force = true) else archive.sync(speakers, people = people, span = span)
+            }.logged("archive sync after a change")
         }
         loadDay(_day.value.day)
         loadPeople()
