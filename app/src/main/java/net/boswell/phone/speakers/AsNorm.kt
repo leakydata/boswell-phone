@@ -19,6 +19,8 @@ package net.boswell.phone.speakers
  * A voiceprint's own cohort scores leave out the cohort voices from its own
  * recording; a new voice's leave out its recording and everything within
  * [WINDOW] of it (the same conversation, maybe the same person unnamed).
+ * A score against a named person also leaves out their self-clusters
+ * ([SELF_CLUSTER_PRINTS], [SELF_CLUSTER_SCORE]), on both sides.
  * Measured with ReDimNet2 only (VoiceModel.SPEAKER_ID), so only with it.
  */
 object AsNorm {
@@ -27,10 +29,32 @@ object AsNorm {
     /** Seconds around a new voice's recording whose cohort voices it leaves out. */
     const val WINDOW = 600.0
 
+    /**
+     * An unnamed cluster of at least [SELF_CLUSTER_PRINTS] prints that is
+     * closest to a named person other than the owner, and resembles them at
+     * [SELF_CLUSTER_SCORE] or more (the mean over its prints of the best
+     * cosine to theirs), is that person unnamed: it leaves the cohort for
+     * scores against them, and only them. Left in, its near-copies made every
+     * score against the person look ordinary -- u#1482, 117 recordings 0.84
+     * like Bijan Bowen, normalized to a median 0.47 and never matched. Leaving
+     * out every unnamed print closest to the person instead put 3 times as
+     * many voices to the wrong person (185 -> 623). Measured 2026-10-09: 3
+     * clusters, 119 prints (all Bijan Bowen's); the truth set as before (one
+     * more voice right, nothing else moved); 58 more voices matched, all of
+     * u#1482, at 0.84-0.91 like him and at most 0.54 like the owner.
+     */
+    const val SELF_CLUSTER_PRINTS = 5
+    const val SELF_CLUSTER_SCORE = 0.80
+
     data class Stat(val mean: Double, val sd: Double)
 
-    /** The cohort: unnamed voices' prints (unit length), the recording each came from, and its time (NaN: unknown). */
-    class Cohort(val vecs: List<FloatArray>, val clips: List<String?>, val times: DoubleArray) {
+    /**
+     * The cohort: unnamed voices' prints (unit length), the recording each came
+     * from, its time (NaN: unknown), and the named person whose self-cluster
+     * it is in ([who]; -1: nobody's).
+     */
+    class Cohort(val vecs: List<FloatArray>, val clips: List<String?>, val times: DoubleArray,
+                 val who: LongArray = LongArray(vecs.size) { -1L }) {
         val size get() = vecs.size
     }
 
@@ -38,52 +62,74 @@ object AsNorm {
      * The unnamed voices of [field] whose best named person in [named] (their
      * own recording's prints left out) is not [owner]: impostors for everyone,
      * the owner included. An unnamed voice that is closest to the owner is
-     * often the owner unnamed, and would make the owner's own scores look ordinary.
+     * often the owner unnamed, and would make the owner's own scores look
+     * ordinary. Each keeps whose self-cluster it is in, if anyone's
+     * ([SELF_CLUSTER_PRINTS]); [field]'s person ids are the clusters.
      */
     fun cohort(named: List<Matching.Reference>, field: List<Matching.Reference>, owner: Long?): Cohort {
-        val keep = field.filter { u ->
-            if (owner == null) return@filter true
-            val best = HashMap<Long, Double>()
+        val people = named.mapTo(LinkedHashSet()) { it.personId }.toList()
+        val best = field.map { u ->
+            val b = HashMap<Long, Double>()
             for (r in named) {
                 if (u.clip != null && r.clip == u.clip) continue
                 val s = Matching.dot(u.vec, r.vec)
-                if (s > (best[r.personId] ?: -9.0)) best[r.personId] = s
+                if (s > (b[r.personId] ?: -9.0)) b[r.personId] = s
             }
-            best.maxByOrNull { it.value }?.key != owner
+            b
         }
-        return Cohort(keep.map { it.vec }, keep.map { it.clip }, DoubleArray(keep.size) { keep[it].clip?.let(Pooling::clipTime) ?: Double.NaN })
+        // Each cluster's resemblance to each person: the mean of its prints' best.
+        val self = HashMap<Long, Long>()
+        for ((cluster, idx) in field.indices.groupBy { field[it].personId }) {
+            if (idx.size < SELF_CLUSTER_PRINTS || people.isEmpty()) continue
+            val mean = people.map { p -> p to idx.sumOf { best[it][p] ?: -9.0 } / idx.size }
+            val (p, score) = mean.maxBy { it.second }
+            if (p != owner && score >= SELF_CLUSTER_SCORE) self[cluster] = p
+        }
+        val keep = field.indices.filter { owner == null || best[it].maxByOrNull { e -> e.value }?.key != owner }
+        return Cohort(keep.map { field[it].vec }, keep.map { field[it].clip },
+            DoubleArray(keep.size) { field[keep[it]].clip?.let(Pooling::clipTime) ?: Double.NaN },
+            LongArray(keep.size) { self[field[keep[it]].personId] ?: -1L })
     }
 
-    /** Mean and spread of [v]'s [TOP] best cohort scores, without the cohort voices [skip] says; null with none left. */
-    fun stat(v: FloatArray, c: Cohort, skip: (Int) -> Boolean): Stat? {
+    /** The [TOP] highest scores offered, kept in ascending order. */
+    internal class Top {
         val top = DoubleArray(TOP)
         var n = 0
-        for (i in 0 until c.size) {
-            if (skip(i)) continue
-            val s = Matching.dot(v, c.vecs[i])
+        fun add(s: Double) {
             if (n < TOP) { top[n++] = s; var j = n - 1; while (j > 0 && top[j - 1] > top[j]) { val t = top[j]; top[j] = top[j - 1]; top[j - 1] = t; j-- } }
             else if (s > top[0]) {
-                // Keep the TOP highest in ascending order: the smallest goes.
+                // The smallest goes.
                 var j = 0
                 while (j + 1 < TOP && top[j + 1] < s) { top[j] = top[j + 1]; j++ }
                 top[j] = s
             }
         }
-        if (n == 0) return null
-        var mean = 0.0
-        for (i in 0 until n) mean += top[i]
-        mean /= n
-        var sq = 0.0
-        for (i in 0 until n) sq += (top[i] - mean) * (top[i] - mean)
-        return Stat(mean, kotlin.math.sqrt(sq / n) + 1e-6)
+        fun stat(): Stat? {
+            if (n == 0) return null
+            var mean = 0.0
+            for (i in 0 until n) mean += top[i]
+            mean /= n
+            var sq = 0.0
+            for (i in 0 until n) sq += (top[i] - mean) * (top[i] - mean)
+            return Stat(mean, kotlin.math.sqrt(sq / n) + 1e-6)
+        }
     }
 
-    /** A voiceprint's statistics: the cohort voices of its own recording left out. */
-    fun printStat(v: FloatArray, c: Cohort, clip: String?): Stat? = stat(v, c) { (c.clips[it] ?: "") == (clip ?: "") }
+    /** Mean and spread of [v]'s [TOP] best cohort scores, without the cohort voices [skip] says; null with none left. */
+    fun stat(v: FloatArray, c: Cohort, skip: (Int) -> Boolean): Stat? {
+        val top = Top()
+        for (i in 0 until c.size) if (!skip(i)) top.add(Matching.dot(v, c.vecs[i]))
+        return top.stat()
+    }
 
-    /** A new voice's statistics: its recording, and the cohort voices within [WINDOW] of [time], left out. */
-    fun voiceStat(v: FloatArray, c: Cohort, clip: String?, time: Double?): Stat? =
-        stat(v, c) { (clip != null && c.clips[it] == clip) || (time != null && kotlin.math.abs(c.times[it] - time) <= WINDOW) }
+    /** A voiceprint's statistics: the cohort voices of its own recording, and [person]'s self-clusters, left out. */
+    fun printStat(v: FloatArray, c: Cohort, clip: String?, person: Long? = null): Stat? =
+        stat(v, c) { (c.clips[it] ?: "") == (clip ?: "") || (person != null && c.who[it] == person) }
+
+    /** A new voice's statistics: its recording, the cohort voices within [WINDOW] of [time], and [person]'s self-clusters left out. */
+    fun voiceStat(v: FloatArray, c: Cohort, clip: String?, time: Double?, person: Long? = null): Stat? =
+        stat(v, c) { (clip != null && c.clips[it] == clip) || (time != null && kotlin.math.abs(c.times[it] - time) <= WINDOW) ||
+            (person != null && c.who[it] == person) }
 
     /** [s] between a voice and a print, normalized and back on the cosine scale. */
     fun normalized(s: Double, voice: Stat, print: Stat): Double =
@@ -109,20 +155,49 @@ object AsNorm {
      * scored. [forVoice] gives one voice's scoring.
      */
     class Norm(val cohort: Cohort) {
-        private val prints = java.util.concurrent.ConcurrentHashMap<Long, Stat>()
+        private val prints = java.util.concurrent.ConcurrentHashMap<Pair<Long, Long>, Stat>()
         private val none = Stat(Double.NaN, Double.NaN)
 
         fun print(r: Matching.Reference): Stat? =
-            prints.getOrPut(r.voiceprintId) { printStat(r.vec, cohort, r.clip) ?: none }.takeIf { it !== none }
+            prints.getOrPut(r.voiceprintId to r.personId) { printStat(r.vec, cohort, r.clip, r.personId) ?: none }.takeIf { it !== none }
 
-        /** Scoring for a voice ([vec], of recording [clip] made at [time]), or null when no cohort is left for it. */
-        fun forVoice(vec: FloatArray, clip: String?, time: Double?): Scorer? =
-            voiceStat(Matching.unit(vec), cohort, clip, time)?.let { Scorer(this, it) }
+        /**
+         * Scoring for a voice ([vec], of recording [clip] made at [time]), or null
+         * when no cohort is left for it. The voice meets the cohort once,
+         * keeping the [TOP] best scores of each self-cluster owner's share and
+         * of the rest; a person's statistics come from the shares not theirs.
+         */
+        fun forVoice(vec: FloatArray, clip: String?, time: Double?): Scorer? {
+            val v = Matching.unit(vec)
+            val c = cohort
+            val tops = HashMap<Long, Top>()
+            for (i in 0 until c.size) {
+                if ((clip != null && c.clips[i] == clip) || (time != null && kotlin.math.abs(c.times[i] - time) <= WINDOW)) continue
+                tops.getOrPut(c.who[i]) { Top() }.add(Matching.dot(v, c.vecs[i]))
+            }
+            return if (tops.isEmpty()) null else Scorer(this, tops)
+        }
     }
 
     /** One voice's scores against the voiceprints, normalized. */
-    class Scorer(private val norm: Norm, private val voice: Stat) {
-        fun score(raw: Double, r: Matching.Reference): Double = norm.print(r)?.let { normalized(raw, voice, it) } ?: raw
+    class Scorer internal constructor(private val norm: Norm, private val tops: Map<Long, Top>) {
+        private val voice = HashMap<Long, Stat?>()
+
+        /** The voice's statistics when scored against [person]: their self-clusters left out. */
+        fun voice(person: Long): Stat? = synchronized(voice) {
+            val key = if (person in tops && person != -1L) person else -1L
+            voice.getOrPut(key) {
+                val all = Top()
+                for ((who, t) in tops) if (who == -1L || who != key) for (i in 0 until t.n) all.add(t.top[i])
+                all.stat()
+            }
+        }
+
+        fun score(raw: Double, r: Matching.Reference): Double {
+            val y = norm.print(r) ?: return raw
+            val x = voice(r.personId) ?: return raw
+            return normalized(raw, x, y)
+        }
     }
 
     // asnorm.qmap on the owner's truth set (2,128 voices and excerpts x other people's

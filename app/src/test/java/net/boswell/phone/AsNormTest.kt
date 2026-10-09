@@ -55,6 +55,7 @@ class AsNormTest {
         val ownerish = Reference(10, 10, Matching.unit(floatArrayOf(0f, 1f, 0.2f) + FloatArray(37)), "c.wav")
         val other = Reference(11, 11, Matching.unit(floatArrayOf(0f, 0.2f, 1f) + FloatArray(37)), "d.wav")
         assertEquals(listOf("d.wav"), AsNorm.cohort(named, listOf(ownerish, other), owner = 1).clips)
+        assertEquals(listOf(-1L), AsNorm.cohort(named, listOf(ownerish, other), owner = 1).who.toList())   // one print is no self-cluster
         assertEquals(2, AsNorm.cohort(named, listOf(ownerish, other), owner = null).size)
         // Its own recording's prints don't count: a copy of it under person 2 doesn't make it theirs.
         val twin = Reference(3, 2, ownerish.vec, "c.wav")
@@ -73,5 +74,72 @@ class AsNormTest {
         val y = AsNorm.printStat(r.vec, c, r.clip)!!
         assertEquals(AsNorm.normalized(0.8, x, y), s, 1e-12)
         assertEquals(s, scorer.score(0.8, r.copy(vec = axis(31, 0.1))), 0.0)       // kept by voiceprint id
+    }
+
+    /** A unit vector [c] like axis [a], the rest on axis [b]. */
+    private fun mix(a: Int, c: Double, b: Int) = FloatArray(40).also { it[a] = c.toFloat(); it[b] = sqrt(1 - c * c).toFloat() }
+
+    @Test fun `a named person's self-cluster leaves the cohort, only for them`() {
+        // Owner 1 (axis 2), person 2 (axis 0), person 3 (axis 1).
+        val named = listOf(Reference(1, 1, mix(2, 1.0, 39), "o.wav"), Reference(2, 2, mix(0, 1.0, 39), "p.wav"), Reference(3, 3, mix(1, 1.0, 39), "q.wav"))
+        var id = 100L
+        fun cluster(pid: Long, n: Int, axis: Int, c: Double, from: Int) = List(n) { Reference(id++, pid, mix(axis, c, from + it), "c${pid}_$it.wav") }
+        val self = cluster(10, 5, 0, 0.9, 5)          // person 2 unnamed: 5 prints, 0.90 like them
+        val few = cluster(11, 4, 0, 0.9, 10)          // as like them, but only 4 prints
+        val loose = cluster(12, 5, 0, 0.75, 14)       // 5 prints, only 0.75 like them
+        val mine = cluster(13, 5, 2, 0.9, 19)         // the owner's own unnamed voices
+        val c = AsNorm.cohort(named, self + few + loose + mine, owner = 1)
+        assertEquals(14, c.size)                      // the owner's left out as before
+        assertEquals(List(5) { 2L } + List(9) { -1L }, c.who.toList())
+        // Without an owner, the owner-like cluster is just someone's self-cluster.
+        assertEquals(List(5) { 2L } + List(9) { -1L } + List(5) { 1L }, AsNorm.cohort(named, self + few + loose + mine, owner = null).who.toList())
+
+        // Scores against person 2 leave their self-cluster out; against anyone else, it stays.
+        val v = mix(0, 1.0, 39)
+        val all = AsNorm.printStat(v, c, "x.wav")!!
+        val for2 = AsNorm.printStat(v, c, "x.wav", person = 2)!!
+        assertEquals(0.9, all.mean, 0.06)
+        assertEquals((List(4) { 0.9 } + List(5) { 0.75 }).average(), for2.mean, 1e-6)
+        assertEquals(all, AsNorm.printStat(v, c, "x.wav", person = 3))
+        assertEquals(all, AsNorm.printStat(v, c, "x.wav", person = 1))      // the owner's scores as before
+        assertEquals(for2, AsNorm.voiceStat(v, c, "x.wav", null, person = 2))
+        assertEquals(all, AsNorm.voiceStat(v, c, "x.wav", null, person = 1))
+    }
+
+    @Test fun `a voice's scoring against each person matches leaving their self-clusters out by hand`() {
+        val rnd = java.util.Random(7)
+        fun r() = Matching.unit(FloatArray(40) { rnd.nextGaussian().toFloat() })
+        val n = 200
+        val c = AsNorm.Cohort(List(n) { r() }, List(n) { "omi_${1791100000 + 60 * it}.wav" }, DoubleArray(n) { 1791100000.0 + 60 * it },
+            LongArray(n) { if (it % 3 == 0) -1L else (it % 3).toLong() + 1 })
+        val norm = AsNorm.Norm(c)
+        repeat(5) { k ->
+            val v = r(); val time = 1791100000.0 + 60 * rnd.nextInt(n)
+            val scorer = norm.forVoice(v, "omi_x.wav", time)!!
+            for (p in 1L..4L) {
+                val ref = Reference(100L * (k + 1) + p, p, r(), "omi_${1792000000 + p}.wav")
+                val want = AsNorm.normalized(0.5, AsNorm.voiceStat(v, c, "omi_x.wav", time, p)!!, AsNorm.printStat(ref.vec, c, ref.clip, p)!!)
+                assertEquals(want, scorer.score(0.5, ref), 1e-12)
+            }
+        }
+    }
+
+    @Test fun `a person's self-cluster no longer crushes the scores against them`() {
+        // Person 2's print, and twenty unnamed copies of it (their self-cluster) among thirty strangers.
+        val p2 = axis(1, 0.0)
+        val copies = List(20) { Matching.unit(FloatArray(40).also { a -> a[1] = 1f; a[2 + it] = 0.3f }) }
+        val strangers = List(30) { axis(2 + it, 0.1) }
+        val vecs = copies + strangers
+        val c = AsNorm.Cohort(vecs, List(vecs.size) { "omi_${1791100000 + it}.wav" }, DoubleArray(vecs.size) { 1791100000.0 + it },
+            LongArray(vecs.size) { if (it < 20) 2L else -1L })
+        val voice = Matching.unit(FloatArray(40).also { it[1] = 1f; it[39] = 0.5f })
+        val ref = Reference(1, 2, p2, "omi_1792000000.wav")
+        val raw = Matching.dot(voice, p2)
+        val now = AsNorm.Norm(c).forVoice(voice, "omi_1793000000.wav", 1793000000.0)!!.score(raw, ref)
+        val before = AsNorm.Norm(AsNorm.Cohort(c.vecs, c.clips, c.times)).forVoice(voice, "omi_1793000000.wav", 1793000000.0)!!.score(raw, ref)
+        assertTrue("before $before, now $now", now > before + 0.2)
+        assertTrue("now $now", now >= 0.64)       // MATCH_LOW of ReDimNet2
+        // Against anyone else, the copies stay in.
+        assertEquals(before, AsNorm.Norm(c).forVoice(voice, "omi_1793000000.wav", 1793000000.0)!!.score(raw, ref.copy(voiceprintId = 2, personId = 3)), 1e-12)
     }
 }

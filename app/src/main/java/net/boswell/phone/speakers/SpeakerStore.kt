@@ -177,18 +177,20 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
     /**
      * Normalization (AsNorm) for matching against [named] with [field] as the
      * unnamed voices, or null with another model. The cohort is made again
-     * when the named voiceprints, the owner or the model change, or when the
-     * unnamed voices have changed by more than [COHORT_DRIFT] of it since;
-     * in between, a voiceprint is scored against the cohort the first time
-     * it's met, and kept. One cohort serves every SpeakerStore of the app.
+     * when the named voiceprints, the owner or the model change, when an
+     * unnamed voiceprint moves to another cluster (a self-cluster may come or
+     * go: AsNorm.SELF_CLUSTER_PRINTS), or when the unnamed voices have been
+     * added or gone by more than [COHORT_DRIFT] of it since; in between, a
+     * voiceprint is scored against the cohort the first time it's met, and
+     * kept. One cohort serves every SpeakerStore of the app.
      */
     fun norm(named: List<Matching.Reference> = refs(named = true), field: List<Matching.Reference> = unnamedField()): AsNorm.Norm? {
         if (Matching.model != net.boswell.phone.diarize.VoiceModel.SPEAKER_ID) return null
         val key = Triple(Matching.model.id, Matching.owner, named.map { it.voiceprintId to it.personId }.hashCode())
-        val ids = field.mapTo(HashSet()) { it.voiceprintId }
+        val ids = field.associateTo(HashMap()) { it.voiceprintId to it.personId }
         val c = cached
-        if (c != null && c.key == key) {
-            val changed = c.field.count { it !in ids } + ids.count { it !in c.field }
+        if (c != null && c.key == key && c.field.all { (id, cluster) -> ids[id].let { it == null || it == cluster } }) {
+            val changed = c.field.keys.count { it !in ids } + ids.keys.count { it !in c.field }
             if (changed <= COHORT_DRIFT * c.field.size) return c.norm
         }
         return AsNorm.Norm(AsNorm.cohort(named, field, Matching.owner)).also { cached = Cached(key, ids, it) }
@@ -728,7 +730,7 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         private const val LABEL_CHECKS = "CREATE TABLE IF NOT EXISTS label_checks (key TEXT PRIMARY KEY, created REAL)"
         /** Unnamed voices changed (added or gone) since the cohort was made, as a share of it, before it's made again. */
         const val COHORT_DRIFT = 0.05
-        private class Cached(val key: Triple<String, Long?, Int>, val field: Set<Long>, val norm: AsNorm.Norm)
+        private class Cached(val key: Triple<String, Long?, Int>, val field: Map<Long, Long>, val norm: AsNorm.Norm)
         @Volatile private var cached: Cached? = null
         /** The TTS voice of Boswell prints learned before any answer was spoken (BoswellPerson): whichever speaks first. */
         const val UNKNOWN_VOICE = "?"

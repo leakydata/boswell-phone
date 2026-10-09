@@ -368,6 +368,10 @@ private fun WhoSheet(vm: ArchiveViewModel, s: ConversationState, key: String, on
                     Icon(Icons.Filled.PlayArrow, null); Text("Hear")
                 }
             }
+            // First, where a thumb finds it: while labeling, TV is the most common answer.
+            if (!v.media) OutlinedButton(onClick = { vm.markMedia(conv.id, key); done() }, modifier = Modifier.fillMaxWidth()) {
+                Text("It's a TV, video or radio")
+            }
             if (v.named && v.personId != null) {
                 TextButton(onClick = { onPerson(v.personId) }) { Text("Open ${v.name}") }
                 HorizontalDivider()
@@ -393,7 +397,6 @@ private fun WhoSheet(vm: ArchiveViewModel, s: ConversationState, key: String, on
                 Spacer(Modifier.width(8.dp))
                 Button(enabled = name.isNotBlank(), onClick = { vm.nameVoice(conv.id, key, name.trim()); done() }) { Text("Save") }
             }
-            if (!v.media) TextButton(onClick = { vm.markMedia(conv.id, key); done() }) { Text("It's a TV, video or radio") }
             // Two sources heard as one voice (you and a TV): only worth offering with more than one part.
             if (s.lines.filter { it.speaker == key && it.label != null }.distinctBy { it.clip to it.label }.size >= 2)
                 TextButton(onClick = onSplit) { Text("Split this voice…") }

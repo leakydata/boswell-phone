@@ -1,5 +1,6 @@
 package net.boswell.phone
 
+import net.boswell.phone.speakers.AsNorm
 import net.boswell.phone.speakers.Matching
 import net.boswell.phone.speakers.Matching.Decision
 import net.boswell.phone.speakers.Matching.Reference
@@ -158,5 +159,33 @@ class MatchingTest {
             assertEquals(Decision.MATCHED, Matching.match(voice, clear, field, snr = 8.0).decision)
             assertEquals(Decision.UNCERTAIN, Matching.match(voice, clear, field, snr = 7.9).decision)
         }
+    }
+
+    @Test fun `a person's self-cluster no longer keeps their voices from matching`() {
+        fun u(vararg at: Pair<Int, Float>) = Matching.unit(FloatArray(40).also { a -> at.forEach { (i, x) -> a[i] = x } })
+        // Owner 1 (axis 38), person 2 (axis 1), person 3 (axis 0).
+        val named = listOf(Reference(1, 1, u(38 to 1f), "o.wav"), Reference(2, 2, u(1 to 1f), "p.wav"), Reference(3, 3, u(0 to 1f), "q.wav"))
+        // Twenty unnamed copies of person 2 (0.96 like them), thirty strangers 0.1 like person 3.
+        fun copies(clusterOf: (Int) -> Long) = List(20) { Reference(100L + it, clusterOf(it), u(1 to 1f, 2 + it to 0.3f), "c$it.wav") }
+        val strangers = List(30) { Reference(200L + it, 500L + it, u(0 to 0.1f, 2 + it to 0.995f), "s$it.wav") }
+        val voice = u(1 to 1f, 39 to 0.5f)
+        fun match(field: List<Reference>) = asOwnerResult(1) {
+            val norm = AsNorm.Norm(AsNorm.cohort(named, field, 1))
+            Matching.match(voice, named, field, 10.0, null, norm.forVoice(voice, "v.wav", null))
+        }
+        // One cluster of twenty: person 2's self-cluster, out of their cohort.
+        val one = match(copies { 10L } + strangers)
+        assertEquals(Decision.MATCHED, one.decision)
+        assertEquals(2L, one.personId)
+        // The same voices in clusters of four are no self-cluster: they stay, and crush the score.
+        val split = match(copies { 10L + it / 4 } + strangers)
+        val two = split.candidates.first { it.personId == 2L }.score
+        assert(split.personId != 2L && two < one.score - 0.2) { "split $split, one ${one.score}" }
+    }
+
+    private fun asOwnerResult(owner: Long?, block: () -> Matching.Result): Matching.Result {
+        var r: Matching.Result? = null
+        asOwner(owner) { r = block() }
+        return r!!
     }
 }
