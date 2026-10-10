@@ -23,6 +23,13 @@ object BoswellPerson {
     /** Returns how many people were turned into Boswell. */
     @Synchronized
     fun convert(c: Context): Int {
+        // Nothing to do -- the usual case -- needs no turn at the heavy work.
+        val none = SpeakerStore(c).use { s -> s.boswellNamed(net.boswell.phone.assistant.AssistantPrefs.owner(c)?.let(s::resolve)).isEmpty() }
+        if (none) return 0
+        return net.boswell.phone.HeavyWork.run("Boswell's voice as a person") { convertNow(c) }
+    }
+
+    private fun convertNow(c: Context): Int {
         val store = SpeakerStore(c)
         try {
             val owner = net.boswell.phone.assistant.AssistantPrefs.owner(c)?.let(store::resolve)

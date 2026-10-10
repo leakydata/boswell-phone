@@ -257,6 +257,8 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun preparePlayer(conversation: Long) {
         releasePlayer()
         val clips = withContext(Dispatchers.IO) { archive.clipsOf(conversation) }.filter { it.audio }
+        // Another conversation opened while these were read made a player too: one at a time, or the first is never let go.
+        releasePlayer()
         playerClips = clips
         val dir = CaptureService.clipsDir(getApplication())
         val p = ExoPlayer.Builder(getApplication()).build()

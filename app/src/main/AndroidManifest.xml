@@ -44,6 +44,10 @@
         android:theme="@style/Theme.Boswell"
         tools:targetApi="s">
 
+        <!-- The release build too: lets `adb shell` tools (Perfetto's java_hprof, docs/heapdump.sh)
+             take a Java heap dump of the app. Debugging stays off; nothing else can attach. -->
+        <profileable android:shell="true" />
+
         <activity
             android:name=".ui.MainActivity"
             android:exported="true">

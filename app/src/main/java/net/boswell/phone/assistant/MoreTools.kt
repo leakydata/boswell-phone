@@ -140,7 +140,9 @@ class MoreTools(private val context: Context, private val userWords: String? = n
         archive.readableDatabase.rawQuery("""
             SELECT l.id, l.t0, l.text, s.conv_key FROM lines l LEFT JOIN clip_speakers s ON s.clip = l.clip AND s.label = l.label
             WHERE l.t0 >= ? ORDER BY l.t0""", arrayOf(since.toString())).use { c ->
-            while (c.moveToNext()) {
+            // Past what the model is given (Assistant.TOOL_RESULT_CHARS) nothing more is read: a month of
+            // "any" details is every number said, megabytes of text to be cut to 12,000 characters.
+            while (out.length < Assistant.TOOL_RESULT_CHARS && c.moveToNext()) {
                 val text = c.getString(2)
                 for (k in kinds) for (m in (patterns[k] ?: continue).findAll(text)) {
                     if (k == "number" && m.value.filter { it.isDigit() }.length < 2) continue

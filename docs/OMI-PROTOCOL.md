@@ -44,9 +44,12 @@ big-endian.**
 <- 0x02 read:u64 write:u64 cap:u32 dropped:u64 pktbytes:u16
 
 -> 0x11 start:u64 [count:u32]        read
-<- 0x05                              read begins
+<- 0x05 start:u64 count:u32          read begins (13 bytes; normal, not an error)
 <- 0x03 <payload>                    ... repeated
 <- 0x04 status:u8 next:u64           done
+
+-> 0x03                              stop the read in progress
+<- 0x01 status:u8                    acknowledged
 
 -> 0x12 seq:u64                      mark read up to here
 <- 0x01 status:u8                    acknowledged
@@ -82,8 +85,19 @@ moment and in short slices (`capture/RangeFetch.kt`).
 subscription) of four little-endian u32: `used_bytes unread_packets
 free_bytes rtc_valid` (`storage.c:605-617`). The firmware refreshes these
 every 250 ms while connected and idle (`storage.c:787`), so a read right after
-connecting can lag while the card remounts. Live mode reads it once before
-subscribing to audio and once more at the first link check.
+connecting can lag while the card remounts. Live mode reads it right after
+subscribing to audio (a status read that hangs must not cost the subscription)
+and once more at the first link check.
+
+**Stopping a read.** The firmware auto-advances its read pointer as the radio
+confirms data (`STORAGE_ADVANCE_CHECKPOINT_MS`, 2 s), and on a disconnect
+mid-read it advances over everything the radio delivered
+(`sync_checkpoint_advance(true)`). A phone that gives up on a stalled read and
+then closes loses whatever arrived after it stopped listening. `0x03`
+(`CMD_STOP_SYNC`) resets the transfer without that checkpoint, so the phone
+sends it before giving up, keeps what still arrives, and advances explicitly
+over what it kept. The firmware never times out a read itself: on a link that
+stalls, `write_to_gatt` waits for TX buffers indefinitely.
 
 ## The stored packet
 
@@ -186,6 +200,16 @@ gives the radio N minutes out of every M, you must pull M minutes of audio in
 N minutes of transfer or the backlog grows forever. On the desktop's 12-minute
 sync inside a 32-minute cycle, that break-even is about **13 kB/s** — healthy
 links have 5–7× headroom, a weak one does not clear it at all.
+
+## Android refuses the next GATT request
+
+Android runs one GATT request per connection and refuses the next until the
+one before calls back; it waits up to 30 s (the ATT timeout) for that answer.
+An app timeout shorter than that leaves the stack busy, so every request after
+it is "refused" on a link that is still up. A closed connection refuses too,
+forever. The phone waits out a request it timed out (`omi/GattPolicy.kt`),
+fails at once when the link is known to be down, and closes and reconnects
+after three refusals in a row.
 
 ## Reading signal strength correctly
 

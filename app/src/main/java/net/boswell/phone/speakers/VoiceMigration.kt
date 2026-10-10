@@ -67,6 +67,10 @@ object VoiceMigration {
     fun run(c: Context, isStopped: () -> Boolean = { false }, progress: (Int, Int) -> Unit = { _, _ -> }): String {
         val models = ModelStore(c)
         if (!needed(c, models)) return "nothing to do"
+        return net.boswell.phone.HeavyWork.run("voice update") { runNow(c, models, isStopped, progress) }
+    }
+
+    private fun runNow(c: Context, models: ModelStore, isStopped: () -> Boolean, progress: (Int, Int) -> Unit): String {
         val target = VoiceModels.wanted(c)
         val dim = target.dim
         val clips = CaptureService.clipsDir(c)

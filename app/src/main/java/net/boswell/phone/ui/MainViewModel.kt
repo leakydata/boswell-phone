@@ -22,10 +22,8 @@ import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
 import net.boswell.phone.capture.CaptureRepository
 import net.boswell.phone.capture.CaptureService
-import net.boswell.phone.capture.ClipTimes
 import net.boswell.phone.capture.logged
 import net.boswell.phone.models.ModelCatalog
 import net.boswell.phone.models.ModelDownloadWorker
@@ -35,23 +33,10 @@ import net.boswell.phone.models.ModelStore
 import net.boswell.phone.omi.OmiUuids
 import net.boswell.phone.process.ProcessingRepository
 import net.boswell.phone.process.ProcessingWorker
-import net.boswell.phone.process.Transcript
-import net.boswell.phone.process.TranscriptJson
 import net.boswell.phone.speakers.SpeakerStore
 import java.io.File
 
 data class FoundDevice(val address: String, val name: String?, val advertisedRssi: Int)
-
-data class Line(val who: String, val named: Boolean, val text: String)
-data class TranscriptView(val lines: List<Line>, val error: String? = null)
-
-data class ClipEntry(
-    val file: File,
-    val seconds: Double,
-    val endedMillis: Long,
-    val timeKnown: Boolean,
-    val transcript: TranscriptView? = null,
-)
 
 data class ModelRow(val spec: ModelSpec, val installed: Boolean, val partialBytes: Long)
 data class PersonRow(val id: Long, val name: String?, val voiceprints: Int, val seconds: Double)
@@ -60,7 +45,6 @@ data class UiState(
     val savedAddress: String? = null,
     val scanning: Boolean = false,
     val found: List<FoundDevice> = emptyList(),
-    val clips: List<ClipEntry> = emptyList(),
     val playing: File? = null,
     val models: List<ModelRow> = emptyList(),
     val modelsReady: Boolean = false,
@@ -91,7 +75,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val speakers = SpeakerStore(app)
     private var scanJob: Job? = null
     private var player: MediaPlayer? = null
-    private val json = Json { ignoreUnknownKeys = true }
 
     init {
         // Opening the app brings Live capture back if it should be running and isn't.
@@ -113,8 +96,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         net.boswell.phone.speakers.SnrBackfill.schedule(getApplication())
         net.boswell.phone.process.CatchUp.schedule(getApplication())
         refreshAll()
-        viewModelScope.launch { capture.distinctUntilChangedBy { it.clipsWritten }.collect { refreshClips() } }
-        viewModelScope.launch { ProcessingRepository.state.distinctUntilChangedBy { it.done to it.running }.collect { refreshClips(); refreshPeople() } }
+        viewModelScope.launch { ProcessingRepository.state.distinctUntilChangedBy { it.done to it.running }.collect { refreshPeople() } }
         viewModelScope.launch { ModelProgressRepository.state.collect { refreshModels() } }
         // Anything recorded while processing could not run gets its turn now.
         if (_ui.value.modelsReady) ProcessingWorker.enqueue(app)
@@ -123,7 +105,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshAll() {
         refreshSync()
         refreshModels()
-        refreshClips()
         refreshPeople()
     }
 
@@ -279,45 +260,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // --- Clips and transcripts ---------------------------------------------
-
-    fun refreshClips() {
-        viewModelScope.launch {
-            val clips = withContext(Dispatchers.IO) { loadClips() }
-            _ui.update { it.copy(clips = clips) }
-        }
-    }
-
-    private fun loadClips(): List<ClipEntry> {
-        val dir = CaptureService.clipsDir(getApplication())
-        val tdir = ProcessingWorker.transcriptsDir(getApplication())
-        val names = HashMap<Long, String?>()
-        fun nameOf(pid: Long) = names.getOrPut(pid) { speakers.nameOf(pid) }
-        return dir.listFiles { f -> f.extension == "json" }.orEmpty().map { File(dir, it.nameWithoutExtension + ".wav") }.map { wav ->
-            val times = runCatching {
-                json.decodeFromString(ClipTimes.serializer(), File(dir, wav.nameWithoutExtension + ".json").readText())
-            }.getOrNull()
-            ClipEntry(
-                file = wav,
-                seconds = times?.seconds ?: 0.0,
-                endedMillis = ((times?.ended ?: (File(dir, wav.nameWithoutExtension + ".json").lastModified() / 1000.0)) * 1000).toLong(),
-                timeKnown = times?.timeKnown ?: false,
-                transcript = File(tdir, wav.nameWithoutExtension + ".json").takeIf { it.exists() }?.let { f ->
-                    val text = f.readText()
-                    runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), text) }.fold(
-                        onSuccess = { t -> TranscriptView(t.segments.map { s ->
-                            val id = s.speaker?.let { t.speakers[it] }
-                            // The current name, not the one at transcription time:
-                            // naming a voice later relabels every clip it is in.
-                            val name = id?.personId?.let(::nameOf) ?: id?.name
-                            val who = name ?: id?.personId?.let { "Unknown #$it" } ?: s.speaker?.let { "Voice ${it.takeLast(2).toInt() + 1}" } ?: "?"
-                            Line(who, name != null, s.text)
-                        }) },
-                        onFailure = { TranscriptView(emptyList(), error = Regex("\"error\":\"([^\"]*)").find(text)?.groupValues?.get(1) ?: "unreadable") },
-                    )
-                },
-            )
-        }.sortedByDescending { it.endedMillis }
-    }
+    // The list of every clip with its transcript that used to be kept here was
+    // shown by no screen, and was read again in full -- every sidecar and every
+    // transcript, 21,000 of each -- whenever a clip was written or processing
+    // moved on, each time in a new coroutine: during a download, many full
+    // reads at once (the OutOfMemoryErrors of 2026-10-09). The archive's index
+    // (ArchiveViewModel) is what the screens show.
 
     fun transcribeNow() = ProcessingWorker.enqueue(getApplication())
 
@@ -350,25 +298,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { speakers.name(id, name) }
             refreshPeople()
-            refreshClips()
-        }
-    }
-
-    /** Play the most recent stretch of speech filed under this person, to answer "who is this?". */
-    fun playSample(personId: Long) {
-        viewModelScope.launch {
-            val hit = withContext(Dispatchers.IO) {
-                val tdir = ProcessingWorker.transcriptsDir(getApplication())
-                val clipsDir = CaptureService.clipsDir(getApplication())
-                tdir.listFiles { f -> f.extension == "json" }.orEmpty().sortedByDescending { it.name }.firstNotNullOfOrNull { f ->
-                    val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.getOrNull()
-                        ?: return@firstNotNullOfOrNull null
-                    val label = t.speakers.entries.firstOrNull { it.value.personId == personId }?.key ?: return@firstNotNullOfOrNull null
-                    val start = t.segments.firstOrNull { it.speaker == label }?.start ?: 0.0
-                    (net.boswell.phone.audio.ClipAudio.file(clipsDir, t.clip) ?: return@firstNotNullOfOrNull null) to start
-                }
-            } ?: return@launch
-            togglePlay(hit.first, hit.second.coerceAtLeast(0.01))
         }
     }
 

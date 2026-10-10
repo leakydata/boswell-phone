@@ -248,9 +248,6 @@ class CaptureService : LifecycleService() {
         syncClock(conn)
         applyLed(conn)
         checkCharger()
-        // What it stored while away, read before audio starts: the Omi stores
-        // only while nothing is connected, so this is the whole backlog.
-        readStored(conn)
 
         val decoder = OpusFrameDecoder(OmiUuids.SAMPLE_RATE, frameSamples)
         val run = RunTracker()
@@ -310,6 +307,11 @@ class CaptureService : LifecycleService() {
         val buttonOk = subscribeButton(conn)
         CaptureRepository.update { it.copy(buttonReady = buttonOk) }
         if (buttonOk) CaptureRepository.log("button ready: tap to ask")
+        // What it stored while away: the Omi stores only while nothing is
+        // connected, so this is the whole backlog. Read after audio, never
+        // before: a status read that hangs must cost nothing but itself (on
+        // 10-10 a fetch's reconnect lost its audio subscription behind one).
+        readStored(conn)
         val began = System.currentTimeMillis()
         streamingSince = began
         // Connected and subscribed is "streaming" even before a frame arrives:
@@ -322,6 +324,7 @@ class CaptureService : LifecycleService() {
             var lastNotes = conn.notifications
             var lastFrames = CaptureRepository.state.value.frames
             var failedChecks = 0
+            var weakNoted = false
             while (!conn.disconnected.isCompleted) {
                 delay(1_000)
                 tick++
@@ -364,7 +367,14 @@ class CaptureService : LifecycleService() {
                     if (ok && tick == LINK_CHECK_SECONDS && !RangeFetch.worth(CaptureRepository.state.value.stored?.value)) readStored(conn)
                 }
                 if (fetchWanted() && RangeFetch.due(now, began, CaptureRepository.state.value.lastAudioMillis, fetchRetryAt, busy())) {
-                    throw FetchBacklog()
+                    val rssi = CaptureRepository.state.value.rssi
+                    if (RangeFetch.linkOk(now, rssi?.value, rssi?.atMillis)) throw FetchBacklog()
+                    if (!weakNoted) {
+                        weakNoted = true
+                        CaptureRepository.log("not fetching what the Omi stored: the link is weak (${rssi?.value ?: "?"} dBm); it waits for a better one or the charger")
+                    }
+                } else if (weakNoted && CaptureRepository.state.value.rssi.let { RangeFetch.linkOk(now, it?.value, it?.atMillis) }) {
+                    weakNoted = false
                 }
                 if (tick % net.boswell.phone.assistant.Watcher.EVERY_SECONDS == 0 && watching?.isActive != true) {
                     watching = lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { timed("watcher", 30_000) { watcher.tick() } }.logged("watcher") }
@@ -385,7 +395,7 @@ class CaptureService : LifecycleService() {
                     notify("${if (quiet) "Listening (quiet)" else "Recording"} · ${st.clipsWritten} clips · battery ${st.battery?.value ?: "?"}%$owed")
                 }
             }
-            throw IllegalStateException("device disconnected")
+            throw IllegalStateException(conn.lostWhy?.let { "device disconnected: $it" } ?: "device disconnected")
         } finally {
             packets.close()
             consumer.join()
@@ -641,14 +651,21 @@ class CaptureService : LifecycleService() {
 
     private class VisitResult(val text: String, val failed: Boolean, val emptied: Boolean, val took: Long = 0, val bytesPerSecond: Double = 0.0)
 
-    /** One sync visit; never throws except to stop. [progress] is the notification text while it downloads. */
+    /**
+     * One sync visit; never throws except to stop. [progress] is the notification text while it downloads.
+     * A [brief] visit (a slice between live sessions) skips the LED and mic gain, which live just set, and
+     * gives up on a link slower than [minBytesPerSecond] or silent for [idleMs].
+     */
     private suspend fun syncVisit(address: String, maxSeconds: Long = VISIT_SECONDS,
+                                  brief: Boolean = false, minBytesPerSecond: Double = 0.0, idleMs: Long = 20_000L,
                                   progress: (net.boswell.phone.sync.SyncProgress) -> String = { p -> "Syncing · ${p.took * 100 / p.target.coerceAtLeast(1)}%" }): VisitResult {
         val deviceId = address.lowercase().filter { it in "0123456789abcdef" }
         var r: VisitResult
         try {
             // Anything a previous visit spooled but did not convert.
             withContext(audioThread) { drainSpools(deviceId) }
+            // The connection before this one was closed a moment ago; give the stack a beat to finish letting go.
+            delay(SETTLE_MS)
             val device = omiDevice(getSystemService(BluetoothManager::class.java).adapter, address)
             CaptureRepository.update { it.copy(link = Link.SYNCING, sync = SyncStatus(0, 0, 0.0, "connecting")) }
             CaptureRepository.log("sync: connecting to $address")
@@ -660,7 +677,7 @@ class CaptureService : LifecycleService() {
             CaptureRepository.update { it.copy(device = info) }
             readVolatile(conn)
             syncClock(conn)
-            applyLed(conn)
+            if (!brief) applyLed(conn)
             CaptureRepository.state.value.rssi?.let { CaptureRepository.log("sync: link ${it.value} dBm") }
             conn.preferThroughput()
             delay(500)
@@ -674,7 +691,7 @@ class CaptureService : LifecycleService() {
                     rate = p.bytesPerSecond
                     CaptureRepository.update { it.copy(sync = SyncStatus(p.took, p.target, p.bytesPerSecond, "downloading")) }
                     notify(progress(p))
-                })
+                }, minBytesPerSecond = minBytesPerSecond, idleMs = idleMs)
             conn.close()
             connection = null
             noteStored((outcome.waiting - outcome.took).coerceAtLeast(0))
@@ -687,7 +704,8 @@ class CaptureService : LifecycleService() {
             CaptureRepository.log("sync: $text")
             if (clips > 0) net.boswell.phone.process.ProcessingWorker.enqueue(this@CaptureService)
             r = VisitResult(text, failed = outcome.stoppedEarly != null && outcome.took == 0L,
-                emptied = outcome.waiting == 0L || outcome.took >= outcome.waiting, took = outcome.took, bytesPerSecond = rate)
+                emptied = outcome.waiting == 0L || outcome.took >= outcome.waiting, took = outcome.took,
+                bytesPerSecond = rate)
         } catch (e: CancellationException) {
             if (!currentCoroutineContext().isActive) throw e
             r = VisitResult("could not reach the Omi (${e.message})", failed = true, emptied = false)
@@ -792,7 +810,7 @@ class CaptureService : LifecycleService() {
     /** The stored backlog, as the Omi reports it. Best effort: a failed or odd read leaves the last figure. */
     private suspend fun readStored(conn: OmiConnection) {
         if (!conn.has(OmiUuids.STORAGE_STATUS)) return
-        val s = runCatching { net.boswell.phone.omi.StorageStatus.parse(conn.read(OmiUuids.STORAGE_STATUS)) }.getOrNull() ?: return
+        val s = runCatching { net.boswell.phone.omi.StorageStatus.parse(conn.read(OmiUuids.STORAGE_STATUS, timeoutMs = 3_000)) }.getOrNull() ?: return
         noteStored(s.unreadPackets)
         if (s.unreadPackets > 0) CaptureRepository.log("the Omi holds %d stored packets (≈ %.1f min)".format(s.unreadPackets, RangeFetch.seconds(s.unreadPackets) / 60))
     }
@@ -806,16 +824,20 @@ class CaptureService : LifecycleService() {
         val packets = CaptureRepository.state.value.stored?.value ?: 0L
         CaptureRepository.log("back in range: fetching what the Omi stored (≈ %.1f min)".format(RangeFetch.seconds(packets) / 60))
         notify(fetchText(packets))
-        val r = syncVisit(address, RangeFetch.VISIT_SECONDS) { p -> fetchText((p.target - p.took).coerceAtLeast(0)) }
+        val r = syncVisit(address, RangeFetch.VISIT_SECONDS, brief = true,
+            minBytesPerSecond = RangeFetch.SLOW_BYTES_PER_SECOND, idleMs = RangeFetch.IDLE_MS) { p -> fetchText((p.target - p.took).coerceAtLeast(0)) }
         val next = RangeFetch.after(System.currentTimeMillis(), fetchFails, r.emptied, r.failed, r.took, r.bytesPerSecond)
         fetchFails = next.fails
         fetchRetryAt = next.retryAt
-        CaptureRepository.log("out of range fetch: ${r.text}" + when {
+        val rssi = CaptureRepository.state.value.rssi?.value
+        CaptureRepository.log("out of range fetch: ${r.text} at %.1f kB/s, ${rssi ?: "?"} dBm".format(r.bytesPerSecond / 1000) + when {
             r.emptied -> ""
             next.fails > 0 -> "; trying again in ${(next.retryAt - System.currentTimeMillis() + 59_999) / 60_000} min"
             else -> "; the rest at a quiet moment after ${(next.retryAt - System.currentTimeMillis() + 59_999) / 60_000} min of live"
         })
         net.boswell.phone.sync.Modes.recordSync(this, "back in range: ${r.text}")
+        // Back to live next; the fetch's connection was closed a moment ago.
+        delay(SETTLE_MS)
     }
 
     /** Convert every spool file into clips. Returns how many clips were made. */
@@ -879,6 +901,8 @@ class CaptureService : LifecycleService() {
         private const val LISTENING_ID = 77
         private const val BACKOFF_MIN_MS = 5_000L
         private const val BACKOFF_MAX_MS = 120_000L
+        /** Between closing one connection and opening the next: Android finishes a disconnect after close() returns. */
+        private const val SETTLE_MS = 1_000L
 
         fun clipsDir(context: Context) = File(context.filesDir, "clips").apply { mkdirs() }
 

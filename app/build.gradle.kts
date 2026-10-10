@@ -9,8 +9,8 @@ plugins {
 }
 
 android {
-    // Lets a -Dparity.* property reach the parity test (see OpusParityTest).
-    testOptions.unitTests.all { t -> System.getProperties().filterKeys { (it as String).startsWith("parity.") || (it as String).startsWith("diar.") || (it as String).startsWith("llm.") }.forEach { (k, v) -> t.systemProperty(k as String, v) } }
+    // Lets a -Dparity.* property reach the parity test (see OpusParityTest), and -Dmem.* the memory one (MemoryPeaksTest).
+    testOptions.unitTests.all { t -> System.getProperties().filterKeys { (it as String).startsWith("parity.") || (it as String).startsWith("diar.") || (it as String).startsWith("llm.") || (it as String).startsWith("mem.") }.forEach { (k, v) -> t.systemProperty(k as String, v) } }
 
     namespace = "net.boswell.phone"
     // android-37.1 is what the SDK has installed; AndroidX 2026.09 needs 37.
@@ -24,8 +24,8 @@ android {
         // callbacks are both there, so there is one code path, not two.
         minSdk = 33
         targetSdk = 36
-        versionCode = 23
-        versionName = "0.10.0"
+        versionCode = 24
+        versionName = "0.10.1"
         // The only ABI anything ships for. Models run on-device and a 32-bit
         // or x86 build would be a build nobody runs.
         ndk { abiFilters += listOf("arm64-v8a") }
@@ -80,6 +80,8 @@ android {
         unitTests.isReturnDefaultValues = true
         // Robolectric (the archive's tests) reaches into FileDescriptor, closed by default since Java 17.
         unitTests.all { it.jvmArgs("--add-opens=java.base/java.io=ALL-UNNAMED", "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED") }
+        // MemoryPeaksTest holds a made-up archive of the owner's size, and the old clip list four times over.
+        unitTests.all { it.maxHeapSize = "3g" }
     }
 }
 

@@ -48,6 +48,8 @@ object Email {
 
     private fun p(c: Context) = c.getSharedPreferences("boswell", Context.MODE_PRIVATE)
     const val PASSWORD = "email_app_password"
+    /** Search matches looked at for read_email: the newest this many (it shows at most 15). */
+    private const val SEARCH_CAP = 200
 
     /** The usual servers for an address's provider; anything else guesses imap./smtp. on its domain. */
     fun guess(address: String): Account {
@@ -181,7 +183,10 @@ object Email {
             val msgs: List<Message> = if (terms.isEmpty()) {
                 val n = f.messageCount
                 if (n == 0) emptyList() else f.getMessages((n - limit + 1).coerceAtLeast(1), n).toList()
-            } else f.search(if (terms.size == 1) terms[0] else AndTerm(terms.toTypedArray())).toList()
+            } else f.search(if (terms.size == 1) terms[0] else AndTerm(terms.toTypedArray()))
+                // A search of a year, or of a frequent sender, can match thousands, and sorting them by date
+                // fetches every one's headers into memory. The newest come last in the mailbox: only those are looked at.
+                .sortedBy { it.messageNumber }.takeLast(SEARCH_CAP)
             val newest = msgs.sortedByDescending { it.receivedDate ?: it.sentDate }.take(limit)
             if (newest.isEmpty()) return@inbox "no messages" + if (terms.isNotEmpty()) " matching that" else ""
             newest.joinToString("\n\n") { m ->

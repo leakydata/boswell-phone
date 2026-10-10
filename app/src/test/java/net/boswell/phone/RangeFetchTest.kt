@@ -82,11 +82,47 @@ class RangeFetchTest {
         assertEquals(RangeFetch.Next(0, 0L), RangeFetch.after(9, 3, emptied = true, failed = false, took = 10, bytesPerSecond = 80_000.0))
     }
 
-    @Test fun a_partial_slice_gives_live_a_turn_and_a_weak_link_a_longer_one() {
+    @Test fun a_partial_slice_gives_live_a_long_turn_and_a_weak_link_backs_off() {
         val fast = RangeFetch.after(0, 1, emptied = false, failed = false, took = 5_000, bytesPerSecond = 80_000.0)
         assertEquals(RangeFetch.Next(0, RangeFetch.BETWEEN_SLICES_MS), fast)
-        val slow = RangeFetch.after(0, 1, emptied = false, failed = false, took = 500, bytesPerSecond = 3_000.0)
-        assertEquals(RangeFetch.Next(0, RangeFetch.RETRY_MIN_MS), slow)
+        // A slow slice counts like a failure: a weak link usually stays weak.
+        val slow = RangeFetch.after(0, 0, emptied = false, failed = false, took = 500, bytesPerSecond = 3_000.0)
+        assertEquals(RangeFetch.Next(1, RangeFetch.RETRY_MIN_MS), slow)
+        val again = RangeFetch.after(0, slow.fails, emptied = false, failed = false, took = 200, bytesPerSecond = 4_800.0)
+        assertEquals(RangeFetch.Next(2, 2 * RangeFetch.RETRY_MIN_MS), again)
+        // A good slice after slow ones starts the count over.
+        assertEquals(0, RangeFetch.after(0, again.fails, emptied = false, failed = false, took = 9_000, bytesPerSecond = 60_000.0).fails)
+    }
+
+    @Test fun the_first_real_run_would_now_be_called_slow() {
+        // 10-10: batches at 4.8 and 28 kB/s, 1139 packets in about 84 s.
+        val average = 1139 * Offload.STORED_PACKET_BYTES / 84.0
+        assertTrue(average < RangeFetch.SLOW_BYTES_PER_SECOND)
+        assertTrue(RangeFetch.after(0, 0, emptied = false, failed = false, took = 1139, bytesPerSecond = average).fails > 0)
+    }
+
+    @Test fun slices_leave_live_most_of_the_time() {
+        val offAir = RangeFetch.VISIT_SECONDS * 1000.0
+        assertTrue(offAir / (offAir + RangeFetch.BETWEEN_SLICES_MS) < 0.10)
+    }
+
+    @Test fun a_weak_link_starts_no_slice() {
+        val now = 10_000_000L
+        assertTrue(RangeFetch.linkOk(now, -60, now - 10_000))
+        assertTrue(RangeFetch.linkOk(now, RangeFetch.WEAK_RSSI_DBM, now - 10_000))
+        assertFalse(RangeFetch.linkOk(now, RangeFetch.WEAK_RSSI_DBM - 1, now - 10_000))
+        assertFalse(RangeFetch.linkOk(now, -84, now))
+    }
+
+    @Test fun an_old_rssi_means_the_reads_are_failing_and_none_lets_the_first_batch_decide() {
+        val now = 10_000_000L
+        assertFalse(RangeFetch.linkOk(now, -60, now - RangeFetch.RSSI_FRESH_MS - 1))
+        assertTrue(RangeFetch.linkOk(now, -60, now - RangeFetch.RSSI_FRESH_MS))
+        assertTrue(RangeFetch.linkOk(now, null, null))
+    }
+
+    @Test fun a_slice_gives_up_on_silence_well_inside_its_window() {
+        assertTrue(RangeFetch.IDLE_MS * 5 <= RangeFetch.VISIT_SECONDS * 1000)
     }
 
     private fun status(used: Long, unread: Long, free: Long, rtc: Long) =

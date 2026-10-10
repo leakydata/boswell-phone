@@ -76,6 +76,10 @@ object SnrBackfill {
     fun run(c: Context, isStopped: () -> Boolean = { false }, progress: (Int, Int) -> Unit = { _, _ -> }): Outcome {
         if (prefs(c).getBoolean(DONE, false)) return Outcome("nothing to do")
         if (VoiceMigration.needed(c)) return Outcome("waiting")
+        return net.boswell.phone.HeavyWork.run("voice levels") { runNow(c, isStopped, progress) }
+    }
+
+    private fun runNow(c: Context, isStopped: () -> Boolean, progress: (Int, Int) -> Unit): Outcome {
         val clips = CaptureService.clipsDir(c)
         var filled = 0; var skipped = 0
         val files = ProcessingWorker.transcriptsDir(c).listFiles { x -> x.extension == "json" }.orEmpty().sortedDescending()

@@ -127,7 +127,7 @@ class Assistant(private val context: Context) {
                 messages += reply.message
                 for (call in reply.toolCalls) {
                     val result = runCatching { runTool(call, archive, speakers, source) }.logged("assistant tool ${call.name}").getOrElse { "error: ${it.message}" }
-                    messages += Llm.toolResult(call.id, result.take(12_000))
+                    messages += Llm.toolResult(call.id, result.take(TOOL_RESULT_CHARS))
                 }
             }
             // Out of rounds: one last turn without tools, answering from what the searches found.
@@ -303,6 +303,12 @@ class Assistant(private val context: Context) {
          * for something not transcribed yet); past this it answers with what it found ([ask]).
          */
         const val MAX_ROUNDS = 30
+        /**
+         * What the model is given of one tool's result. A tool that could make
+         * more (every line of a month) stops making it here instead of building
+         * it all to be cut ([MoreTools] find_details).
+         */
+        const val TOOL_RESULT_CHARS = 12_000
         /** The recent transcript every question comes with: "what did I just say" needs no tool. */
         const val RECENT_MINUTES = 30
         /** Double tap: file what was said, don't chat. */

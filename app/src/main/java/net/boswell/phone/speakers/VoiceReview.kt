@@ -62,7 +62,9 @@ class VoiceReview(private val context: Context) {
      * score), so a recheck no longer reads thousands of transcripts to
      * change a few. Those are rechecked whole, as before, from the file.
      */
-    fun recheck(): Recheck {
+    fun recheck(): Recheck = net.boswell.phone.HeavyWork.run("voice recheck") { recheckNow() }
+
+    private fun recheckNow(): Recheck {
         val store = SpeakerStore(context)
         try {
             var matched = 0
@@ -281,7 +283,9 @@ class VoiceReview(private val context: Context) {
      * called uncertain qualifies (MATCH_LOW and up). Single voices come
      * from the archive's index, not from reading every transcript.
      */
-    fun suggestions(limit: Int = 60): List<Suggestion> {
+    fun suggestions(limit: Int = 60): List<Suggestion> = net.boswell.phone.HeavyWork.run("voice suggestions") { suggestionsNow(limit) }
+
+    private fun suggestionsNow(limit: Int): List<Suggestion> {
         val store = SpeakerStore(context)
         val archive = Archive(context)
         try {

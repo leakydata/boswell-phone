@@ -17,12 +17,11 @@ import java.nio.ByteOrder
  * visits, when nothing is streaming.
  */
 object Offload {
+    /** Stop the read in progress (storage.c CMD_STOP_SYNC); answered with an ack. */
+    const val CMD_STOP: Byte = 0x03
     const val CMD_RING_INFO: Byte = 0x10
     const val CMD_READ: Byte = 0x11
     const val CMD_ADVANCE: Byte = 0x12
-
-    /** Packets per request: large enough that round trips are not the cost, small enough that an interruption loses little. */
-    const val BATCH = 400
 
     val STATUS = mapOf(0 to "ok", 6 to "invalid command", 9 to "storage not ready", 10 to "sequence out of range")
 
@@ -49,6 +48,8 @@ object Offload {
     const val SECONDS_PER_PACKET = 27 * 3600.0 / 1_115_064
 
     fun ringInfoCommand(): ByteArray = byteArrayOf(CMD_RING_INFO)
+
+    fun stopCommand(): ByteArray = byteArrayOf(CMD_STOP)
 }
 
 /**

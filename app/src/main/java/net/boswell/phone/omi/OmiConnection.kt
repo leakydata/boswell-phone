@@ -21,6 +21,8 @@ class GattException(message: String) : Exception(message)
 private const val IDLE_MS = 20_000L
 /** How long to wait for the first reply to a read (the firmware may be waiting on its SD card). */
 private const val FIRST_REPLY_MS = 45_000L
+/** How long to wait for the stop command's answer, and for any data still in flight. */
+private const val STOP_ANSWER_MS = 2_000L
 
 /**
  * One GATT connection to one Omi, with suspend functions over Android's
@@ -55,9 +57,16 @@ class OmiConnection(
     private var gatt: BluetoothGatt? = null
     private var storageNotifying = false
     private val storageMessages = Channel<ByteArray>(Channel.UNLIMITED)
+    /** When an operation of ours timed out with the stack still holding it (GattPolicy); 0: none. */
+    @Volatile private var hungAt = 0L
+    private val refused = RefusedInARow()
 
-    /** Completes with the GATT status when the link goes down, for any reason. */
+    /** Completes with the GATT status when the link goes down, for any reason (-1: closed here, -2: given up on). */
     val disconnected = CompletableDeferred<Int>()
+
+    /** Why the link went down, when it was this side's doing or the stack said so. */
+    @Volatile var lostWhy: String? = null
+        private set
 
     var mtu = 23
         private set
@@ -72,9 +81,13 @@ class OmiConnection(
                 connected.complete(Unit)
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 val e = GattException("disconnected (status $status)")
+                if (lostWhy == null) lostWhy = e.message
                 connected.completeExceptionally(e)
                 pending?.d?.completeExceptionally(e)
                 disconnected.complete(status)
+                // A storage transfer waiting on its next message hears at once,
+                // not after its idle timeout; what already arrived is still read.
+                storageMessages.close()
                 g.close()
             }
         }
@@ -112,6 +125,8 @@ class OmiConnection(
     }
 
     private fun finish(reply: String, status: Int, value: Any?) {
+        // Any answer means the stack has let go of the request it was holding.
+        hungAt = 0L
         val p = pending ?: return
         if (p.expects != reply) {
             android.util.Log.i("Boswell", "late reply ($reply) ignored while waiting for ${p.expects}")
@@ -123,32 +138,52 @@ class OmiConnection(
 
     private suspend fun <T> op(what: String, expects: String, timeoutMs: Long = 5_000, start: (BluetoothGatt) -> Boolean): T =
         opLock.withLock {
-            val g = gatt ?: throw GattException("$what: not connected")
+            // A link that is down refuses everything; say so instead of
+            // retrying each operation for seconds on a connection that is gone.
+            val g = gatt?.takeIf { !disconnected.isCompleted } ?: throw GattException("$what: not connected")
             val d = CompletableDeferred<Any?>()
             pending = Pending(expects, d)
             try {
-                // "Refused" usually means the stack is still finishing an
-                // operation whose callback came late -- common on a weak link.
-                // A short pause and another try beats failing the whole visit.
+                // "Refused" means the stack is still finishing an operation --
+                // one of ours that timed out, whose answer it waits up to 30 s
+                // for (GattPolicy). Wait that out rather than fail this one too.
                 var started = start(g)
+                val until = GattPolicy.retryUntil(System.currentTimeMillis(), hungAt)
                 var tries = 0
-                while (!started && tries++ < 5) {
-                    kotlinx.coroutines.delay(300L * tries)
+                while (!started && System.currentTimeMillis() < until && !disconnected.isCompleted) {
+                    kotlinx.coroutines.delay(GattPolicy.pause(++tries))
                     started = start(g)
                 }
-                if (!started) throw GattException("$what: refused by the stack")
+                if (!started) {
+                    if (disconnected.isCompleted) throw GattException("$what: not connected")
+                    if (refused.refused()) giveUp("${refused.count} operations in a row refused by the stack")
+                    throw GattException("$what: refused by the stack")
+                }
+                refused.taken()
                 @Suppress("UNCHECKED_CAST")
                 // A timeout here is a failed operation, not a cancellation: as a
                 // CancellationException it would silently end the caller's
                 // reconnect loop, which is exactly how capture once stalled.
                 val done = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) { d.await(); true }
-                    ?: throw GattException("$what: timed out after ${timeoutMs / 1000}s")
-                check(done)
+                if (done == null) {
+                    hungAt = System.currentTimeMillis()
+                    throw GattException("$what: timed out after ${timeoutMs / 1000}s")
+                }
                 d.getCompleted() as T
             } finally {
                 pending = null
             }
         }
+
+    /**
+     * End a connection the stack has stopped serving: closed and marked down,
+     * so the caller's loop reconnects from scratch with a new BluetoothGatt.
+     */
+    private fun giveUp(why: String) {
+        android.util.Log.i("Boswell", "giving up on the connection: $why")
+        lostWhy = why
+        close(-2)
+    }
 
     suspend fun connect(timeoutMs: Long = 30_000, autoConnect: Boolean = false) {
         gatt = device.connectGatt(context, autoConnect, callback, BluetoothDevice.TRANSPORT_LE)
@@ -176,9 +211,9 @@ class OmiConnection(
 
     private fun char(uuid: UUID) = find(uuid) ?: throw GattException("no characteristic $uuid")
 
-    suspend fun read(uuid: UUID): ByteArray {
+    suspend fun read(uuid: UUID, timeoutMs: Long = 5_000): ByteArray {
         val c = char(uuid)
-        return op("read $uuid", "read $uuid") { it.readCharacteristic(c) }
+        return op("read $uuid", "read $uuid", timeoutMs) { it.readCharacteristic(c) }
     }
 
     suspend fun write(uuid: UUID, value: ByteArray) {
@@ -239,7 +274,7 @@ class OmiConnection(
      * [TransferInterrupted] rather than dropped, because dropping them would
      * delete them -- the device has already let go of them.
      */
-    suspend fun readStored(start: Long, count: Int, timeoutMs: Long = 90_000): Pair<ByteArray, Long> {
+    suspend fun readStored(start: Long, count: Int, timeoutMs: Long = 90_000, idleMs: Long = IDLE_MS): Pair<ByteArray, Long> {
         ensureStorage()
         while (storageMessages.tryReceive().isSuccess) { /* discard anything stale */ }
         val data = java.io.ByteArrayOutputStream()
@@ -258,12 +293,19 @@ class OmiConnection(
             // The first reply can take a while: the firmware waits for its SD
             // card to be ready after a connection. Once data flows, silence
             // means the transfer stopped.
-            val idle = if (begun || data.size() > 0) IDLE_MS else FIRST_REPLY_MS
+            val idle = if (begun || data.size() > 0) idleMs else FIRST_REPLY_MS
             val msg = try {
                 if (left <= 0) null else kotlinx.coroutines.withTimeoutOrNull(minOf(left, idle)) { storageMessages.receive() }
+            } catch (e: kotlinx.coroutines.channels.ClosedReceiveChannelException) {
+                throw TransferInterrupted(whole(), "link lost: ${lostWhy ?: "disconnected"}")
             } catch (e: Exception) {
                 throw TransferInterrupted(whole(), "link lost: ${e.message}")
-            } ?: throw TransferInterrupted(whole(), "the device stopped sending")
+            }
+            if (msg == null) {
+                stopTransfer(data)
+                throw TransferInterrupted(whole(), if (disconnected.isCompleted) "link lost: ${lostWhy ?: "disconnected"}"
+                    else "the device stopped sending for ${minOf(left, idle) / 1000} s")
+            }
             if (!begun && msg.firstOrNull() != Offload.MSG_DATA) android.util.Log.i("Boswell", "storage reply 0x%02x (%d bytes)".format(msg.firstOrNull() ?: 0, msg.size))
             when (msg.firstOrNull()) {
                 Offload.MSG_BEGIN -> begun = true
@@ -283,6 +325,29 @@ class OmiConnection(
                     if (status != 0) throw GattException("device refused the read: ${Offload.STATUS[status] ?: status}")
                 }
                 else -> Unit   // 0x05 begin, or an info reply
+            }
+        }
+    }
+
+    /**
+     * Tell the Omi to stop a read we have given up on (0x03), and keep what
+     * still arrives meanwhile. Without it the firmware carries on sending into
+     * a transfer nobody reads, and when the link closes it marks everything
+     * the radio delivered as taken (storage.c sync_checkpoint_advance on
+     * disconnect) -- including what arrived after we stopped listening, which
+     * would be lost. A stop resets its transfer without that checkpoint.
+     * Best effort: on a dead link neither the stop nor its answer gets through.
+     */
+    private suspend fun stopTransfer(data: java.io.ByteArrayOutputStream) {
+        if (disconnected.isCompleted) return
+        runCatching { write(OmiUuids.STORAGE, Offload.stopCommand()) }.onFailure { return }
+        kotlinx.coroutines.withTimeoutOrNull(STOP_ANSWER_MS) {
+            while (true) {
+                val m = storageMessages.receiveCatching().getOrNull() ?: break
+                when (m.firstOrNull()) {
+                    Offload.MSG_DATA -> data.write(m, 1, m.size - 1)
+                    Offload.MSG_ACK -> break
+                }
             }
         }
     }
@@ -312,12 +377,16 @@ class OmiConnection(
         write(OmiUuids.TIME_WRITE, v)
     }
 
-    fun close() {
+    fun close(status: Int = -1) {
         gatt?.let {
             it.disconnect()
             it.close()
         }
         gatt = null
-        disconnected.complete(-1)
+        val e = GattException("closed")
+        connected.completeExceptionally(e)
+        pending?.d?.completeExceptionally(e)
+        disconnected.complete(status)
+        storageMessages.close()
     }
 }

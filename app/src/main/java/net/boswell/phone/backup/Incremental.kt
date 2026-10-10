@@ -122,6 +122,10 @@ internal class HashCache(private val file: File) {
         return Incremental.Listed(path, f, k.size, k.mtime, k.sha256)
     }
 
+    /**
+     * Written, and let go: the 40,000 names and hashes of a backup aren't held through
+     * its upload. A cache saved is done with; a new one reads the file again.
+     */
     fun save() {
         file.parentFile?.mkdirs()
         val tmp = File(file.path + ".tmp")
@@ -129,5 +133,6 @@ internal class HashCache(private val file: File) {
             for ((path, k) in seen) if ('\n' !in path && '\t' !in path) w.write("${k.size}\t${k.mtime}\t${k.sha256}\t$path\n")
         }
         if (!tmp.renameTo(file)) { file.delete(); tmp.renameTo(file) }
+        known.clear(); seen.clear()
     }
 }

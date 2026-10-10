@@ -95,9 +95,14 @@ object LabelCheck {
         // (not the ones under two people: they vouch for neither until answered).
         data class Look(val p: Print, val own: Double?, val top: Matching.Candidate?, val decision: Matching.Decision)
         val sure = named.filter { it.voice !in inTwice }
+        // Made once, not once a voiceprint: thousands of prints each meeting thousands of
+        // references made every reference and every "clip|speaker" string again for each.
+        val sureRefs = sure.map { Matching.Reference(it.id, it.personId, it.vec, it.clip) }
+        val sureVoices = sure.map { it.voice }
         val looks = sure.groupBy { it.personId to it.voice }.values.map { copies ->
             val p = copies.maxBy { it.seconds }
-            val refs = sure.filter { it.voice != p.voice }.map { Matching.Reference(it.id, it.personId, it.vec, it.clip) }
+            val voice = p.voice
+            val refs = sureRefs.filterIndexed { i, _ -> sureVoices[i] != voice }
             val scorer = norm?.forVoice(p.vec, p.clip, p.clip?.let(Pooling::clipTime))
             val own = refs.filter { it.personId == p.personId }.maxOfOrNull { Matching.dot(p.vec, it.vec).let { s -> scorer?.score(s, it) ?: s } }
             val r = Matching.match(p.vec, refs, norm = scorer)
@@ -173,7 +178,7 @@ object LabelCheck {
  */
 class LabelChecks(private val context: Context) {
 
-    fun find(): List<LabelCheck.Item> = timed("label checks") { findNow() }
+    fun find(): List<LabelCheck.Item> = net.boswell.phone.HeavyWork.run("label checks") { timed("label checks") { findNow() } }
 
     private fun findNow(): List<LabelCheck.Item> {
         val store = SpeakerStore(context)
