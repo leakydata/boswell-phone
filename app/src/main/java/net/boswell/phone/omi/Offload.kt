@@ -45,7 +45,32 @@ object Offload {
     /** Stored packets are a fixed 444 bytes. */
     const val STORED_PACKET_BYTES = 444
 
+    /** Audio per stored packet, on average: the ring holds about 27 hours in 1,115,064 packets (docs/OMI-PROTOCOL.md). */
+    const val SECONDS_PER_PACKET = 27 * 3600.0 / 1_115_064
+
     fun ringInfoCommand(): ByteArray = byteArrayOf(CMD_RING_INFO)
+}
+
+/**
+ * The storage status read (30295782, firmware 3.0.20+): four little-endian u32,
+ * `used_bytes unread_packets free_bytes rtc_valid` -- the only little-endian
+ * shape in the storage service, because the firmware copies its own memory.
+ * The firmware refreshes these every 250 ms while connected and idle
+ * (storage.c storage_write), so a reading taken right after connecting can lag
+ * while the card remounts; it is a cue to look, never a promise.
+ */
+data class StorageStatus(val usedBytes: Long, val unreadPackets: Long, val freeBytes: Long, val rtcValid: Boolean) {
+    companion object {
+        fun parse(data: ByteArray): StorageStatus? {
+            if (data.size < 16) return null
+            val b = ByteBuffer.wrap(data, 0, 16).order(ByteOrder.LITTLE_ENDIAN)
+            fun u32() = b.int.toLong() and 0xffffffffL
+            val used = u32(); val unread = u32(); val free = u32(); val rtc = u32()
+            // Anything else is not this shape (older firmware answered with file sizes here).
+            if (rtc > 1 || used != unread * Offload.STORED_PACKET_BYTES) return null
+            return StorageStatus(used, unread, free, rtc == 1L)
+        }
+    }
 }
 
 /** `0x02 read:u64 write:u64 cap:u32 dropped:u64 pktbytes:u16` */

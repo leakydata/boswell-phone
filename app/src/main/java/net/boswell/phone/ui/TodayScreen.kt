@@ -59,6 +59,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import net.boswell.phone.archive.ClipRow
 import net.boswell.phone.archive.Conversation
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import net.boswell.phone.capture.CaptureRepository
 import net.boswell.phone.capture.Link
 import net.boswell.phone.process.ProcessingRepository
@@ -76,6 +78,9 @@ fun TodayScreen(vm: ArchiveViewModel, pad: PaddingValues, onOpen: (Long) -> Unit
     var confirmDelete by remember { mutableStateOf(false) }
     val selecting = selected.isNotEmpty()
     val proc by ProcessingRepository.state.collectAsStateWithLifecycle()
+    // Only what the status line needs: the whole state changes with every audio frame.
+    val omi by remember { CaptureRepository.state.map { it.stored?.value to it.link }.distinctUntilChanged() }
+        .collectAsStateWithLifecycle(CaptureRepository.state.value.let { it.stored?.value to it.link })
     val isToday = s.day == LocalDate.now()
     var dragged = remember { floatArrayOf(0f) }
 
@@ -140,13 +145,19 @@ fun TodayScreen(vm: ArchiveViewModel, pad: PaddingValues, onOpen: (Long) -> Unit
             Text(summary, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
-        if ((proc.running && proc.pending > 0) || proc.waitingForCharger > 0 || proc.waitingForHome > 0) item {
-            val atHome = net.boswell.phone.home.HomeServer.enabled(LocalContext.current)
+        // Live only, where it's fetched at the next quiet moment (CaptureService.fetchInRange).
+        val onOmi = omi.first?.takeIf { isToday && omi.second == net.boswell.phone.capture.Link.STREAMING &&
+            net.boswell.phone.capture.RangeFetch.worth(it) && net.boswell.phone.sync.Modes.fetchInRange(ctx) }
+        if ((proc.running && proc.pending > 0) || proc.waitingForCharger > 0 || proc.waitingForHome > 0 || onOmi != null) item {
+            // Where the work happens now: home unless it's unreachable and the phone stands in.
+            val atHome = !net.boswell.phone.process.ProcessingWorker.phoneTranscribes(ctx)
+            val standingIn = net.boswell.phone.home.HomeServer.enabled(ctx) && !atHome
             Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
                 Text(listOfNotNull(
-                    if (proc.running && proc.pending > 0) (if (atHome) "Transcribing at home" else "Transcribing on your phone") + " · ${proc.pending} left" else null,
+                    onOmi?.let { "About ${kotlin.math.ceil(net.boswell.phone.capture.RangeFetch.seconds(it) / 60).toInt()} min is still on the Omi; it's fetched at the next quiet moment" },
+                    if (proc.running && proc.pending > 0) (if (atHome) "Transcribing at home" else if (standingIn) "Transcribing on your phone while home can't be reached" else "Transcribing on your phone") + " · ${proc.pending} left" else null,
                     if (proc.waitingForHome > 0) "${proc.waitingForHome} recordings are waiting for your home server" else null,
-                    if (proc.waitingForCharger > 0) "${proc.waitingForCharger} downloaded clips will be transcribed when the phone is charging" else null,
+                    if (proc.waitingForCharger > 0) "${proc.waitingForCharger} downloaded clips will be transcribed on the phone when it's charging" else null,
                 ).joinToString("\n"), Modifier.padding(horizontal = 14.dp, vertical = 10.dp), style = MaterialTheme.typography.bodyMedium)
             }
         }

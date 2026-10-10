@@ -53,6 +53,8 @@ data class CaptureState(
     val rssi: Reading<Int>? = null,
     val deviceClockSkewSeconds: Reading<Long>? = null,
     val ring: Reading<RingInfo>? = null,
+    /** Packets stored on the Omi and not yet downloaded, from its status read or the last sync. */
+    val stored: Reading<Long>? = null,
     val frames: Long = 0,
     val dropped: Long = 0,
     val reboots: Int = 0,

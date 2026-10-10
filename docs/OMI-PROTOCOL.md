@@ -60,6 +60,31 @@ Notification kinds: `0x01` ack, `0x02` info, `0x03` data, `0x04` done,
 Status codes: `0` ok, `6` invalid command, `9` storage not ready,
 `10` sequence out of range.
 
+## What the Omi does with audio during a storage read
+
+Each encoded frame goes one of three ways (`pusher()`,
+`firmware/omi/src/lib/core/transport.c:1215-1253`, firmware 3.0.21):
+
+- a phone connected **and subscribed to audio**: the frame is streamed (line 1234);
+- **nothing connected**: the frame is written to storage (lines 1237-1241);
+- a phone connected but **not** subscribed to audio: the frame is **dropped**
+  (lines 1249-1251).
+
+A sync visit is the third case, so whatever is said during one is lost, not
+stored, and nothing is added to the ring while it runs. The firmware does
+allow audio and a storage read on one connection (they share a TX throttle,
+`transport_bulk_tx_acquire`, and the vendor app syncs while streaming), but
+the desktop's attempt at a storage command under a live stream broke
+recording, so the phone doesn't. Live mode therefore fetches at a quiet
+moment and in short slices (`capture/RangeFetch.kt`).
+
+**Storage status read** — `30295782-…`, a plain read (no command, no
+subscription) of four little-endian u32: `used_bytes unread_packets
+free_bytes rtc_valid` (`storage.c:605-617`). The firmware refreshes these
+every 250 ms while connected and idle (`storage.c:787`), so a read right after
+connecting can lag while the card remounts. Live mode reads it once before
+subscribing to audio and once more at the first link check.
+
 ## The stored packet
 
 **444 bytes**, fixed:

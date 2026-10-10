@@ -176,6 +176,15 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                             }
                             Switch(checked = onCharger, onCheckedChange = { onCharger = it; net.boswell.phone.sync.Modes.setSyncOnCharger(ctx, it) })
                         }
+                        var inRange by remember { mutableStateOf(net.boswell.phone.sync.Modes.fetchInRange(ctx)) }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Fetch when back in range", style = MaterialTheme.typography.bodyLarge)
+                                Text("Soon after the Omi comes back, once the room is quiet, pause for up to a minute and a half to download what it heard away, then go back to live. Anything said during that pause isn't recorded.",
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Switch(checked = inRange, onCheckedChange = { inRange = it; net.boswell.phone.sync.Modes.setFetchInRange(ctx, it) })
+                        }
                     }
                 }
                 cap.device?.let { d -> Row2("Device", "${d.model ?: "Omi"} · firmware ${d.firmware ?: "?"}") }
@@ -229,7 +238,7 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                 }
                 ReadingRow("Signal", cap.rssi) { "$it dBm" }
                 ReadingRow("Clock", cap.deviceClockSkewSeconds) { if (kotlin.math.abs(it) < 3) "in sync" else "off by ${it}s" }
-                ReadingRow("Waiting on the Omi", cap.ring) { r -> "≈ %.0f min".format(r.pending * (27 * 3600.0 / 1_115_064) / 60) }
+                ReadingRow("Waiting on the Omi", cap.stored) { n -> "≈ %.0f min".format(n * net.boswell.phone.omi.Offload.SECONDS_PER_PACKET / 60) }
                 if (ui.savedAddress == null || ui.mode == Mode.OFF) {
                     OutlinedButton(onClick = vm::scan, enabled = !ui.scanning) { Text(if (ui.scanning) "Looking…" else "Find Omi") }
                 }

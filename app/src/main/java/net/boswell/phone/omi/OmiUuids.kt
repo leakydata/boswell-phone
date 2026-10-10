@@ -22,6 +22,12 @@ object OmiUuids {
     /** Offload: one characteristic carries commands and data. */
     val STORAGE_SERVICE: UUID = UUID.fromString("30295780-4301-eabd-2904-2849adfeae43")
     val STORAGE: UUID = UUID.fromString("30295781-4301-eabd-2904-2849adfeae43")
+    /**
+     * A plain read of how much is stored: [StorageStatus]. Not a command -- it
+     * returns figures the firmware keeps cached (storage.c
+     * storage_read_characteristic), so it is safe to ask before audio starts.
+     */
+    val STORAGE_STATUS: UUID = UUID.fromString("30295782-4301-eabd-2904-2849adfeae43")
 
     val BATTERY_SERVICE: UUID = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb")
     val BATTERY: UUID = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb")

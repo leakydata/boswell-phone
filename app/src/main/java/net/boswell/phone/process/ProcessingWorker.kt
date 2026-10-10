@@ -44,8 +44,8 @@ object ProcessingRepository {
 /**
  * Transcribes, diarizes and identifies every clip that has no transcript yet,
  * entirely on the phone: live clips first and newest first, so the day stays
- * current while a download fills in behind it; a big download waits for the
- * phone's charger (see [backlogWaits]); a clip nobody speaks in is recorded as
+ * current while a download fills in behind it; a big download the phone
+ * would transcribe itself waits for its charger (see [backlogWaits]); a clip nobody speaks in is recorded as
  * such after a quick speech check, without running the recognizer. Runs as background work so it
  * survives the app being closed; a clip interrupted half way is simply
  * redone, since nothing is written until its transcript is complete.
@@ -604,14 +604,34 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
 
         /**
          * A big download waits for the phone's charger: transcribing hours of
-         * audio keeps several cores busy for a long time. Clips heard live never wait.
+         * audio keeps several cores busy for a long time. Clips heard live never
+         * wait, and nor does a download the home server takes: there the phone
+         * only sends audio, so it goes now, on whatever network the home path
+         * already uses.
          */
         fun backlogWaits(context: Context, pending: List<File>): Boolean {
-            if (!net.boswell.phone.sync.Modes.backlogOnCharger(context)) return false
             val bm = context.getSystemService(android.os.BatteryManager::class.java)
-            if (bm?.isCharging == true) return false
-            return pending.count { isDownload(it) } > BIG_DOWNLOAD
+            return backlogWaits(net.boswell.phone.sync.Modes.backlogOnCharger(context), bm?.isCharging == true,
+                phoneTranscribes(context), pending.count { isDownload(it) })
         }
+
+        internal fun backlogWaits(rule: Boolean, charging: Boolean, phoneTranscribes: Boolean, downloads: Int): Boolean =
+            rule && !charging && phoneTranscribes && downloads > BIG_DOWNLOAD
+
+        /** Whether the phone itself transcribes new clips now, rather than the home server. */
+        fun phoneTranscribes(context: Context): Boolean {
+            val home = net.boswell.phone.home.HomeServer
+            return phoneTranscribes(home.enabled(context), home.trouble(context) == null, home.fallback(context))
+        }
+
+        /**
+         * Home off, or home unreachable with the phone as its fallback. An
+         * unreachable home that keeps clips for itself (WAIT) still isn't the
+         * phone's work: they go when it answers. "Reachable" is the last call's
+         * outcome (HomeServer.trouble), the same thing the worker acts on.
+         */
+        internal fun phoneTranscribes(homeEnabled: Boolean, homeReachable: Boolean, fallback: net.boswell.phone.home.HomeServer.Fallback): Boolean =
+            !homeEnabled || (!homeReachable && fallback == net.boswell.phone.home.HomeServer.Fallback.PHONE)
 
         /** Try again later with a network (recordings kept for the home server). */
         fun enqueueLater(context: Context) {

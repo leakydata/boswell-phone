@@ -157,7 +157,17 @@ class Assistant(private val context: Context) {
         val recent = lines(archive, speakers, now - RECENT_MINUTES * 60)
         // How far the transcript has caught up: speech still on its way to the transcriber isn't in it yet.
         val newest = archive.readableDatabase.rawQuery("SELECT MAX(t0) FROM lines", null).use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getDouble(0) else null }
-        val waiting = net.boswell.phone.process.ProcessingRepository.state.value.let { it.pending + it.waitingForHome }
+        val proc = net.boswell.phone.process.ProcessingRepository.state.value
+        val modes = net.boswell.phone.sync.Modes
+        val mode = modes.mode(context)
+        val stored = modes.storedOnOmi(context)?.first?.let { net.boswell.phone.capture.RangeFetch.seconds(it) } ?: 0.0
+        val gap = notYet(
+            reaches = newest?.let { Instant.ofEpochSecond(it.toLong()).atZone(zone).format(clock) },
+            transcribing = proc.pending + proc.waitingForHome, forCharger = proc.waitingForCharger,
+            omiMinutes = if (mode == net.boswell.phone.sync.Mode.OFF || stored < 30) 0 else Math.round(stored / 60).toInt().coerceAtLeast(1),
+            omiAway = mode == net.boswell.phone.sync.Mode.LIVE && net.boswell.phone.capture.CaptureRepository.state.value.link == net.boswell.phone.capture.Link.AWAY,
+            lastSync = if (mode == net.boswell.phone.sync.Mode.SYNC) modes.lastSync(context).takeIf { it > 0 }?.let { Instant.ofEpochMilli(it).atZone(zone).format(DateTimeFormatter.ofPattern("h:mm a")) } else null,
+        )
         return buildString {
             appendLine("You are Boswell, a personal assistant on ${me ?: "the user"}'s phone. The phone records the conversations around them through a wearable microphone and transcribes them on the device; you can look through that record with tools.")
             appendLine("It is now ${LocalDateTime.now().format(clock)} (${zone.id}); today is ${LocalDate.now()}.")
@@ -170,8 +180,7 @@ class Assistant(private val context: Context) {
             appendLine("Every line you're given carries a moment label like [L123]. When you quote or refer to something specific that was said, put its label right after it (e.g. Sam said the budget is due Friday [L123]): the app turns labels into a link that plays that moment. Never invent labels.")
             appendLine("You can also: set timers and alarms; draft a text or email (it is only a draft the user sends themselves -- say so); read and send texts with the contacts the user chose (send_text only holds the text: tell them to tap Send or say yes, and call confirm_send only after they do; for anyone else, offer a draft); read and send email if they set it up (send_email only holds it, like texts: confirm_email only after they say yes); look things up on the web for current information (weather, news, hours); remember facts about people when the user shares them, and recall them; keep quick logs (medication, expenses, parking, habits) and read them back; give talk stats; pull out numbers, emails, links and addresses that were said; translate what someone said. Named lists (\"read later\", \"gift ideas\", shopping) are to-do categories: add with add_todo and read with list_todos.")
             appendLine()
-            newest?.let { appendLine("The transcript reaches ${Instant.ofEpochSecond(it.toLong()).atZone(zone).format(clock)}" +
-                (if (waiting > 0) "; $waiting more recordings are still waiting to be transcribed, so the last minutes may be missing: if what they ask about isn't there, say it hasn't been transcribed yet rather than searching on." else ".")) }
+            gap?.let { appendLine(it) }
             appendLine("What was said in the last $RECENT_MINUTES minutes:")
             append(recent.ifBlank { "(nothing)" })
         }
@@ -300,5 +309,28 @@ class Assistant(private val context: Context) {
         const val CAPTURE = "capture"
         const val TRIGGER = "trigger"
         const val NONE = "NONE"
+
+        /**
+         * How far the transcript reaches and what isn't in it yet, so the
+         * model says "that's still on your Omi" instead of searching on for
+         * something that can't be found. Null when there's nothing to say.
+         * [omiMinutes] is audio the Omi last said it holds unread; [omiAway]
+         * is Live mode with the Omi out of range; [lastSync] is Sync mode's
+         * last visit, everything since being still on the Omi.
+         */
+        internal fun notYet(reaches: String?, transcribing: Int, forCharger: Int, omiMinutes: Int, omiAway: Boolean, lastSync: String?): String? {
+            fun n(k: Int, one: String, many: String) = "$k ${if (k == 1) one else many}"
+            val missing = listOfNotNull(
+                if (transcribing > 0) n(transcribing, "recording", "recordings") + " waiting to be transcribed" else null,
+                if (forCharger > 0) n(forCharger, "downloaded clip", "downloaded clips") + " waiting for the phone's charger" else null,
+                if (omiMinutes > 0) "about $omiMinutes min still stored on the Omi, not downloaded yet" else null,
+                if (omiAway) "whatever is said while the Omi is out of range, as it is now" else null,
+                lastSync?.let { "everything said since the last sync at $it, which is still on the Omi" },
+            )
+            if (missing.isEmpty()) return reaches?.let { "The transcript reaches $it." }
+            val list = if (missing.size == 1) missing[0] else missing.dropLast(1).joinToString(", ") + " and " + missing.last()
+            return (reaches?.let { "The transcript reaches $it; not in it yet: " } ?: "Not in the transcript yet: ") + list +
+                ". If what they ask about isn't there, say it hasn't reached the record yet and will be added once it's transcribed or the Omi next syncs, rather than searching on."
+        }
     }
 }

@@ -34,6 +34,19 @@ object Modes {
     fun syncOnCharger(c: Context): Boolean = prefs(c).getBoolean("sync_on_charger", true)
     fun setSyncOnCharger(c: Context, on: Boolean) = prefs(c).edit().putBoolean("sync_on_charger", on).apply()
 
+    /** Live mode: soon after the Omi comes back in range, at a quiet moment, collect what it stored meanwhile. On unless turned off. */
+    fun fetchInRange(c: Context): Boolean = prefs(c).getBoolean("fetch_in_range", true)
+    fun setFetchInRange(c: Context, on: Boolean) = prefs(c).edit().putBoolean("fetch_in_range", on).apply()
+
+    /**
+     * Packets the Omi last said it holds unread, and when: kept across restarts
+     * so the assistant can say what isn't on the record yet. Null when never read.
+     */
+    fun storedOnOmi(c: Context): Pair<Long, Long>? =
+        prefs(c).getLong("omi_stored_at", 0L).takeIf { it > 0 }?.let { prefs(c).getLong("omi_stored_packets", 0L) to it }
+    fun recordStoredOnOmi(c: Context, packets: Long) =
+        prefs(c).edit().putLong("omi_stored_packets", packets).putLong("omi_stored_at", System.currentTimeMillis()).apply()
+
     /** A big download is transcribed only while the phone is charging. On unless turned off. */
     fun backlogOnCharger(c: Context): Boolean = prefs(c).getBoolean("backlog_on_charger", true)
     fun setBacklogOnCharger(c: Context, on: Boolean) = prefs(c).edit().putBoolean("backlog_on_charger", on).apply()
