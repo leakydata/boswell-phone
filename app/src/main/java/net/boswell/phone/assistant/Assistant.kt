@@ -63,7 +63,7 @@ class Assistant(private val context: Context) {
 
     /**
      * Answer one question. [source] is how it was asked (typed, button, …).
-     * Up to six rounds of tool use, then a short answer suited to a notification.
+     * Up to [MAX_ROUNDS] rounds of tool use, then a short answer suited to a notification.
      */
     /** The person's own words being answered: texting confirms against these, never the model's. */
     private var currentQuestion: String? = null
@@ -130,9 +130,15 @@ class Assistant(private val context: Context) {
                     messages += Llm.toolResult(call.id, result.take(12_000))
                 }
             }
-            val text = "I looked but ran out of steps before finding an answer."
-            store.addExchange(source, display ?: question, text, cost, error = true, asked = asked)
-            return Answer(text, cost, true)
+            // Out of rounds: one last turn without tools, answering from what the searches found.
+            messages += Llm.user("Stop searching now. Answer from what you have found so far; if it isn't enough, say briefly what you found and what is missing.")
+            // The tools stay listed (the history holds their calls, which some providers require) but can't be called.
+            val last = runCatching { llm.chat(messages, tools(forCapture = fileOnly), extra = mapOf("tool_choice" to kotlinx.serialization.json.JsonPrimitive("none"))) }
+                .logged("assistant: final answer").getOrNull()
+            last?.let { store.logCall(source, model, it); cost += it.cost }
+            val text = last?.text?.trim()?.takeIf { it.isNotEmpty() } ?: "I looked but ran out of steps before finding an answer."
+            store.addExchange(source, display ?: question, text, cost, error = last?.text.isNullOrBlank(), asked = asked)
+            return Answer(text, cost, last?.text.isNullOrBlank())
         } catch (e: Exception) {
             Problems.report("assistant", e)
             val text = "Couldn't reach the assistant: ${e.message?.take(160)}"
@@ -147,7 +153,11 @@ class Assistant(private val context: Context) {
 
     private fun systemPrompt(archive: Archive, speakers: SpeakerStore, source: String): String {
         val me = ownerName(speakers)
-        val recent = lines(archive, speakers, System.currentTimeMillis() / 1000.0 - 10 * 60)
+        val now = System.currentTimeMillis() / 1000.0
+        val recent = lines(archive, speakers, now - RECENT_MINUTES * 60)
+        // How far the transcript has caught up: speech still on its way to the transcriber isn't in it yet.
+        val newest = archive.readableDatabase.rawQuery("SELECT MAX(t0) FROM lines", null).use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getDouble(0) else null }
+        val waiting = net.boswell.phone.process.ProcessingRepository.state.value.let { it.pending + it.waitingForHome }
         return buildString {
             appendLine("You are Boswell, a personal assistant on ${me ?: "the user"}'s phone. The phone records the conversations around them through a wearable microphone and transcribes them on the device; you can look through that record with tools.")
             appendLine("It is now ${LocalDateTime.now().format(clock)} (${zone.id}); today is ${LocalDate.now()}.")
@@ -160,7 +170,9 @@ class Assistant(private val context: Context) {
             appendLine("Every line you're given carries a moment label like [L123]. When you quote or refer to something specific that was said, put its label right after it (e.g. Sam said the budget is due Friday [L123]): the app turns labels into a link that plays that moment. Never invent labels.")
             appendLine("You can also: set timers and alarms; draft a text or email (it is only a draft the user sends themselves -- say so); read and send texts with the contacts the user chose (send_text only holds the text: tell them to tap Send or say yes, and call confirm_send only after they do; for anyone else, offer a draft); read and send email if they set it up (send_email only holds it, like texts: confirm_email only after they say yes); look things up on the web for current information (weather, news, hours); remember facts about people when the user shares them, and recall them; keep quick logs (medication, expenses, parking, habits) and read them back; give talk stats; pull out numbers, emails, links and addresses that were said; translate what someone said. Named lists (\"read later\", \"gift ideas\", shopping) are to-do categories: add with add_todo and read with list_todos.")
             appendLine()
-            appendLine("What was said in the last 10 minutes:")
+            newest?.let { appendLine("The transcript reaches ${Instant.ofEpochSecond(it.toLong()).atZone(zone).format(clock)}" +
+                (if (waiting > 0) "; $waiting more recordings are still waiting to be transcribed, so the last minutes may be missing: if what they ask about isn't there, say it hasn't been transcribed yet rather than searching on." else ".")) }
+            appendLine("What was said in the last $RECENT_MINUTES minutes:")
             append(recent.ifBlank { "(nothing)" })
         }
     }
@@ -277,7 +289,13 @@ class Assistant(private val context: Context) {
         const val FOLLOW_UP_SECONDS = 15 * 60
         const val FOLLOW_UPS = 4
 
-        const val MAX_ROUNDS = 6
+        /**
+         * Rounds of tool use for one question. Six ran out on ordinary questions (a model searching
+         * for something not transcribed yet); past this it answers with what it found ([ask]).
+         */
+        const val MAX_ROUNDS = 30
+        /** The recent transcript every question comes with: "what did I just say" needs no tool. */
+        const val RECENT_MINUTES = 30
         /** Double tap: file what was said, don't chat. */
         const val CAPTURE = "capture"
         const val TRIGGER = "trigger"
