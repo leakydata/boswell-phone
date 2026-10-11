@@ -396,7 +396,19 @@ private fun WhoSheet(vm: ArchiveViewModel, s: ConversationState, key: String, on
                 TextButton(onClick = { onShow(line) }) { Text("Show in conversation") }
             }
             // First, where a thumb finds it: while labeling, TV is the most common answer.
-            if (!v.media) OutlinedButton(onClick = { vm.markMedia(conv.id, key); done() }, modifier = Modifier.fillMaxWidth()) {
+            val tvHint = s.tvHints[key]
+            if (!v.media && tvHint != null) {
+                Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.tertiaryContainer) {
+                    Column(Modifier.padding(14.dp).fillMaxWidth()) {
+                        Text("Probably a TV, video or radio", style = MaterialTheme.typography.titleMedium)
+                        Text("${(tvHint * 100).toInt()}% sure, from what it says", style = MaterialTheme.typography.bodySmall)
+                        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = { vm.markMedia(conv.id, key); done() }) { Text("It is") }
+                            OutlinedButton(onClick = { vm.notMedia(conv.id, key) }) { Text("It's a person") }
+                        }
+                    }
+                }
+            } else if (!v.media) OutlinedButton(onClick = { vm.markMedia(conv.id, key); done() }, modifier = Modifier.fillMaxWidth()) {
                 Text("It's a TV, video or radio")
             }
             if (v.named && v.personId != null) {

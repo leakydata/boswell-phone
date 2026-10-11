@@ -57,6 +57,8 @@ data class ConversationState(
     val lines: List<LineRow> = emptyList(),
     val voices: Map<String, Voice> = emptyMap(),
     val guesses: Map<String, Pair<Person, Double>> = emptyMap(),
+    /** Voices the TV check (MediaCheck) thinks are probably a TV, video or radio, and how surely. */
+    val tvHints: Map<String, Double> = emptyMap(),
     val playingLine: Long? = null,
     val playing: Boolean = false,
     val position: Double = 0.0,
@@ -249,8 +251,14 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         val checks = withContext(Dispatchers.IO) {
             runCatching { net.boswell.phone.assistant.AssistantStore(getApplication()).use { it.factChecksIn(lines.map { l -> l.clip }.distinct()) } }.logged("fact checks").getOrDefault(emptyList())
         }
+        val tvHints = withContext(Dispatchers.IO) {
+            runCatching {
+                keys.filter { vs[it]?.named != true && vs[it]?.boswell != true && vs[it]?.media != true }
+                    .mapNotNull { k -> net.boswell.phone.speakers.MediaCheck.suggestion(speakers, k, lines)?.let { k to it } }.toMap()
+            }.logged("TV suggestions").getOrDefault(emptyMap())
+        }
         val sameConversation = _conv.value.conversation?.id == id
-        _conv.update { it.copy(conversation = c, lines = lines, voices = vs, guesses = guesses, checks = checks) }
+        _conv.update { it.copy(conversation = c, lines = lines, voices = vs, guesses = guesses, checks = checks, tvHints = tvHints) }
         if (!(keepPlayer && sameConversation)) preparePlayer(id)
     }
 
@@ -384,6 +392,13 @@ class ArchiveViewModel(app: Application) : AndroidViewModel(app) {
         val v = _conv.value.voices[key]
         net.boswell.phone.process.ClipActions.markMedia(getApplication(), speakers, archive, conversation, key, v?.personId, v?.named == true)
         emptySet()
+    }
+
+    /** "Not a TV" on the TV check's suggestion: not offered again. */
+    fun notMedia(conversation: Long, key: String) = viewModelScope.launch {
+        val lines = _conv.value.lines
+        withContext(Dispatchers.IO) { runCatching { net.boswell.phone.speakers.MediaCheck.dismiss(speakers, key, lines) }.logged("TV suggestion: not a TV") }
+        _conv.update { it.copy(tvHints = it.tvHints - key) }
     }
 
     /** A voice named in a conversation, everywhere it speaks there (ClipActions.fileSlots). Returns the people touched, for [actOn]. */

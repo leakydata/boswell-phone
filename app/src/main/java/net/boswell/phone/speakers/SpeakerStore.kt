@@ -32,7 +32,7 @@ data class VoiceGroup(val key: Long, val voiceprints: Int, val seconds: Double, 
  *
  * Starts empty. Nothing is imported from the desktop.
  */
-class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", null, 9) {
+class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", null, 10) {
     init {
         Matching.model = net.boswell.phone.diarize.VoiceModels.active(context)
         Matching.owner = net.boswell.phone.assistant.AssistantPrefs.owner(context)
@@ -74,6 +74,7 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         db.execSQL(BOSWELL_VOICE)
         db.execSQL(NOT_BOSWELL)
         db.execSQL(LABEL_CHECKS)
+        db.execSQL(MEDIA_CHECKS)
         db.execSQL("""
             CREATE TABLE matches (
                 id            INTEGER PRIMARY KEY,
@@ -112,6 +113,7 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         }
         if (oldVersion < 8) { db.execSQL(BOSWELL_VOICE); db.execSQL(NOT_BOSWELL) }
         if (oldVersion < 9) db.execSQL(LABEL_CHECKS)
+        if (oldVersion < 10) db.execSQL(MEDIA_CHECKS)
     }
 
     override fun onConfigure(db: SQLiteDatabase) {
@@ -394,6 +396,25 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
 
     fun markLabelChecked(key: String) {
         writableDatabase.execSQL("INSERT OR REPLACE INTO label_checks(key, created) VALUES (?, ?)", arrayOf<Any>(key, now()))
+    }
+
+    /** One voice's answer from the TV check (MediaCheck), by MediaCheck's key for it. */
+    data class MediaAnswer(val key: String, val broadcast: Double, val medium: String?, val outcome: String, val created: Double)
+
+    /** Every voice the TV check has asked about: none is asked twice, and one marked by hand then undone stays undone. */
+    fun mediaAnswers(): Map<String, MediaAnswer> = readableDatabase.rawQuery(
+        "SELECT key, broadcast, medium, outcome, created FROM media_checks", null).use { c ->
+        buildMap { while (c.moveToNext()) put(c.getString(0), MediaAnswer(c.getString(0), c.getDouble(1), c.str(2), c.getString(3), c.getDouble(4))) }
+    }
+
+    fun mediaAnswer(key: String): MediaAnswer? = readableDatabase.rawQuery(
+        "SELECT key, broadcast, medium, outcome, created FROM media_checks WHERE key = ?", arrayOf(key)).use { c ->
+        if (c.moveToFirst()) MediaAnswer(c.getString(0), c.getDouble(1), c.str(2), c.getString(3), c.getDouble(4)) else null
+    }
+
+    fun setMediaAnswer(key: String, broadcast: Double, medium: String?, outcome: String) {
+        writableDatabase.execSQL("INSERT OR REPLACE INTO media_checks(key, broadcast, medium, outcome, created) VALUES (?, ?, ?, ?, ?)",
+            arrayOf<Any?>(key, broadcast, medium, outcome, now()))
     }
 
     /** Unnamed voices that are still open questions (not marked TV or ignored), with their voiceprints. */
@@ -728,6 +749,8 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         private const val NOT_BOSWELL = "CREATE TABLE IF NOT EXISTS not_boswell (clip TEXT PRIMARY KEY)"
         /** LabelCheck questions already answered, by LabelCheck.Item.key. */
         private const val LABEL_CHECKS = "CREATE TABLE IF NOT EXISTS label_checks (key TEXT PRIMARY KEY, created REAL)"
+        /** The TV check's answers (MediaCheck): outcome is marked, suggested, live or dismissed. */
+        private const val MEDIA_CHECKS = "CREATE TABLE IF NOT EXISTS media_checks (key TEXT PRIMARY KEY, broadcast REAL NOT NULL, medium TEXT, outcome TEXT NOT NULL, created REAL)"
         /** Unnamed voices changed (added or gone) since the cohort was made, as a share of it, before it's made again. */
         const val COHORT_DRIFT = 0.05
         private class Cached(val key: Triple<String, Long?, Int>, val field: Map<Long, Long>, val norm: AsNorm.Norm)

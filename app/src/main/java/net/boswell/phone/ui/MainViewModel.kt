@@ -94,6 +94,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         net.boswell.phone.backup.HomeBackup.schedule(getApplication())
         net.boswell.phone.speakers.VoiceMigration.schedule(getApplication())
         net.boswell.phone.speakers.SnrBackfill.schedule(getApplication())
+        net.boswell.phone.speakers.MediaCheck.schedule(getApplication())
         net.boswell.phone.process.CatchUp.schedule(getApplication())
         refreshAll()
         viewModelScope.launch { ProcessingRepository.state.distinctUntilChangedBy { it.done to it.running }.collect { refreshPeople() } }

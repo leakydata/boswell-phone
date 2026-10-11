@@ -1186,6 +1186,16 @@ private fun HomeServerSection() {
                 net.boswell.phone.process.ProcessingWorker.enqueue(ctx)
             })
         }
+        var mediaCheck by remember { mutableStateOf(net.boswell.phone.speakers.MediaCheck.on(ctx)) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Spot TV, video and radio", style = MaterialTheme.typography.bodyLarge)
+                Text("Your computer asks TypeSafe's Jev about voices nobody has named (a bit of their conversation goes to TypeSafe). " +
+                        "Sure ones are marked as TV, video or radio; likely ones are suggested on the voice. Needs a TypeSafe key on the computer.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Switch(checked = mediaCheck, onCheckedChange = { mediaCheck = it; net.boswell.phone.speakers.MediaCheck.setOn(ctx, it) })
+        }
         Text("When your computer can't be reached", style = MaterialTheme.typography.bodyMedium)
         Row {
             for ((f, label) in listOf(net.boswell.phone.home.HomeServer.Fallback.PHONE to "Use the phone", net.boswell.phone.home.HomeServer.Fallback.WAIT to "Wait for home")) {

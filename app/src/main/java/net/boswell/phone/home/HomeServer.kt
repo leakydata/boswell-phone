@@ -272,4 +272,41 @@ object HomeServer {
             else -> throw Unavailable("the server answered $code: ${runCatching { conn.errorStream?.readBytes()?.decodeToString() }.getOrNull()?.take(200)}")
         }
     }
+
+    /** Whether this server can tell a TV from a person (it has a TypeSafe key: /v1/health "media"). */
+    fun canJudgeMedia(c: Context): Boolean = runCatching {
+        preferHttps(c)
+        val base = url(c) ?: return false
+        val conn = open("$base/v1/health", "GET", 8_000)
+        val o = json.parseToJsonElement(conn.inputStream.readBytes().decodeToString()).jsonObject
+        val media = o["media"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+        if (media < 1) net.boswell.phone.capture.CaptureRepository.log("home server: no TypeSafe key there for the TV check (health says media=${o["media"]})")
+        media >= 1
+    }.getOrElse { e ->
+        net.boswell.phone.capture.CaptureRepository.log("home server: couldn't ask whether it can check for TVs: ${e.javaClass.simpleName}: ${e.message}")
+        false
+    }
+
+    /**
+     * Ask the server whether each voice is someone in the room or a device (MediaCheck).
+     * [items] are {"id", "lines": [{"speaker", "text"}], "target", "sounds"}; the answer is
+     * {"answers": {id: {"broadcast": 0..1, "medium", ...}}, "errors": {id: why}}.
+     */
+    fun judgeMedia(c: Context, items: JsonArray): JsonObject {
+        preferHttps(c)
+        val base = url(c) ?: throw Unavailable("not paired")
+        val key = Secrets.get(c, KEY) ?: throw Unavailable("not paired", notPaired = true)
+        val conn = open("$base/v1/media/judge", "POST", 120_000).apply {
+            setRequestProperty("Authorization", "Bearer $key")
+            setRequestProperty("Content-Type", "application/json")
+            doOutput = true
+        }
+        conn.outputStream.use { it.write(buildJsonObject { put("items", items) }.toString().toByteArray()) }
+        when (val code = conn.responseCode) {
+            200 -> return json.parseToJsonElement(conn.inputStream.readBytes().decodeToString()).jsonObject
+            401 -> throw Unavailable("the server doesn't know this phone any more: pair again", notPaired = true)
+            404 -> throw Unavailable("this server can't check for TVs yet: update Boswell Server")
+            else -> throw Unavailable("the server answered $code: ${runCatching { conn.errorStream?.readBytes()?.decodeToString() }.getOrNull()?.take(200)}")
+        }
+    }
 }
