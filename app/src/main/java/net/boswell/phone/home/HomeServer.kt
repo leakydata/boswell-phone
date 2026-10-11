@@ -84,31 +84,58 @@ object HomeServer {
     /**
      * Home couldn't be reached while recordings were waiting: since when (ms) and why, until
      * the next recording gets through. Otherwise the phone quietly does the work itself and
-     * nobody notices that, say, Tailscale was off all day. After [TROUBLE_NOTICE_MS] it's
-     * also a (silent) notification.
+     * nobody notices that, say, Tailscale was off all day (2026-10-10, 24 hours: a silent
+     * notice in a quiet channel went unseen). So it's said out loud, once an outage: after
+     * [TAILSCALE_NOTICE_MS] when Tailscale is plainly off on this phone (the address is on a
+     * tailnet and no VPN is up), with a button to open it; after [TROUBLE_NOTICE_MS] for
+     * anything else, the computer asleep or the server stopped, which often fixes itself.
      */
     fun trouble(c: Context): Pair<Long, String>? =
         p(c).getLong("home_trouble_since", 0L).takeIf { it > 0 }?.let { it to (p(c).getString("home_trouble_why", null) ?: "") }
 
     fun noteTrouble(c: Context, message: String?) {
         val since = p(c).getLong("home_trouble_since", 0L).takeIf { it > 0 } ?: System.currentTimeMillis()
-        p(c).edit().putLong("home_trouble_since", since).putString("home_trouble_why", explain(message)).apply()
-        if (System.currentTimeMillis() - since >= TROUBLE_NOTICE_MS && !p(c).getBoolean("home_trouble_told", false)) {
-            p(c).edit().putBoolean("home_trouble_told", true).apply()
-            val at = java.time.Instant.ofEpochMilli(since).atZone(java.time.ZoneId.systemDefault())
-                .format(java.time.format.DateTimeFormatter.ofPattern("h:mm a"))
-            val open = android.app.PendingIntent.getActivity(c, TROUBLE_ID,
-                android.content.Intent(c, net.boswell.phone.ui.MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
-                android.app.PendingIntent.FLAG_IMMUTABLE)
-            val n = androidx.core.app.NotificationCompat.Builder(c, net.boswell.phone.process.Notifications.WORK)
-                .setSmallIcon(net.boswell.phone.R.drawable.ic_stat_mic).setSilent(true).setAutoCancel(true).setContentIntent(open)
-                .setContentTitle("Can't reach your computer since $at")
-                .setContentText(explain(message) + if (fallback(c) == Fallback.PHONE) " The phone is transcribing meanwhile." else " Recordings wait for it.")
-                .setStyle(androidx.core.app.NotificationCompat.BigTextStyle())
-                .build()
-            runCatching { c.getSystemService(android.app.NotificationManager::class.java).notify(TROUBLE_ID, n) }.logged("home server: trouble notification")
+        val tailscaleOff = onTailnet(url(c)) && !vpnUp(c)
+        val why = if (tailscaleOff) TAILSCALE_OFF else explain(message)
+        p(c).edit().putLong("home_trouble_since", since).putString("home_trouble_why", why).apply()
+        val wait = if (tailscaleOff) TAILSCALE_NOTICE_MS else TROUBLE_NOTICE_MS
+        if (System.currentTimeMillis() - since < wait || p(c).getBoolean("home_trouble_told", false)) return
+        p(c).edit().putBoolean("home_trouble_told", true).apply()
+        val at = java.time.Instant.ofEpochMilli(since).atZone(java.time.ZoneId.systemDefault())
+            .format(java.time.format.DateTimeFormatter.ofPattern("h:mm a"))
+        val open = android.app.PendingIntent.getActivity(c, TROUBLE_ID,
+            android.content.Intent(c, net.boswell.phone.ui.MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            android.app.PendingIntent.FLAG_IMMUTABLE)
+        net.boswell.phone.assistant.AssistantNotify.ensureChannels(c)
+        val text = why + if (fallback(c) == Fallback.PHONE) " Meanwhile the phone transcribes recordings itself, not as well; they're redone at home once it's back."
+            else " Recordings wait for it."
+        val b = androidx.core.app.NotificationCompat.Builder(c, net.boswell.phone.assistant.AssistantNotify.ANSWERS)
+            .setSmallIcon(net.boswell.phone.R.drawable.ic_stat_mic).setAutoCancel(true).setContentIntent(open)
+            .setContentTitle(if (tailscaleOff) "Tailscale is off: can't reach your computer" else "Can't reach your computer since $at")
+            .setContentText(text)
+            .setStyle(androidx.core.app.NotificationCompat.BigTextStyle().bigText(text))
+        c.packageManager.getLaunchIntentForPackage(TAILSCALE)?.takeIf { tailscaleOff }?.let { launch ->
+            b.addAction(0, "Open Tailscale", android.app.PendingIntent.getActivity(c, TROUBLE_ID + 1,
+                launch.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK), android.app.PendingIntent.FLAG_IMMUTABLE))
         }
+        runCatching { androidx.core.app.NotificationManagerCompat.from(c).notify(TROUBLE_ID, b.build()) }.logged("home server: trouble notification")
+        net.boswell.phone.capture.CaptureRepository.log("home server: can't reach it since $at: $why")
     }
+
+    /** A Tailscale address: a MagicDNS name (*.ts.net) or one in its 100.64.0.0/10 range. */
+    fun onTailnet(url: String?): Boolean {
+        val host = runCatching { URI(url ?: return false).host }.getOrNull()?.lowercase() ?: return false
+        if (host.endsWith(".ts.net")) return true
+        val parts = host.split('.').mapNotNull { it.toIntOrNull() }
+        return parts.size == 4 && parts[0] == 100 && parts[1] in 64..127
+    }
+
+    /** Whether any VPN (Tailscale, here) is up on this phone. */
+    private fun vpnUp(c: Context): Boolean = runCatching {
+        val cm = c.getSystemService(android.net.ConnectivityManager::class.java)
+        @Suppress("DEPRECATION")
+        cm.allNetworks.any { cm.getNetworkCapabilities(it)?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) == true }
+    }.getOrDefault(true)
 
     fun clearTrouble(c: Context) {
         if (p(c).getLong("home_trouble_since", 0L) == 0L) return
@@ -121,6 +148,8 @@ object HomeServer {
         val m = message.orEmpty()
         return when {
             "resolve host" in m || "No address associated" in m -> "It can't be found on the network. Is Tailscale on, on this phone?"
+            // Tailscale's HTTPS address with Tailscale off: the connection opens and closes in the handshake (2026-10-11).
+            "SSLHandshake" in m || "connection closed" in m -> "It didn't answer securely. Is Tailscale on, on this phone?"
             "pair again" in m || "not paired" in m -> "It doesn't know this phone any more: pair again."
             "timed out" in m || "timeout" in m.lowercase() || "ECONNREFUSED" in m || "Failed to connect" in m || "refused" in m ->
                 "It didn't answer. Is the computer on, and Boswell Server running?"
@@ -130,7 +159,12 @@ object HomeServer {
     }
 
     private const val TROUBLE_ID = 6
-    private const val TROUBLE_NOTICE_MS = 10 * 60_000L
+    /** The computer away for this long (asleep, the server stopped): say so. */
+    private const val TROUBLE_NOTICE_MS = 3 * 60 * 60_000L
+    /** Tailscale plainly off on this phone: that won't fix itself. */
+    private const val TAILSCALE_NOTICE_MS = 10 * 60_000L
+    private const val TAILSCALE = "com.tailscale.ipn"
+    const val TAILSCALE_OFF = "Tailscale is off on this phone, so it can't reach your computer. Turn Tailscale on."
 
     /** Couldn't reach the server, or it refused; [notPaired] when the key no longer works. */
     class Unavailable(message: String, val notPaired: Boolean = false) : IOException(message)
