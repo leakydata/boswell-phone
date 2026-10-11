@@ -392,3 +392,92 @@ warnings for the Omi and phone offer a switch to Sync mode when very low.
   four recordings transcribed through the server in ~1.4 s each, uploads of
   ~30 KB each.
 
+
+## Milestone 11: home does the work, the phone keeps up (2026-10-03 to 2026-10-06)
+
+- **Catch up at home** (CatchUp): what the phone transcribed itself while home
+  couldn't be reached is done again there, one recording at a time, never ahead
+  of new recordings; a Redo keeps everything done by hand (CarryOver).
+- **Boswell's own spoken answers** are labeled as Boswell in recordings.
+- **"Database is locked" crashes** fixed; labeling no longer waits on a full recheck.
+- **Voice matching, measured on the owner's labels:** the owner rule (0.8.0),
+  then AS-norm against a cohort of unnamed voices, pooling, and an SNR veto
+  (quiet voices are never auto-filed). The Omi's mic gain is set from the app
+  (7 of 8 sounded right).
+- **Daily backups to the home server** (0.9.0), later incremental: only new or
+  changed files go up (about 130 MB a day instead of a 550 MB zip).
+
+## Milestone 12: fast and right on a big archive (2026-10-08 to 2026-10-09)
+
+With ~21,500 transcripts, screens had gone empty and labels "didn't stick".
+Both were latency: every clip regrouped every conversation (5-8 s), and
+refreshes piled up behind each other (up to 35 s).
+
+- **Incremental regroups** (only the conversations around changed clips, and a
+  relabel only its own conversation's span), folded refreshes, scans skipped
+  when nothing changed, WAL databases, whole-table voiceprint reads in one
+  transaction ("Couldn't read row"), and a batch person lookup (12 s rebuilds
+  to under 1 s). Problems and slow steps are logged (Device → Problems).
+- **Relabels stick:** a voice moved by hand takes its samples, rejects the old
+  person, and survives a recheck and a Redo; a voice can be split in two; TV
+  voices have their own section in People, and "It's a TV" is first on the
+  voice sheet, which plays the voice at once and steps through its lines.
+- **Owner matching:** matched at 0.85 or more with a lead over named people
+  (103 to 139 of 178 owner voices, no new wrong matches); a person's own large
+  unnamed clusters leave their normalizing cohort (parity 10878/10878).
+
+## Milestone 13: everything on the record (2026-10-10 to 2026-10-11)
+
+- **The out-of-range backlog** (RangeFetch): the Omi stores what it hears with
+  no phone connected; back in range the phone fetches it in 60 s slices, only
+  after 15 s of real quiet (anything said during a fetch is lost: the firmware
+  sends audio nowhere while a phone is connected but not subscribed), only on
+  a strong link (-75 dBm or better, a first batch of 13 kB/s or more), 10 min
+  apart. On a weak link it waits for the Omi's charger.
+- **Memory crashes** (0.10.1): an unused list re-read every transcript, several
+  times at once; heavy voice work now takes turns (HeavyWork). Worst spike
+  149 MB to about 22 MB.
+- **The Omi link after a fetch:** a dropped link is noticed at once, refused
+  requests reconnect cleanly, live audio is subscribed first.
+- **The Omi can freeze** (fw 3.0.21; docs/OMI-PROTOCOL.md): a drop on a strong
+  link that never comes back, its light blinking blue as if still connected.
+  The app now says so ("hold its button 3 s, then press it"; FrozenOmi).
+  Two other lessons from the same afternoon: a charger at -90 dBm drops every
+  connection within seconds (check `dumpsys bluetooth_manager | grep "Approach
+  LSTO"`, which logs the RSSI, before blaming the firmware), and the phone's
+  Tailscale had been off for 24 hours, so nothing went home.
+- **Spotting TV, video and radio** (0.10.3, MediaCheck; boswell-server 0.5.0
+  media.py): unnamed voices go to TypeSafe's Jev through the home server.
+  Measured first on 208 voices from the owner's archive, each with up to 1,500
+  words of its conversation: every voice put at 0.5 or more was a device (67 of
+  67), and about 60% of devices were found; one clip at a time instead of a
+  conversation found only 1 in 5. Marked at 0.80, suggested from 0.50. The
+  whole archive's first pass: 181 voices, 80 marked, 26 suggested.
+- **Everything goes home** (0.10.4): the catch-up covers every recording not
+  transcribed there (phone or cloud, any age), except those corrected by hand.
+- **Saying when home is away** (0.10.5): Tailscale off on the phone (a tailnet
+  address and no VPN up) after 10 min, with "Open Tailscale"; anything else
+  after 3 hours. The old notice was silent and never mentioned Tailscale.
+
+## Where things stand (2026-10-11)
+
+- **Released:** Boswell Phone 0.10.4 (installed), Boswell Server 0.5.0.
+  **0.10.5 is committed and built, not yet installed or released**: install it
+  over USB (`adb install -r app/build/outputs/apk/release/app-release.apk`),
+  check `versionName=0.10.5`, then tag and release as usual.
+- **Releasing:** bump `versionCode`/`versionName` in `app/build.gradle.kts`;
+  `./gradlew -q :app:testDebugUnitTest :app:assembleRelease`; check the APK's
+  time, version (`aapt2 dump badging`) and new strings before installing; an
+  annotated tag (`git tag -a vX -m X`), `git push origin main vX`, then
+  `gh release create vX <apk> --verify-tag -F notes.md` with the APK's SHA-256
+  and the signing certificate's.
+- **Running at home:** the boswell-server and boswell-connector user services
+  (`systemctl --user status ...`); the server on the tailnet only, the connector
+  also on Funnel port 8443. The TypeSafe key is in
+  `~/.local/share/boswell-server/typesafe.key`.
+- **Open:** the Omi's ~330 min backlog from 10-11 (it waits for quiet in range,
+  or the charger, which doesn't start while the Omi reports 100% and "not
+  charging"); a review card listing the TV check's suggestions; a separate
+  "radio" label, if wanted; an audio classifier for the TV voices text misses.
+- **Nothing personal goes in these repos:** no names, addresses or recordings.
+  The owner's name for the connector lives in a local systemd drop-in.
