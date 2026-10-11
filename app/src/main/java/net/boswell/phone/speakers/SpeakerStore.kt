@@ -398,6 +398,12 @@ class SpeakerStore(context: Context) : SQLiteOpenHelper(context, "speakers.db", 
         writableDatabase.execSQL("INSERT OR REPLACE INTO label_checks(key, created) VALUES (?, ?)", arrayOf<Any>(key, now()))
     }
 
+    /** Recordings where a voice was named or confirmed by hand (CatchUp leaves them as they are). */
+    fun clipsNamedByHand(): Set<String> = readableDatabase.rawQuery(
+        "SELECT DISTINCT clip FROM voiceprints WHERE origin IN ('manual', 'confirmed') AND clip IS NOT NULL", null).use { c ->
+        buildSet { while (c.moveToNext()) add(c.getString(0)) }
+    }
+
     /** One voice's answer from the TV check (MediaCheck), by MediaCheck's key for it. */
     data class MediaAnswer(val key: String, val broadcast: Double, val medium: String?, val outcome: String, val created: Double)
 

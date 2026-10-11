@@ -482,10 +482,11 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
         var done = 0
         try {
             archive.sync(store)
-            CatchUp.settleSince(ctx, archive)
+            // Asked once a run: corrections made while it runs are on recordings it has passed or will skip at worst.
+            val hand = CatchUp.byHand(archive, store)
             // Words kept for notes that were never looked at (titles off) don't pile up.
             Redone.before(ctx)
-            if (CatchUp.queue(ctx, archive).isEmpty()) { CatchUp.paid(ctx); return Result.success() }
+            if (CatchUp.queue(ctx, archive, hand).isEmpty()) { CatchUp.paid(ctx); return Result.success() }
             if (busy()) { CatchUp.next(ctx, 3, java.util.concurrent.TimeUnit.MINUTES); return Result.success() }
             try { home.health(ctx) } catch (e: net.boswell.phone.home.HomeServer.Unavailable) {
                 CatchUp.next(ctx, 30, java.util.concurrent.TimeUnit.MINUTES)
@@ -494,7 +495,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
             runCatching { setForeground(foreground("Catching up at home…", CATCH_UP_ID)) }.logged("catch-up: foreground")
             val began = System.currentTimeMillis()
             while (!isStopped) {
-                val queue = CatchUp.queue(ctx, archive).filter { it !in tried }
+                val queue = CatchUp.queue(ctx, archive, hand).filter { it !in tried }
                 CatchUp.state.value = CatchUpState(true, done, queue.size)
                 val name = queue.firstOrNull() ?: run { CatchUp.paid(ctx); null } ?: break
                 // New recordings first: hand back, and come again after them.
@@ -506,7 +507,7 @@ class ProcessingWorker(context: Context, params: WorkerParameters) : CoroutineWo
                 val f = File(out, wav.nameWithoutExtension + ".json")
                 val t = runCatching { TranscriptJson.json.decodeFromString(Transcript.serializer(), f.readText()) }.getOrNull()
                 // Changed since the archive last looked (done again, deleted): nothing to catch up.
-                if (t == null || !CatchUp.byPhone(t.engine) || !net.boswell.phone.audio.ClipAudio.exists(clips, name)) { CatchUp.handled(ctx, name); continue }
+                if (t == null || !CatchUp.notHome(t.engine) || !net.boswell.phone.audio.ClipAudio.exists(clips, name)) { CatchUp.handled(ctx, name); continue }
                 try {
                     processHome(wav, store, out)
                     if (!net.boswell.phone.audio.ClipAudio.exists(clips, name)) { f.delete(); ArchiveChanges.bump() }

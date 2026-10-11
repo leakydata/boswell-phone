@@ -966,15 +966,16 @@ private fun CatchUpSection() {
             runCatching {
                 val speakers = net.boswell.phone.speakers.SpeakerStore(ctx)
                 val archive = net.boswell.phone.archive.Archive(ctx)
-                try { archive.sync(speakers); C.phoneMade(archive) } finally { archive.close(); speakers.close() }
+                try { archive.sync(speakers); C.notHome(archive) } finally { archive.close(); speakers.close() }
             }.getOrDefault(emptyList())
         }
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text("Catch up automatically", style = MaterialTheme.typography.bodyLarge)
-            Text("Recordings from the last ${C.AUTO_DAYS} days that the phone transcribed while your computer couldn't be reached go home again, " +
-                "one at a time, whenever nothing new is waiting. Lines you corrected and voices you named are kept.",
+            Text("Every recording not transcribed on your computer -- by the phone while it couldn't be reached, or in the cloud -- " +
+                "goes home again, newest first, one at a time, whenever nothing new is waiting. Recordings you corrected by hand " +
+                "(a line edited, a voice named) are left as they are.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Switch(checked = auto, onCheckedChange = { auto = it; C.setAuto(ctx, it) })
@@ -984,7 +985,7 @@ private fun CatchUpSection() {
     var pending by remember { mutableStateOf(C.asked(ctx)) }
     LaunchedEffect(run.running, run.done) { pending = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { C.asked(ctx) } }
     if (n > 0 && !run.running && pending == 0 && !asked) Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("$n recording${if (n == 1) "" else "s"} transcribed on the phone ·", style = MaterialTheme.typography.bodyMedium)
+        Text("$n recording${if (n == 1) "" else "s"} not done at home ·", style = MaterialTheme.typography.bodyMedium)
         TextButton(enabled = !asked, onClick = { confirm = true }) { Text("Redo them at home") }
     }
     if (run.running) {
@@ -996,8 +997,8 @@ private fun CatchUpSection() {
         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     if (confirm) AlertDialog(onDismissRequest = { confirm = false },
         title = { Text("Redo $n recording${if (n == 1) "" else "s"} at home?") },
-        text = { Text("Each goes to your computer and is transcribed again there, one at a time, after any new recordings. " +
-            "Lines you corrected, voices you named and your other answers about voices are kept. " +
+        text = { Text("Each goes to your computer and is transcribed again there, one at a time, after any new recordings, " +
+            "including recordings you corrected: the lines you corrected, voices you named and your other answers about voices are kept. " +
             "Titles and summaries are made again where the words changed noticeably.") },
         confirmButton = { TextButton(onClick = {
             confirm = false; asked = true

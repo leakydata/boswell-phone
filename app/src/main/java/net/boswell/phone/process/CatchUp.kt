@@ -21,16 +21,17 @@ import net.boswell.phone.capture.logged
 data class CatchUpState(val running: Boolean = false, val done: Int = 0, val left: Int = 0, val note: String? = null)
 
 /**
- * Catch-up at home: recordings the phone transcribed itself while the home
- * server couldn't be reached are done again there, at low priority, keeping
- * everything done by hand (CarryOver).
+ * Catch-up at home: every recording not transcribed on the home server -- done
+ * by the phone itself while home couldn't be reached, or in the cloud -- is done
+ * again there, at low priority, so the archive is as good as home makes it
+ * without the cloud.
  *
- * Automatically ([auto], on unless switched off): recordings since home
- * processing was first used ([since]) and at most [AUTO_DAYS] old. By hand
- * ([requestAll]): every recording the phone transcribed that still has its
- * sound. Either way only recordings with speech, transcribed by the phone
- * (not the cloud, not home), whose sound (Ogg or WAV) is still here; a
- * deleted recording is gone from the archive and never comes back.
+ * Automatically ([auto], on unless switched off): all of them, however old,
+ * except recordings with something corrected by hand ([byHand]), which are left
+ * exactly as they are. By hand ([requestAll], "Redo them at home"): those too,
+ * keeping what was done by hand (CarryOver). Either way only recordings with
+ * speech whose sound (Ogg or WAV) is still here; a deleted recording is gone
+ * from the archive and never comes back.
  *
  * The work itself is ProcessingWorker in catch-up mode, one recording at a
  * time and newest first, under its own name: it never runs while new
@@ -42,32 +43,10 @@ object CatchUp {
 
     val state = MutableStateFlow(CatchUpState())
 
-    /** Recordings older than this are caught up only by hand. */
-    const val AUTO_DAYS = 7
-
     fun auto(c: Context) = p(c).getBoolean("home_catch_up", true)
     fun setAuto(c: Context, on: Boolean) {
         p(c).edit().putBoolean("home_catch_up", on).apply()
         if (on) enqueue(c)
-    }
-
-    /**
-     * When home processing was first used (epoch seconds): set when pairing or
-     * switching it on. For a pairing made before this was kept, the earliest
-     * recording transcribed at home stands in ([settleSince]).
-     */
-    fun since(c: Context): Double? = p(c).getLong("home_since", 0L).takeIf { it > 0 }?.toDouble()
-
-    fun markSince(c: Context) {
-        if (since(c) == null) p(c).edit().putLong("home_since", System.currentTimeMillis() / 1000).apply()
-    }
-
-    fun settleSince(c: Context, archive: Archive) {
-        if (since(c) != null || !net.boswell.phone.home.HomeServer.paired(c)) return
-        val first = archive.readableDatabase.rawQuery("SELECT MIN(started) FROM clips WHERE home = 1", null).use { cur ->
-            if (cur.moveToFirst() && !cur.isNull(0)) cur.getDouble(0) else null
-        } ?: return
-        p(c).edit().putLong("home_since", first.toLong()).apply()
     }
 
     /**
@@ -81,36 +60,52 @@ object CatchUp {
 
     // ------------------------------------------------------------- what to redo
 
-    /** Transcribed by the phone itself: not in the cloud, not at home. */
-    fun byPhone(engine: String) = !engine.contains("(cloud)") && !engine.contains("(home")
+    /** Not transcribed at home: by the phone, or in the cloud. */
+    fun notHome(engine: String) = !engine.contains("(home")
 
-    private const val PHONE_MADE = "speech = 1 AND audio = 1 AND cloud = 0 AND home = 0"
+    private const val NOT_HOME = "speech = 1 AND audio = 1 AND home = 0"
 
-    /** Every recording the phone transcribed that still has its sound: what "Redo them at home" covers. */
-    fun phoneMade(archive: Archive): List<String> = archive.readableDatabase.rawQuery(
-        "SELECT name FROM clips WHERE $PHONE_MADE ORDER BY started DESC", null).use { c ->
+    /** Every recording not transcribed at home that still has its sound: what "Redo them at home" covers. */
+    fun notHome(archive: Archive): List<String> = archive.readableDatabase.rawQuery(
+        "SELECT name FROM clips WHERE $NOT_HOME ORDER BY started DESC", null).use { c ->
         buildList { while (c.moveToNext()) add(c.getString(0)) }
     }
 
-    /** What's left to catch up, newest first: asked for by hand, and (when [auto]) the recent ones since [since]. */
-    fun queue(c: Context, archive: Archive): List<String> {
+    /**
+     * Recordings with something corrected by hand -- a line's words edited, or a voice
+     * named or confirmed there (not one the phone filed itself, a TV check's included):
+     * the automatic catch-up leaves them as they are.
+     */
+    fun byHand(archive: Archive, store: net.boswell.phone.speakers.SpeakerStore): Set<String> =
+        archive.readableDatabase.rawQuery("SELECT DISTINCT clip FROM lines WHERE original IS NOT NULL", null).use { c ->
+            buildSet { while (c.moveToNext()) add(c.getString(0)) }
+        } + store.clipsNamedByHand()
+
+    private fun byHand(c: Context, archive: Archive): Set<String> {
+        val store = net.boswell.phone.speakers.SpeakerStore(c)
+        return try { byHand(archive, store) } finally { store.close() }
+    }
+
+    /**
+     * What's left to catch up, newest first: asked for by hand, and (when [auto]) every
+     * other recording not done at home that wasn't corrected by hand. [hand] is [byHand],
+     * when the caller has it already (it's asked for once per recording in a run).
+     */
+    fun queue(c: Context, archive: Archive, hand: Set<String>? = null): List<String> {
         if (!net.boswell.phone.home.HomeServer.paired(c)) return emptyList()
         val asked = lines(c, MANUAL)
         val skip = lines(c, SKIP)
-        val from = since(c)?.let { maxOf(it, System.currentTimeMillis() / 1000.0 - AUTO_DAYS * 86_400) }
-        val recent = from != null && auto(c) && net.boswell.phone.home.HomeServer.enabled(c)
-        return archive.readableDatabase.rawQuery("SELECT name, started FROM clips WHERE $PHONE_MADE ORDER BY started DESC", null).use { cur ->
-            buildList {
-                while (cur.moveToNext()) {
-                    val name = cur.getString(0)
-                    if (name in skip) continue
-                    if (name in asked || (recent && cur.getDouble(1) >= from!!)) add(name)
-                }
-            }
-        }
+        val automatic = auto(c) && net.boswell.phone.home.HomeServer.enabled(c)
+        if (!automatic && asked.isEmpty()) return emptyList()
+        val leave = if (automatic) hand ?: byHand(c, archive) else emptySet()
+        return pick(notHome(archive), asked, skip, automatic, leave)
     }
 
-    /** "Redo them at home": every recording the phone transcribed, tried again even if it failed before. */
+    /** Of the recordings not done at home: those asked for by hand, and when [automatic] the rest but [leave]; never [skip]. */
+    fun pick(notHome: List<String>, asked: Set<String>, skip: Set<String>, automatic: Boolean, leave: Set<String>): List<String> =
+        notHome.filter { it !in skip && (it in asked || (automatic && it !in leave)) }
+
+    /** "Redo them at home": every recording not done at home, tried again even if it failed before. */
     fun requestAll(c: Context, names: List<String>) {
         synchronized(this) {
             File(c.filesDir, MANUAL).writeText((lines(c, MANUAL) + names).joinToString("\n"))

@@ -70,7 +70,8 @@ object HomeServer {
     fun enabled(c: Context) = paired(c) && p(c).getBoolean("home_enabled", false)
     fun setEnabled(c: Context, on: Boolean) {
         p(c).edit().putBoolean("home_enabled", on).apply()
-        if (on) net.boswell.phone.process.CatchUp.markSince(c)
+        // Whatever wasn't done at home is caught up there (CatchUp).
+        if (on) net.boswell.phone.process.CatchUp.enqueue(c)
     }
     fun fallback(c: Context): Fallback = runCatching { Fallback.valueOf(p(c).getString("home_fallback", null)!!) }.getOrDefault(Fallback.PHONE)
     fun setFallback(c: Context, f: Fallback) = p(c).edit().putString("home_fallback", f.name).apply()
@@ -162,8 +163,8 @@ object HomeServer {
                 val token = json.parseToJsonElement(conn.inputStream.readBytes().decodeToString()).jsonObject["token"]!!.jsonPrimitive.content
                 Secrets.put(c, KEY, token)
                 p(c).edit().putString("home_url", base).putBoolean("home_enabled", true).commit()
-                // Recordings from here on that the phone does itself, home away, are caught up later (CatchUp).
-                net.boswell.phone.process.CatchUp.markSince(c)
+                // Whatever wasn't done at home is caught up there (CatchUp).
+                net.boswell.phone.process.CatchUp.enqueue(c)
                 null
             }
             403 -> "The code was wrong or has expired. Show a new one on the server (press p) and try again."
