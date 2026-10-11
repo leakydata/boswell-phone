@@ -60,7 +60,7 @@ object BatteryWatch {
             "Live mode keeps Bluetooth streaming all the time. Sync mode uses much less: the Omi records on its own and the phone collects it later.", offerSync = true)
     }
 
-    private fun post(c: Context, id: Int, title: String, text: String, offerSync: Boolean) {
+    internal fun post(c: Context, id: Int, title: String, text: String, offerSync: Boolean) {
         AssistantNotify.ensureChannels(c)
         val b = NotificationCompat.Builder(c, AssistantNotify.ANSWERS)
             .setSmallIcon(R.drawable.ic_stat_mic)

@@ -220,3 +220,33 @@ value, not the live link.** It read −87 dBm while the actual connection was
 
 Whatever the phone platform offers, find out whether its RSSI is the live link
 or the last advertisement before building any logic on it.
+
+## The Omi can freeze on a healthy link
+
+Seen twice on 2026-10-11 (CV 1, fw 3.0.21, on its charger): a minute or two
+into a normal stream, a read takes over 5 s, then the link drops with a
+supervision timeout (Android status 147, HCI reason 8), and the Omi never
+reconnects. Scans from the desk didn't see it advertise, but the charger's
+distance from the phone wasn't checked, and later that day the same charger
+spot gave the phone -90 dBm ("Approaching LSTO" in the controller's quality
+reports): a weak link is also a cause of drops, and of not seeing it at all. What says freeze is its light, which kept the "charging, connected" pattern
+(green alternating with blue, `set_led_state` in `main.c`), so the firmware never
+heard the disconnect: `_transport_disconnected` clears `is_connected` first thing
+and never ran. The watchdog is fed from `main`'s loop, which still runs (the
+LED blinks, the button works), so it doesn't reboot either.
+
+Reason 8 means the Omi went quiet over the air, which points at its radio core
+(the nRF5340 network core, which has no watchdog) rather than the app core's
+Bluetooth host: a stuck host still has its link layer acknowledging, and the
+phone would see a 30 s ATT timeout instead. Nothing found scales with the
+stored backlog; the reads the phone makes (charging, clock, storage status)
+return cached values. Not root-caused; the Omi's RTT/UART log during a drop
+would settle it (no "Transport disconnected" line, or "Couldn't allocate a
+buffer after waiting 10 seconds" from `drivers/bluetooth/hci/ipc.c`).
+
+Nothing the phone sends reaches a frozen Omi. Holding the button 3 s (off) and
+pressing it again brings it back. So the app says so (`FrozenOmi`): a drop
+after 30 s of streaming, on a link of -70 dBm or better read within 90 s,
+followed by 3 min without it, is called a freeze rather than "away". It also
+keeps the Omi's Bluetooth thread lighter: the clock is read every 5 min, not
+with every 30 s link check.

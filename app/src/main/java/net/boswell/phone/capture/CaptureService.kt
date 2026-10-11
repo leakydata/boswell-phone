@@ -144,6 +144,9 @@ class CaptureService : LifecycleService() {
             // 2 min, each with a 30 s timeout) once left someone back in range for
             // three minutes before it noticed.
             var waitForReturn = false
+            // When a drop looked like the Omi freezing rather than leaving (FrozenOmi), and whether that was said.
+            var frozenSince: Long? = null
+            var frozenTold = false
             while (isActive) {
                 streamingSince = null
                 var drain = false
@@ -179,6 +182,12 @@ class CaptureService : LifecycleService() {
                 }
                 val streamedFor = streamingSince?.let { System.currentTimeMillis() - it } ?: 0L
                 val lasted = System.currentTimeMillis() - attemptStarted
+                if (streamedFor > 0) {
+                    val rssi = CaptureRepository.state.value.rssi
+                    val now = System.currentTimeMillis()
+                    frozenSince = if (FrozenOmi.suspicious(now, streamedFor, rssi?.value, rssi?.atMillis)) now else null
+                    frozenTold = false
+                }
                 if (streamedFor > 60_000) {
                     // It was working: one quick direct try, then wait for it.
                     backoffMs = BACKOFF_MIN_MS; waitForReturn = false
@@ -192,7 +201,17 @@ class CaptureService : LifecycleService() {
                     backoffMs = if (lasted < 3_000) (backoffMs * 2).coerceAtMost(BACKOFF_MAX_MS) else 2_000L
                 }
                 CaptureRepository.update { it.copy(link = Link.AWAY, nextRetryMillis = null) }
-                notify(if (waitForReturn) "Omi away — connects as soon as it's back in range" else "Omi away — reconnecting")
+                val frozen = FrozenOmi.frozen(System.currentTimeMillis(), frozenSince)
+                if (frozen && !frozenTold) {
+                    frozenTold = true
+                    CaptureRepository.log("the Omi stopped answering on a strong link and hasn't come back: it may be frozen")
+                    FrozenOmi.tell(this@CaptureService)
+                }
+                notify(when {
+                    frozen -> "Omi not answering — it may be frozen: hold its button 3 s, then press it"
+                    waitForReturn -> "Omi away — connects as soon as it's back in range"
+                    else -> "Omi away — reconnecting"
+                })
                 delay(backoffMs)
             }
         }
@@ -241,6 +260,7 @@ class CaptureService : LifecycleService() {
         )
         CaptureRepository.update { it.copy(device = info) }
         CaptureRepository.log("connected: ${info.model ?: "Omi"} fw ${info.firmware} codec $codec mtu ${conn.mtu}")
+        FrozenOmi.clear(this)
         readVolatile(conn)
         CaptureRepository.state.value.let { st ->
             CaptureRepository.log("battery ${st.battery?.value ?: "?"}% · " + when (st.charging?.value) { true -> "charging"; false -> "not charging"; null -> "charging unknown" })
@@ -355,7 +375,7 @@ class CaptureService : LifecycleService() {
                 // that fails twice in a row means the link is gone even if the
                 // stack has not said so yet.
                 if (tick % LINK_CHECK_SECONDS == 0) {
-                    val ok = runCatching { readVolatile(conn, strict = true) }.isSuccess
+                    val ok = runCatching { readVolatile(conn, strict = true, clock = tick % CLOCK_CHECK_SECONDS == 0) }.isSuccess
                     failedChecks = if (ok) 0 else failedChecks + 1
                     if (failedChecks >= 2) throw IllegalStateException("device stopped answering")
                     if (ok && CaptureRepository.state.value.buttonReady == false && conn.has(OmiUuids.BUTTON)) {
@@ -609,8 +629,12 @@ class CaptureService : LifecycleService() {
     private suspend fun readText(conn: OmiConnection, uuid: java.util.UUID): String? =
         runCatching { String(conn.read(uuid)).trim('\u0000', ' ') }.getOrNull()
 
-    /** Battery, charging, RSSI, clock. With [strict], a failed battery read throws: it is the link check. */
-    private suspend fun readVolatile(conn: OmiConnection, strict: Boolean = false) {
+    /**
+     * Battery, charging, RSSI, and the clock when [clock]. With [strict], a failed battery read throws:
+     * it is the link check. The clock is read at connect and then only now and then: every read is
+     * work for the Omi's Bluetooth thread, which is what locks up when it freezes (FrozenOmi).
+     */
+    private suspend fun readVolatile(conn: OmiConnection, strict: Boolean = false, clock: Boolean = true) {
         val now = System.currentTimeMillis()
         val battery = if (strict) conn.read(OmiUuids.BATTERY)[0].toInt() and 0xff
         else runCatching { conn.read(OmiUuids.BATTERY)[0].toInt() and 0xff }.getOrNull()
@@ -622,7 +646,7 @@ class CaptureService : LifecycleService() {
         runCatching { conn.rssi() }.getOrNull()?.let { r ->
             CaptureRepository.update { it.copy(rssi = Reading(r, now)) }
         }
-        runCatching {
+        if (clock) runCatching {
             val v = conn.read(OmiUuids.TIME_READ)
             (v[0].toLong() and 0xff) or ((v[1].toLong() and 0xff) shl 8) or
                 ((v[2].toLong() and 0xff) shl 16) or ((v[3].toLong() and 0xff) shl 24)
@@ -897,6 +921,8 @@ class CaptureService : LifecycleService() {
         private const val PAUSE_CLOSES_CLIP_MS = 4_000L
         const val HOME_CLIP_SECONDS = 10
         private const val LINK_CHECK_SECONDS = 30
+        /** The Omi's clock drifts seconds a day; reading it every 5 min is plenty. */
+        private const val CLOCK_CHECK_SECONDS = 300
         private const val DRAIN_RETRY_MS = 5 * 60_000L
         private const val LISTENING_ID = 77
         private const val BACKOFF_MIN_MS = 5_000L
