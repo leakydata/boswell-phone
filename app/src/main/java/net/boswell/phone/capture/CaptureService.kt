@@ -200,8 +200,8 @@ class CaptureService : LifecycleService() {
                     // the stack refusing): auto-connect does the waiting otherwise.
                     backoffMs = if (lasted < 3_000) (backoffMs * 2).coerceAtMost(BACKOFF_MAX_MS) else 2_000L
                 }
-                CaptureRepository.update { it.copy(link = Link.AWAY, nextRetryMillis = null) }
                 val frozen = FrozenOmi.frozen(System.currentTimeMillis(), frozenSince)
+                CaptureRepository.update { it.copy(link = Link.AWAY, nextRetryMillis = null, frozen = frozen) }
                 if (frozen && !frozenTold) {
                     frozenTold = true
                     CaptureRepository.log("the Omi stopped answering on a strong link and hasn't come back: it may be frozen")
@@ -261,6 +261,7 @@ class CaptureService : LifecycleService() {
         CaptureRepository.update { it.copy(device = info) }
         CaptureRepository.log("connected: ${info.model ?: "Omi"} fw ${info.firmware} codec $codec mtu ${conn.mtu}")
         FrozenOmi.clear(this)
+        CaptureRepository.update { it.copy(frozen = false) }
         readVolatile(conn)
         CaptureRepository.state.value.let { st ->
             CaptureRepository.log("battery ${st.battery?.value ?: "?"}% · " + when (st.charging?.value) { true -> "charging"; false -> "not charging"; null -> "charging unknown" })

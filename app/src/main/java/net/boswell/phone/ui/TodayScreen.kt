@@ -219,8 +219,12 @@ fun StatusPill(onClick: () -> Unit) {
     val quiet = cap.link == Link.STREAMING && (last == null || System.currentTimeMillis() - last > 4_000)
     val (label, dot) = when (cap.link) {
         Link.STREAMING -> if (quiet) "Listening" to Color(0xFF66BB6A) else "Recording" to Color(0xFFE53935)
-        Link.CONNECTING -> "Connecting" to Color(0xFFFFB300)
-        Link.AWAY -> "Omi away" to Color(0xFF9E9E9E)
+        // Frozen: the retries between waits shouldn't flip it back to "Connecting".
+        Link.CONNECTING, Link.AWAY -> when {
+            cap.frozen -> "Omi frozen · restart it" to Color(0xFFE53935)
+            cap.link == Link.CONNECTING -> "Connecting" to Color(0xFFFFB300)
+            else -> "Omi away" to Color(0xFF9E9E9E)
+        }
         Link.SYNCING -> (cap.sync?.takeIf { it.target > 0 }?.let { "Syncing ${it.took * 100 / it.target}%" } ?: "Syncing") to Color(0xFF42A5F5)
         Link.IDLE -> if (syncMode) "Sync mode" to Color(0xFF42A5F5).copy(alpha = 0.5f) else "Omi off" to Color(0xFF9E9E9E)
     }

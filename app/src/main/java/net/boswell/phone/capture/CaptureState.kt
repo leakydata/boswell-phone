@@ -70,6 +70,8 @@ data class CaptureState(
     val buttonReady: Boolean? = null,
     /** The last tap (1) or double tap (2) the Omi reported, and when. */
     val lastButton: Pair<Int, Long>? = null,
+    /** Gone after a drop on a strong link, long enough to look frozen (FrozenOmi): shown instead of "away". */
+    val frozen: Boolean = false,
     val log: List<String> = emptyList(),
 )
 

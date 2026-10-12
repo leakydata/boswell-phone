@@ -117,7 +117,8 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                 val last = cap.lastAudioMillis
                 val quiet = last == null || System.currentTimeMillis() - last > 4_000
                 Text(
-                    when (cap.link) {
+                    if (cap.frozen && cap.link != Link.STREAMING && cap.link != Link.IDLE) "Not answering · it may be frozen: hold its button 3 s, then press it"
+                    else when (cap.link) {
                         Link.IDLE -> when (ui.mode) {
                             Mode.SYNC -> if (ui.lastSync > 0) "Synced ${Fmt.ago(ui.lastSync / 1000.0)} · ${ui.lastSyncResult ?: ""}" else "Waiting for the first sync"
                             else -> "Not connected"
