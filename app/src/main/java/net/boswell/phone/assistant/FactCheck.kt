@@ -142,7 +142,7 @@ class FactCheck(private val context: Context) {
         val site = v.source?.let { Claims.site(it) }
         AssistantNotify.post(context, AssistantNotify.FACT_CHECKS, "Fact check: ${v.verdict.label.lowercase()}",
             "${v.explanation}${site?.let { " Source: $it." } ?: ""} Said by $who. [L${line.id}]", speak = false)
-        if (AssistantPrefs.factAloud(context)) AssistantNotify.speak(context, "Fact check: ${v.verdict.label.lowercase()}. ${v.explanation}")
+        if (AssistantPrefs.factAloud(context)) AssistantNotify.speak(context, "Fact check: ${v.verdict.label.lowercase()}. ${v.explanation}", queue = true)
     }
 
     /** The web plugin's citations, in case the reply's JSON leaves the source out. */
