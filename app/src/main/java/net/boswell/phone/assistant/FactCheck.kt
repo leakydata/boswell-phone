@@ -86,6 +86,7 @@ class FactCheck(private val context: Context) {
             store.logCall(SPOT, llm.name, reply)
             val spotted = Claims.parse(reply.text.orEmpty()) ?: return FactStatus.error(context, "the reply wasn't the JSON asked for: ${reply.text.orEmpty().take(80)}")
             val earlierClaims = checked.map { it.claim }.toMutableList()
+            val toTell = mutableListOf<Claims.Checked>()
             for (s in spotted) {
                 val line = Claims.locate(s, new) ?: continue
                 if (Claims.repeats(s.claim, earlierClaims)) continue
@@ -97,8 +98,10 @@ class FactCheck(private val context: Context) {
                     FactStatus.overLimit(context); continue
                 }
                 if (spent() >= budget) { FactStatus.skip(context, "today's budget is spent"); break }
-                verify(web, store, s, line, all)
+                verify(web, store, s, line, all)?.let { toTell += it }
             }
+            // One message for the whole look, so the claims found together aren't read over each other.
+            if (AssistantPrefs.factAloud(context)) Claims.spoken(toTell)?.let { AssistantNotify.speak(context, it) }
         } catch (e: Exception) {
             FactStatus.error(context, e.message ?: e.toString())
             throw e
@@ -108,7 +111,7 @@ class FactCheck(private val context: Context) {
     }
 
     /** One claim, checked on the web, recorded, and told if it calls for it. */
-    private fun verify(web: Llm, store: AssistantStore, s: Claims.Spotted, line: Claims.Line, around: List<Claims.Line>) {
+    private fun verify(web: Llm, store: AssistantStore, s: Claims.Spotted, line: Claims.Line, around: List<Claims.Line>): Claims.Checked? {
         val t = DateTimeFormatter.ofPattern("h:mm a")
         val near = around.filter { it.t0 in line.t0 - 60..line.t0 + 30 && it.key != Archive.BOSWELL }
             .joinToString("\n") { "${it.speaker}: ${it.text}" }
@@ -127,22 +130,26 @@ class FactCheck(private val context: Context) {
         } catch (e: Exception) {
             Problems.report("fact check: web check", e)
             store.logCall(PURPOSE, web.name, null, e.message)
-            return FactStatus.error(context, e.message ?: e.toString())
+            FactStatus.error(context, e.message ?: e.toString())
+            return null
         }
         store.logCall(PURPOSE, web.name, reply)
         val v = Claims.verdict(reply.text.orEmpty(), citations(reply.message))
-            ?: return FactStatus.error(context, "the check's reply wasn't the JSON asked for: ${reply.text.orEmpty().take(80)}")
+        if (v == null) {
+            FactStatus.error(context, "the check's reply wasn't the JSON asked for: ${reply.text.orEmpty().take(80)}")
+            return null
+        }
         val who = if (line.me) "you" else line.speaker
         val answer = v.answer(line.id)
         val exchange = store.addExchange(PURPOSE, "$who: “${s.words}”", answer, reply.cost)
         store.addFactCheck(FactCheckRow(0, System.currentTimeMillis() / 1000.0, s.claim, s.words, line.speaker, line.clip, line.offset, line.t0, line.t1,
             line.conversation, v.verdict.name, v.explanation, v.source, reply.cost, exchange))
         FactStatus.checked(context, v.verdict)
-        if (!v.verdict.notifies(AssistantPrefs.factTrue(context))) return
+        if (!v.verdict.notifies(AssistantPrefs.factTrue(context))) return null
         val site = v.source?.let { Claims.site(it) }
         AssistantNotify.post(context, AssistantNotify.FACT_CHECKS, "Fact check: ${v.verdict.label.lowercase()}",
             "${v.explanation}${site?.let { " Source: $it." } ?: ""} Said by $who. [L${line.id}]", speak = false)
-        if (AssistantPrefs.factAloud(context)) AssistantNotify.speak(context, "Fact check: ${v.verdict.label.lowercase()}. ${v.explanation}", queue = true)
+        return v
     }
 
     /** The web plugin's citations, in case the reply's JSON leaves the source out. */
@@ -290,6 +297,23 @@ object Claims {
         val explanation = str("explanation") ?: return null
         val source = str("source")?.takeIf { it.startsWith("http") } ?: citations.firstOrNull { it.startsWith("http") }
         return Checked(v, explanation, source)
+    }
+
+    /**
+     * What is said aloud for the checks of one look: a single correction as "Fact check: false. …", several
+     * as one message, the most wrong first ("First, false: …"). Null when there is nothing to tell.
+     */
+    fun spoken(told: List<Checked>): String? {
+        val ordered = told.sortedBy { when (it.verdict) { Verdict.FALSE -> 0; Verdict.MISLEADING -> 1; else -> 2 } }
+        fun sentence(t: String) = t.trim().let { if (it.last() in ".!?") it else "$it." }
+        return when (ordered.size) {
+            0 -> null
+            1 -> "Fact check: ${ordered[0].verdict.label.lowercase()}. ${sentence(ordered[0].explanation)}"
+            else -> "Fact check, ${ordered.size} things. " + ordered.mapIndexed { i, c ->
+                val place = listOf("First", "Second", "Third", "Fourth", "Fifth").getOrElse(i) { "Next" }
+                "$place, ${c.verdict.label.lowercase()}: ${sentence(c.explanation)}"
+            }.joinToString(" ")
+        }
     }
 
     /** "en.wikipedia.org" from a URL, for saying where without reading out the whole link. */

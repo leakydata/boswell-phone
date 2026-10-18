@@ -125,10 +125,8 @@ object AssistantNotify {
      * spoken table): when it started and ended, the exact words, and the
      * voice. The Omi hears the phone too, and that is how a recording
      * transcribed later tells Boswell's voice from a person's (BoswellLines).
-     * A new utterance cuts off what is playing, unless it is [queue]d: fact checks
-     * come in threes, and each cut the one before it short.
      */
-    fun speak(c: Context, text: String, voiceName: String? = AssistantPrefs.ttsVoice(c), queue: Boolean = false) {
+    fun speak(c: Context, text: String, voiceName: String? = AssistantPrefs.ttsVoice(c)) {
         val app = c.applicationContext
         // Never into a call (phone or video): the notification is enough then.
         if (inCall(app)) return
@@ -140,7 +138,7 @@ object AssistantNotify {
             val id = "boswell-${utterances.incrementAndGet()}"
             pending[id] = said to (t.voice?.name ?: voiceName)
             duck(app)
-            if (t.speak(said, if (queue) TextToSpeech.QUEUE_ADD else TextToSpeech.QUEUE_FLUSH, null, id) != TextToSpeech.SUCCESS) { pending.remove(id); unduck(app) }
+            if (t.speak(said, TextToSpeech.QUEUE_FLUSH, null, id) != TextToSpeech.SUCCESS) { pending.remove(id); unduck(app) }
         }
     }
 

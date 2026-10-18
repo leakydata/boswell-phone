@@ -110,4 +110,12 @@ class FactCheckTest {
         assertFalse(f.on("clip1", 110.0, 112.0))
         assertFalse(f.on("clip2", 104.0, 106.0))
     }
+
+    @Test fun a_look_with_several_corrections_is_one_message_worst_first() {
+        fun c(v: Verdict, e: String) = Claims.Checked(v, e, null)
+        assertNull(Claims.spoken(emptyList()))
+        assertEquals("Fact check: false. The tower is 330 meters tall.", Claims.spoken(listOf(c(Verdict.FALSE, "The tower is 330 meters tall."))))
+        assertEquals("Fact check, 3 things. First, false: It opened in 1889. Second, misleading: Only in part. Third, checks out: Yes.",
+            Claims.spoken(listOf(c(Verdict.MISLEADING, "Only in part"), c(Verdict.TRUE, "Yes."), c(Verdict.FALSE, "It opened in 1889."))))
+    }
 }
