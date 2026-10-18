@@ -53,7 +53,7 @@ class FactCheck(private val context: Context) {
             val now = System.currentTimeMillis() / 1000.0
             val spans = DirectAsks.spans(DirectAsks.recent(store.exchangesSince(now - DirectAsks.RECENT_S), now))
             val since = maxOf(lastLine, now - NEW_AT_MOST_S)
-            val all = lines(archive, speakers, since - CONTEXT_S)
+            val all = lines(context, archive, speakers, since - CONTEXT_S)
             val fresh = all.filter { it.t0 > since }
             if (fresh.isEmpty()) return
             lastLine = fresh.maxOf { it.t0 }
@@ -159,30 +159,30 @@ class FactCheck(private val context: Context) {
         }
     }.getOrDefault(emptyList())
 
-    /** Lines since [from], oldest first, with who said them. */
-    private fun lines(archive: Archive, speakers: SpeakerStore, from: Double): List<Claims.Line> {
-        val owner = AssistantPrefs.owner(context)
-        val names = HashMap<Long, String?>()
-        return archive.readableDatabase.rawQuery("""
-            SELECT l.id, l.t0, l.t1, l.clip, l.offset, s.conv_key, l.text, c.conversation FROM lines l
-            LEFT JOIN clip_speakers s ON s.clip = l.clip AND s.label = l.label LEFT JOIN clips c ON c.name = l.clip
-            WHERE l.t0 >= ? ORDER BY l.t0 LIMIT 300""", arrayOf(from.toString())).use { c ->
-            buildList {
-                while (c.moveToNext()) {
-                    val key = if (c.isNull(5)) null else c.getString(5)
-                    val pid = key?.takeIf { it.startsWith("p") }?.drop(1)?.toLongOrNull()
-                    val who = if (key == Archive.BOSWELL) BoswellLines.AS_SAID_BY else pid?.let { p -> names.getOrPut(p) { speakers.nameOf(p) } } ?: "someone"
-                    val me = pid != null && pid == owner
-                    add(Claims.Line(c.getLong(0), c.getDouble(1), c.getDouble(2), c.getString(3), c.getDouble(4), key,
-                        if (me) "$who (me)" else who, c.getString(6), if (c.isNull(7)) null else c.getLong(7), me))
-                }
-            }
-        }
-    }
-
     private val zone get() = ZoneId.systemDefault()
 
     companion object {
+        /** Lines since [from], oldest first, with who said them. */
+        fun lines(context: Context, archive: Archive, speakers: SpeakerStore, from: Double): List<Claims.Line> {
+            val owner = AssistantPrefs.owner(context)
+            val names = HashMap<Long, String?>()
+            return archive.readableDatabase.rawQuery("""
+                SELECT l.id, l.t0, l.t1, l.clip, l.offset, s.conv_key, l.text, c.conversation FROM lines l
+                LEFT JOIN clip_speakers s ON s.clip = l.clip AND s.label = l.label LEFT JOIN clips c ON c.name = l.clip
+                WHERE l.t0 >= ? ORDER BY l.t0 LIMIT 300""", arrayOf(from.toString())).use { c ->
+                buildList {
+                    while (c.moveToNext()) {
+                        val key = if (c.isNull(5)) null else c.getString(5)
+                        val pid = key?.takeIf { it.startsWith("p") }?.drop(1)?.toLongOrNull()
+                        val who = if (key == Archive.BOSWELL) BoswellLines.AS_SAID_BY else pid?.let { p -> names.getOrPut(p) { speakers.nameOf(p) } } ?: "someone"
+                        val me = pid != null && pid == owner
+                        add(Claims.Line(c.getLong(0), c.getDouble(1), c.getDouble(2), c.getString(3), c.getDouble(4), key,
+                            if (me) "$who (me)" else who, c.getString(6), if (c.isNull(7)) null else c.getLong(7), me))
+                    }
+                }
+            }
+        }
+
         /** Verifying: the web-searched check, and the budget's name. */
         const val PURPOSE = "factcheck"
         /** Spotting: the cheap pass that picks out claims. */

@@ -159,7 +159,7 @@ object AssistantNotify {
     private fun unduck(app: Context) = runCatching { app.getSystemService(android.media.AudioManager::class.java).abandonAudioFocusRequest(focus) }
 
     /** On a phone or video call, or the phone ringing. */
-    private fun inCall(app: Context): Boolean = app.getSystemService(android.media.AudioManager::class.java).mode.let {
+    fun inCall(app: Context): Boolean = app.getSystemService(android.media.AudioManager::class.java).mode.let {
         it == android.media.AudioManager.MODE_IN_CALL || it == android.media.AudioManager.MODE_IN_COMMUNICATION ||
             it == android.media.AudioManager.MODE_RINGTONE || it == android.media.AudioManager.MODE_CALL_SCREENING
     }

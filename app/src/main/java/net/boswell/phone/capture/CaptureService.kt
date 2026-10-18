@@ -404,6 +404,14 @@ class CaptureService : LifecycleService() {
                 if (tick % net.boswell.phone.assistant.FactCheck.EVERY_SECONDS == 0 && checking?.isActive != true) {
                     checking = lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { timed("fact check", 30_000) { factCheck.tick() } }.logged("fact check") }
                 }
+                // Its own job too: a look at the room takes as long as the model does.
+                if (tick % net.boswell.phone.assistant.Chime.EVERY_SECONDS == net.boswell.phone.assistant.Chime.OFFSET_SECONDS && chiming?.isActive != true) {
+                    chiming = lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { timed("chime", 30_000) { chime.tick() } }.logged("chime") }
+                }
+                // A chime worked out waits for a pause in the room; this is the cheap check for one.
+                if (tick % 3 == 0 && chime.isWaiting()) {
+                    lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { chime.deliver() }.logged("chime") }
+                }
                 if (tick % 10 == 0) {
                     val n = conn.notifications; val f = CaptureRepository.state.value.frames
                     android.util.Log.i("Boswell", "rate: ${(n - lastNotes) / 10.0}/s arriving, ${(f - lastFrames) / 10.0}/s decoded")
@@ -430,7 +438,9 @@ class CaptureService : LifecycleService() {
     private var watching: Job? = null
     private val watcher by lazy { net.boswell.phone.assistant.Watcher(this) }
     private var checking: Job? = null
+    private var chiming: Job? = null
     private val factCheck by lazy { net.boswell.phone.assistant.FactCheck(this) }
+    private val chime by lazy { net.boswell.phone.assistant.Chime(this) }
 
     /**
      * A button question's words from Parakeet in the cloud, or null to use the

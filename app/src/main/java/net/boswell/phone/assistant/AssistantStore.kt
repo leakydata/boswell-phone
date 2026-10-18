@@ -307,6 +307,25 @@ object AssistantPrefs {
     /** Web-searched checks an hour at most; claims over it are skipped (and counted), not queued. */
     fun factPerHour(c: Context) = p(c).getInt("factcheck_per_hour", 6)
 
+    /**
+     * Chiming in (Chime): a guest in the room who now and then says something worth noting, aloud, to everyone.
+     * Off unless turned on. The pace is the least time between two chimes; the prompt sets the bar for each look.
+     */
+    fun chime(c: Context) = p(c).getBoolean("chime", false)
+    fun setChime(c: Context, on: Boolean) = p(c).edit().putBoolean("chime", on).apply()
+    enum class ChimePace(val label: String, val gapSeconds: Int, val prompt: String) {
+        RARELY("Rarely", 45 * 60, "Be very choosy: chime in only for something remarkable that would make everyone stop and say \"huh\". Nearly always, stay silent."),
+        SOMETIMES("Sometimes", 20 * 60, "Be choosy: chime in when you have something genuinely interesting to add; usually there is nothing, and then stay silent."),
+        OFTEN("Often", 8 * 60, "Chime in whenever you have something interesting nobody has said; stay silent when you would only be filling a gap."),
+    }
+    fun chimePace(c: Context): ChimePace = runCatching { ChimePace.valueOf(p(c).getString("chime_pace", null)!!) }.getOrDefault(ChimePace.RARELY)
+    fun setChimePace(c: Context, v: ChimePace) = p(c).edit().putString("chime_pace", v.name).apply()
+    /** Spoken to the room (on), or only a notification (off). */
+    fun chimeAloud(c: Context) = p(c).getBoolean("chime_aloud", true)
+    fun setChimeAloud(c: Context, on: Boolean) = p(c).edit().putBoolean("chime_aloud", on).apply()
+    fun chimeBudget(c: Context): Double = p(c).getFloat("chime_budget", 0.30f).toDouble()
+    fun setChimeBudget(c: Context, d: Double) = p(c).edit().putFloat("chime_budget", d.toFloat()).apply()
+
     enum class DoubleTap { TODO, BOOKMARK, SUMMARIZE }
     fun doubleTap(c: Context): DoubleTap = runCatching { DoubleTap.valueOf(p(c).getString("double_tap", "TODO")!!) }.getOrDefault(DoubleTap.TODO)
     fun setDoubleTap(c: Context, d: DoubleTap) = p(c).edit().putString("double_tap", d.name).apply()

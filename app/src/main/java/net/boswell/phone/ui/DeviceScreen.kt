@@ -455,6 +455,7 @@ fun DeviceScreen(ui: UiState, cap: CaptureState, vm: MainViewModel, pad: Padding
                         valueRange = 0.05f..3f)
                 }
                 FactCheckSettings(hasKey)
+                ChimeSettings()
             }
         }
 
@@ -723,6 +724,49 @@ private fun FactCheckSettings(hasKey: Boolean) {
     Text("Daily budget for fact checks: $%.2f".format(budget), style = MaterialTheme.typography.bodyMedium)
     androidx.compose.material3.Slider(value = budget, onValueChange = { budget = (it * 20).toInt() / 20f },
         onValueChangeFinished = { P.setFactBudget(ctx, budget.toDouble()) }, valueRange = 0.1f..3f)
+}
+
+/** Chiming in: a guest in the room who now and then says something worth noting. */
+@Composable
+private fun ChimeSettings() {
+    val ctx = LocalContext.current
+    val P = net.boswell.phone.assistant.AssistantPrefs
+    var on by remember { mutableStateOf(P.chime(ctx)) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Chime in (live mode)", style = MaterialTheme.typography.bodyLarge)
+            Text("Like a well-read guest in the room: it listens to everyone and, rarely, says something worth noting, such as a surprising connection, " +
+                "a related story or a counterpoint. It waits for a pause, never speaks into a call, and skips a TV or video you've marked. " +
+                "Separate from hints and fact checks.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = on, onCheckedChange = { on = it; P.setChime(ctx, it) })
+    }
+    if (!on) return
+    var pace by remember { mutableStateOf(P.chimePace(ctx)) }
+    var aloud by remember { mutableStateOf(P.chimeAloud(ctx)) }
+    var budget by remember { mutableStateOf(P.chimeBudget(ctx).toFloat()) }
+    Text("How often", style = MaterialTheme.typography.bodyMedium)
+    Row {
+        for (v in net.boswell.phone.assistant.AssistantPrefs.ChimePace.entries) FilterChip(selected = pace == v, onClick = { pace = v; P.setChimePace(ctx, v) },
+            label = { Text(v.label) }, modifier = Modifier.padding(end = 6.dp))
+    }
+    Text("At most once every ${pace.gapSeconds / 60} minutes, and most looks end in silence. It remembers what it said.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Say it aloud (off: a notification)", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Switch(checked = aloud, onCheckedChange = { aloud = it; P.setChimeAloud(ctx, it) })
+    }
+    var status by remember { mutableStateOf(net.boswell.phone.assistant.ChimeStatus.today(ctx)) }
+    LaunchedEffect(Unit) { while (true) { status = net.boswell.phone.assistant.ChimeStatus.today(ctx); delay(10_000) } }
+    val ago = status.lastLook?.let { val m = (System.currentTimeMillis() - it) / 60_000; if (m < 1) "just now" else if (m < 120) "$m min ago" else "${m / 60} h ago" }
+    Text("Today: ${status.looks} look${if (status.looks == 1) "" else "s"}, ${status.chimes} chime${if (status.chimes == 1) "" else "s"}" +
+        (if (status.errors > 0) ", ${status.errors} failed" else "") + (ago?.let { " · last looked $it" } ?: " · hasn't looked yet (it needs live mode and two or more people talking)") +
+        (status.note?.let { "\nLately: $it" } ?: ""),
+        style = MaterialTheme.typography.bodySmall, color = if (status.errors > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+    Text("Daily budget for chiming in: $%.2f".format(budget), style = MaterialTheme.typography.bodyMedium)
+    androidx.compose.material3.Slider(value = budget, onValueChange = { budget = (it * 20).toInt() / 20f },
+        onValueChangeFinished = { P.setChimeBudget(ctx, budget.toDouble()) }, valueRange = 0.05f..2f)
 }
 
 /**
